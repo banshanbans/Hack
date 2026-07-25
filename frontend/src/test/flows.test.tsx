@@ -23,6 +23,22 @@ describe('recoverable product states', () => {
     });
     render(<App />);
     expect(await screen.findByRole('button', {name: /保存并继续/})).toBeDisabled();
+    expect(screen.queryByRole('button', {name: '腿脚不太方便'})).not.toBeInTheDocument();
+  });
+
+  it('does not ask for more views when an uploaded photo is already usable', async () => {
+    restoreAt('/upload/room-1');
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      const url = String(input);
+      if (url.endsWith('/health')) return json({analysis: 'ark'});
+      if (url.endsWith('/api/v2/assessments/a-1')) return json({assessment_id: 'a-1', rooms: [{room_id: 'room-1', room_type: 'bathroom', status: 'media_collecting', media: [{media_id: 'media-1', mime_type: 'image/jpeg', width: 1200, height: 900, content_path: '/media/1', quality: {usable: true, clear: true, floor_visible: true, path_visible: true, lighting_sufficient: true, major_occlusion: false, scene_elements: ['floor'], missing_views: ['马桶区', '淋浴区']}}]}]});
+      if (url.endsWith('/media/1')) return new Response(new Blob(['image'], {type: 'image/jpeg'}), {status: 200, headers: {'Content-Type': 'image/jpeg'}});
+      return json({code: 'not_found', message: 'not found'}, 404);
+    });
+    render(<App />);
+    expect(await screen.findByText('可以用于分析')).toBeVisible();
+    expect(screen.getByText(/画面清晰/)).toBeVisible();
+    expect(screen.queryByText(/建议补拍|缺少：马桶区/)).not.toBeInTheDocument();
   });
 
   it('keeps profile edits as a draft until the user explicitly saves', async () => {

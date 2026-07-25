@@ -242,12 +242,12 @@ function ProfilePage() {
     } finally { setSaving(false); }
   };
   const mobility = [
-    ['normal', 'directions_walk', '行走基本正常'], ['limited', 'accessible_forward', '腿脚不太方便'], ['cane', 'elderly', '使用拐杖'], ['walker', 'assist_walker', '使用助行器'], ['wheelchair', 'accessible', '使用轮椅'],
+    ['normal', 'directions_walk', '行走基本正常'], ['cane', 'elderly', '使用拐杖'], ['walker', 'assist_walker', '使用助行器'], ['wheelchair', 'accessible', '使用轮椅'],
   ] as const;
   return <section className="page profile-page">
     <div className="page-intro"><h1>{editingFromMy ? '编辑个人档案' : '先了解一下家人的情况'}</h1><p>不同的行动能力，会影响居家风险的判断。</p></div>
     <fieldset className="form-section"><legend>行动能力</legend><div className="mobility-grid">
-      {mobility.map(([value, icon, label]) => <button key={value} type="button" className={`choice-card ${profile.mobility === value ? 'selected' : ''} ${value === 'wheelchair' ? 'wide' : ''}`} onClick={() => setProfile(current => ({...current, mobility: value}))}><Icon name={icon} /><span>{label}</span>{profile.mobility === value && <Icon name="check_circle" filled className="choice-check" />}</button>)}
+      {mobility.map(([value, icon, label]) => <button key={value} type="button" className={`choice-card ${profile.mobility === value ? 'selected' : ''}`} onClick={() => setProfile(current => ({...current, mobility: value}))}><Icon name={icon} /><span>{label}</span>{profile.mobility === value && <Icon name="check_circle" filled className="choice-check" />}</button>)}
     </div></fieldset>
     <RadioSection title="最近半年是否发生过跌倒？" name="fall" value={profile.fall_history} onChange={value => setProfile(current => ({...current, fall_history: value as ElderProfile['fall_history']}))} options={[['none', '没有'], ['once', '发生过一次'], ['multiple', '发生过多次']]} />
     <RadioSection title="父母目前是否独居？" name="living" value={profile.living_status} onChange={value => setProfile(current => ({...current, living_status: value as ElderProfile['living_status']}))} options={[['alone', '独居'], ['with_family', '与家人同住']]} />
@@ -314,7 +314,6 @@ function RoomsPage() {
       const existing = assessment?.rooms.find(item => item.room_type === key);
       const selected = multiMode && selectedRooms.has(key as keyof typeof ROOM_COPY);
       return <button key={key} className={`room-card ${room.priority ? 'recommended' : ''} ${selected ? 'plan-selected' : ''}`} aria-pressed={multiMode ? selected : undefined} disabled={busy} onClick={() => choose(key as keyof typeof ROOM_COPY)}>
-        {room.priority && <span className="priority-ribbon">建议优先</span>}
         <span className="room-icon"><Icon name={room.icon} filled={room.priority} /></span>
         <b>{room.name}</b><p>{room.hint}</p>
         {selected && <span className="plan-check"><Icon name="check_circle" filled />已选择</span>}
@@ -397,8 +396,10 @@ function MediaThumb({media}: {media: MediaAsset}) {
 
 function MediaRow({media, remove}: {media: MediaAsset; remove: () => void}) {
   const quality = media.quality;
-  const notes = [quality.floor_visible && '已拍到完整地面', quality.lighting_sufficient && '光线充足', quality.missing_views.length ? `建议补拍：${quality.missing_views.join('、')}` : ''].filter(Boolean);
-  return <article className="media-row"><span className={`status-icon ${quality.usable ? 'ok' : 'warn'}`}><Icon name={quality.usable ? 'check_circle' : 'warning'} filled /></span><div><b>{quality.usable ? '可以用于分析' : '建议补拍'}</b><p>{notes.join(' · ') || '正在确认照片质量'}</p></div><button className="icon-button" onClick={remove} aria-label="删除这张照片"><Icon name="delete" /></button></article>;
+  const passedNotes = [quality.clear && '画面清晰', quality.floor_visible && '已拍到地面', quality.path_visible && '通道可见', quality.lighting_sufficient && '光线充足'].filter(Boolean);
+  const retryNotes = [!quality.clear && '画面不够清晰', quality.major_occlusion && '主要区域被遮挡', quality.missing_views.length ? `缺少：${quality.missing_views.join('、')}` : ''].filter(Boolean);
+  const notes = quality.usable ? passedNotes : retryNotes;
+  return <article className="media-row"><span className={`status-icon ${quality.usable ? 'ok' : 'warn'}`}><Icon name={quality.usable ? 'check_circle' : 'warning'} filled /></span><div><b>{quality.usable ? '可以用于分析' : '建议重新拍摄'}</b><p>{notes.join(' · ') || (quality.usable ? '照片已通过质量检查' : '请参考上方拍摄建议重拍')}</p></div><button className="icon-button" onClick={remove} aria-label="删除这张照片"><Icon name="delete" /></button></article>;
 }
 
 function AnalyzingPage() {
