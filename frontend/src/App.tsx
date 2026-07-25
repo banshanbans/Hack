@@ -1,7 +1,7 @@
 import {useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode} from 'react';
 import {HashRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams} from 'react-router-dom';
 import {api, friendlyError} from './api';
-import {DIFFICULTY_COPY, PRODUCT_NAME, ROOM_COPY, SEVERITY_COPY, STAGE_COPY} from './content';
+import {DIFFICULTY_COPY, PRODUCT_NAME, ROOM_COPY, ROOM_PHOTO_GUIDES, SCENE_ELEMENT_COPY, SEVERITY_COPY, STAGE_COPY} from './content';
 import {useProtectedImage} from './hooks';
 import {normalizeImage} from './image';
 import RiskOverlay from './RiskOverlay';
@@ -22,6 +22,24 @@ function ErrorState({error, retry}: {error: unknown; retry?: () => void}) {
   return <section className="page center-state"><Icon name="cloud_off" className="state-icon" /><h1>这次没有完成</h1><p>{friendlyError(error)}</p>{retry && <button className="button primary" onClick={retry}>重试</button>}</section>;
 }
 
+function FlowProgress({pathname}: {pathname: string}) {
+  const steps: [RegExp, number, string][] = [
+    [/^\/profile$/, 1, '家人情况'],
+    [/^\/rooms$/, 2, '选择房间'],
+    [/^\/upload\//, 3, '上传照片'],
+    [/^\/analyzing\//, 4, 'AI 检查'],
+    [/^\/result\//, 5, '查看结果'],
+    [/^\/report$/, 6, '改造清单'],
+  ];
+  const current = steps.find(([pattern]) => pattern.test(pathname));
+  if (!current) return null;
+  const [, step, label] = current;
+  return <div className="flow-progress" role="status" aria-label={`检查进度：第 ${step} 步，共 6 步，${label}`}>
+    <span>第 {step} / 6 步 · {label}</span>
+    <div><i style={{width: `${step / 6 * 100}%`}} /></div>
+  </div>;
+}
+
 function Modal({title, children, close}: {title: string; children: ReactNode; close: () => void}) {
   return <div className="modal-backdrop" role="presentation" onMouseDown={event => event.target === event.currentTarget && close()}>
     <section className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
@@ -34,7 +52,7 @@ function Modal({title, children, close}: {title: string; children: ReactNode; cl
 function ProtectedImage({media, className = '', fallback}: {media?: MediaAsset; className?: string; fallback: string}) {
   const {url, loading} = useProtectedImage(media?.content_path);
   return <div className={`protected-image ${className}`}>
-    <img src={url || fallback} alt={media ? '已上传的卫生间照片' : '卫生间拍摄示意图'} />
+    <img src={url || fallback} alt={media ? '已上传的房间照片' : '居家环境拍摄示意图'} />
     {loading && <span className="image-loading"><span className="spinner" /></span>}
     {!url && !loading && <span className="image-demo-chip">示意图</span>}
   </div>;
@@ -68,9 +86,13 @@ function AppShell() {
   const navigate = useNavigate();
   const {session, setSession, setAssessment, health, setHealth, toast, showToast} = useApp();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const mainRef = useRef<HTMLElement>(null);
+  const scrollPositions = useRef<Record<string, number>>({});
   const isHome = location.pathname === '/home';
   const isShare = location.pathname.startsWith('/share/');
+  const isMy = location.pathname === '/my';
+  const isProfileEditing = location.pathname === '/profile' && new URLSearchParams(location.search).get('from') === 'my';
 
   useEffect(() => {
     api.health().then(value => setHealth(value.analysis)).catch(() => setHealth('unavailable'));
@@ -78,10 +100,17 @@ function AppShell() {
 
   useEffect(() => {
     mainRef.current?.focus({preventScroll: true});
-    window.scrollTo({top: 0, behavior: 'instant'});
-    if (session && !isHome && !isShare) {
+    const path = location.pathname;
+    const frame = window.requestAnimationFrame(() => window.scrollTo({top: scrollPositions.current[path] || 0, behavior: 'instant'}));
+    const rememberScroll = () => { scrollPositions.current[path] = window.scrollY; };
+    window.addEventListener('scroll', rememberScroll, {passive: true});
+    if (session && !isHome && !isShare && !isMy && !isProfileEditing) {
       setSession({...session, last_route: location.pathname.replace(/^\//, '')});
     }
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener('scroll', rememberScroll);
+    };
   }, [location.pathname, session?.access_token, session?.assessment_id]); // route focus and persistence are intentionally coupled
 
   const deleteAssessment = async () => {
@@ -89,21 +118,31 @@ function AppShell() {
       await api.deleteAssessment();
       setSession(null);
       setAssessment(null);
-      setMenuOpen(false);
+      setDeleteConfirmOpen(false);
       navigate('/home');
       showToast('本次检查和照片已删除');
     } catch (error) {
       showToast(friendlyError(error));
     }
   };
+  const goBack = () => {
+    if (isHome) return;
+    if (location.pathname.startsWith('/analyzing/')) {
+      showToast('已退出等待，服务端会继续分析');
+      navigate('/rooms');
+      return;
+    }
+    if (window.history.length > 1) window.history.back(); else navigate('/home');
+  };
 
-  return <div className="site-frame">
+  return <div className={`site-frame ${isShare ? '' : 'has-tab-bar'}`}>
     {!isShare && <header className="app-header">
-      <button className="icon-button" onClick={() => isHome ? undefined : history.length > 1 ? history.back() : navigate('/home')} aria-label="返回" disabled={isHome}><Icon name="arrow_back" /></button>
+      <button className="icon-button" onClick={goBack} aria-label="返回" disabled={isHome}><Icon name="arrow_back" /></button>
       <strong>{PRODUCT_NAME}</strong>
       <button className="icon-button" onClick={() => setMenuOpen(true)} aria-label="检查与隐私"><Icon name="more_vert" /></button>
     </header>}
     {health === 'demo' && <div className="demo-banner" role="status"><Icon name="science" />演示模式：当前展示固定样例结果</div>}
+    {!isShare && !isProfileEditing && <FlowProgress pathname={location.pathname} />}
     <main ref={mainRef} tabIndex={-1}>
       <Routes>
         <Route path="/home" element={<HomePage />} />
@@ -114,17 +153,34 @@ function AppShell() {
         <Route path="/result/:roomId" element={<ResultPage />} />
         <Route path="/risk/:roomId/:riskId" element={<RiskPage />} />
         <Route path="/solutions/:roomId/:riskId" element={<SolutionsPage />} />
+        <Route path="/selected-solution/:roomId/:riskId/:solutionId" element={<SelectedSolutionPage />} />
         <Route path="/report" element={<ReportPage />} />
-        <Route path="/share/:token" element={<SharePage />} />
+        <Route path="/my" element={<MyPage />} />
         <Route path="*" element={<Navigate to="/home" replace />} />
       </Routes>
     </main>
+    {!isShare && <PersistentTabBar pathname={location.pathname} />}
     {toast && <div className="toast" role="status" aria-live="polite">{toast}</div>}
     {menuOpen && <Modal title="检查与隐私" close={() => setMenuOpen(false)}>
       <p>照片仅用于本次居家环境分析。你可以删除这次检查及服务端保存的分析副本。</p>
-      <button className="button danger full" disabled={!session} onClick={deleteAssessment}><Icon name="delete_forever" />删除本次检查</button>
+      <button className="button danger full" disabled={!session} onClick={() => { setMenuOpen(false); setDeleteConfirmOpen(true); }}><Icon name="delete_forever" />删除本次检查</button>
+    </Modal>}
+    {deleteConfirmOpen && <Modal title="确定删除本次检查？" close={() => setDeleteConfirmOpen(false)}>
+      <p>所有照片、分析结果和已选改造方案都会从服务端删除，且无法撤销。</p>
+      <div className="button-stack"><button className="button danger full" onClick={deleteAssessment}><Icon name="delete_forever" />确认永久删除</button><button className="button quiet full" onClick={() => setDeleteConfirmOpen(false)}>取消</button></div>
     </Modal>}
   </div>;
+}
+
+function PersistentTabBar({pathname}: {pathname: string}) {
+  const navigate = useNavigate();
+  const {session} = useApp();
+  const myActive = pathname === '/my';
+  const checkPath = session ? `/${session.last_route || 'rooms'}` : '/home';
+  return <nav className="persistent-tab-bar" aria-label="主导航">
+    <button className={!myActive ? 'active' : ''} aria-current={!myActive ? 'page' : undefined} onClick={() => myActive && navigate(checkPath)}><Icon name="fact_check" filled={!myActive} /><span>检查</span></button>
+    <button className={myActive ? 'active' : ''} aria-current={myActive ? 'page' : undefined} onClick={() => !myActive && navigate('/my')}><Icon name="person" filled={myActive} /><span>我的</span></button>
+  </nav>;
 }
 
 function HomePage() {
@@ -156,37 +212,31 @@ function HomePage() {
       {session && <button className="button quiet full" onClick={() => navigate(`/${session.last_route || 'profile'}`)}>继续上次检查</button>}
     </div>
     <p className="fine-print">无需专业设备 · 约 2 分钟完成 · 不涉及医疗诊断</p>
-    <div className="capability-grid">
-      <div><span className="icon-disc teal-soft"><Icon name="center_focus_strong" /></span><b>AI 标注风险</b></div>
-      <div><span className="icon-disc amber-soft"><Icon name="format_list_numbered" /></span><b>按优先级给建议</b></div>
-      <div><span className="icon-disc blue-soft"><Icon name="checklist" /></span><b>生成家庭改造清单</b></div>
-    </div>
   </section>;
 }
 
 function ProfilePage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const {session, showToast} = useApp();
   const {assessment, loading, error, reload} = useAssessment();
   const initial = assessment?.profile;
   const [profile, setProfile] = useState<Partial<ElderProfile>>({});
   const [saving, setSaving] = useState(false);
   useEffect(() => { if (initial) setProfile(initial); }, [initial]);
-  useEffect(() => {
-    if (!profile.mobility || !profile.fall_history || !profile.living_status) return;
-    const timer = window.setTimeout(() => api.saveProfile(profile as ElderProfile).catch(() => undefined), 300);
-    return () => window.clearTimeout(timer);
-  }, [profile]);
   if (!session) return <Navigate to="/home" replace />;
   if (loading && !assessment) return <Loading />;
   if (error) return <ErrorState error={error} retry={reload} />;
   const complete = Boolean(profile.mobility && profile.fall_history && profile.living_status);
-  const next = async () => {
+  const editingFromMy = new URLSearchParams(location.search).get('from') === 'my';
+  const changed = Boolean(initial) && (profile.mobility !== initial?.mobility || profile.fall_history !== initial?.fall_history || profile.living_status !== initial?.living_status);
+  const saveProfile = async () => {
     if (!complete) return;
     setSaving(true);
     try {
       await api.saveProfile(profile as ElderProfile);
-      navigate('/rooms');
+      showToast('个人档案已保存');
+      navigate(editingFromMy ? '/my' : '/rooms');
     } catch (value) {
       showToast(friendlyError(value));
     } finally { setSaving(false); }
@@ -195,13 +245,14 @@ function ProfilePage() {
     ['normal', 'directions_walk', '行走基本正常'], ['limited', 'accessible_forward', '腿脚不太方便'], ['cane', 'elderly', '使用拐杖'], ['walker', 'assist_walker', '使用助行器'], ['wheelchair', 'accessible', '使用轮椅'],
   ] as const;
   return <section className="page profile-page">
-    <div className="page-intro"><h1>先了解一下家人的情况</h1><p>不同的行动能力，会影响居家风险的判断。</p></div>
+    <div className="page-intro"><h1>{editingFromMy ? '编辑个人档案' : '先了解一下家人的情况'}</h1><p>不同的行动能力，会影响居家风险的判断。</p></div>
     <fieldset className="form-section"><legend>行动能力</legend><div className="mobility-grid">
       {mobility.map(([value, icon, label]) => <button key={value} type="button" className={`choice-card ${profile.mobility === value ? 'selected' : ''} ${value === 'wheelchair' ? 'wide' : ''}`} onClick={() => setProfile(current => ({...current, mobility: value}))}><Icon name={icon} /><span>{label}</span>{profile.mobility === value && <Icon name="check_circle" filled className="choice-check" />}</button>)}
     </div></fieldset>
     <RadioSection title="最近半年是否发生过跌倒？" name="fall" value={profile.fall_history} onChange={value => setProfile(current => ({...current, fall_history: value as ElderProfile['fall_history']}))} options={[['none', '没有'], ['once', '发生过一次'], ['multiple', '发生过多次']]} />
     <RadioSection title="父母目前是否独居？" name="living" value={profile.living_status} onChange={value => setProfile(current => ({...current, living_status: value as ElderProfile['living_status']}))} options={[['alone', '独居'], ['with_family', '与家人同住']]} />
-    <div className="sticky-footer"><button className="button primary full" disabled={!complete || saving} onClick={next}>{saving ? '正在保存…' : '下一步'}<Icon name="arrow_forward" /></button></div>
+    <div className="draft-actions"><p className="draft-note"><Icon name="edit_note" />选择只会保留在本页，点击“{editingFromMy ? '保存' : '保存并继续'}”后才会提交。</p>{changed && <button className="text-button" onClick={() => initial && setProfile(initial)}>撤销修改</button>}</div>
+    <div className="sticky-footer"><button className="button primary full" disabled={!complete || saving} onClick={saveProfile}>{saving ? '正在保存…' : editingFromMy ? '保存' : '保存并继续'}<Icon name={editingFromMy ? 'save' : 'arrow_forward'} /></button></div>
   </section>;
 }
 
@@ -219,6 +270,7 @@ function RoomsPage() {
   if (!session) return <Navigate to="/home" replace />;
   if (loading && !assessment) return <Loading />;
   if (error) return <ErrorState error={error} retry={reload} />;
+  const openRoom = (room: RoomAssessment) => navigate(room.status === 'result_ready' ? `/result/${room.room_id}` : room.status === 'analyzing' ? `/analyzing/${room.room_id}` : `/upload/${room.room_id}`);
   const choose = async (roomType: keyof typeof ROOM_COPY) => {
     if (multiMode) {
       setSelectedRooms(current => {
@@ -228,12 +280,11 @@ function RoomsPage() {
       });
       return;
     }
-    const copy = ROOM_COPY[roomType];
-    if (!copy.supported) { showToast('这个房间的完整规则仍在完善中'); return; }
     setBusy(true);
     try {
-      const room = await api.createRoom(roomType);
-      navigate(`/upload/${room.room_id}`);
+      const existing = assessment?.rooms.find(item => item.room_type === roomType);
+      const room = existing || await api.createRoom(roomType);
+      openRoom(room);
     } catch (value) { showToast(friendlyError(value)); }
     finally { setBusy(false); }
   };
@@ -241,34 +292,36 @@ function RoomsPage() {
     if (!selectedRooms.size) { showToast('请至少选择一个房间'); return; }
     setBusy(true);
     try {
-      let bathroom = assessment?.rooms.find(item => item.room_type === 'bathroom');
+      const plannedRooms: RoomAssessment[] = [];
       for (const roomType of selectedRooms) {
         const existing = assessment?.rooms.find(item => item.room_type === roomType);
         const room = existing || await api.createRoom(roomType);
-        if (roomType === 'bathroom') bathroom = room;
+        plannedRooms.push(room);
       }
-      if (bathroom) navigate(`/upload/${bathroom.room_id}`);
-      else { setMultiMode(false); reload(); showToast('房间计划已保存；本期仅卫生间可生成正式结论'); }
+      const nextRoom = plannedRooms.find(item => item.status !== 'result_ready') || plannedRooms[0];
+      if (nextRoom) openRoom(nextRoom);
     } catch (value) { showToast(friendlyError(value)); }
     finally { setBusy(false); }
   };
   return <section className="page rooms-page">
     <div className="page-intro"><h1>这次想检查哪里？</h1><p>建议从老人最常活动、也最容易跌倒的区域开始。</p></div>
-    {multiMode && <div className="mode-note" role="status"><Icon name="checklist" /><span><b>多房间计划</b>选择计划检查的房间；规则完善中的房间会保存进度，但不会生成正式结论。</span></div>}
+    <div className="room-mode-switch" role="group" aria-label="房间检查方式">
+      <button className={!multiMode ? 'active' : ''} aria-pressed={!multiMode} onClick={() => setMultiMode(false)}>检查一个房间</button>
+      <button className={multiMode ? 'active' : ''} aria-pressed={multiMode} onClick={() => setMultiMode(true)}>规划多个房间</button>
+    </div>
+    {multiMode && <div className="mode-note" role="status"><Icon name="checklist" /><span><b>先制定检查计划</b>所选房间都会保存；接下来会从第一个房间开始，完成后可返回这里继续下一个。</span></div>}
     <div className="room-grid">{Object.entries(ROOM_COPY).map(([key, room]) => {
       const existing = assessment?.rooms.find(item => item.room_type === key);
       const selected = multiMode && selectedRooms.has(key as keyof typeof ROOM_COPY);
-      return <button key={key} className={`room-card ${room.supported ? 'supported' : ''} ${selected ? 'plan-selected' : ''}`} aria-pressed={multiMode ? selected : undefined} disabled={busy} onClick={() => choose(key as keyof typeof ROOM_COPY)}>
-        {room.supported && <span className="priority-ribbon">建议优先</span>}
-        <span className="room-icon"><Icon name={room.icon} filled={room.supported} /></span>
+      return <button key={key} className={`room-card ${room.priority ? 'recommended' : ''} ${selected ? 'plan-selected' : ''}`} aria-pressed={multiMode ? selected : undefined} disabled={busy} onClick={() => choose(key as keyof typeof ROOM_COPY)}>
+        {room.priority && <span className="priority-ribbon">建议优先</span>}
+        <span className="room-icon"><Icon name={room.icon} filled={room.priority} /></span>
         <b>{room.name}</b><p>{room.hint}</p>
         {selected && <span className="plan-check"><Icon name="check_circle" filled />已选择</span>}
         {existing?.status === 'result_ready' && <span className="completion"><Icon name="check_circle" filled />{existing.score} 分</span>}
-        {!room.supported && <small>规则完善中</small>}
       </button>;
     })}</div>
-    <button className="button primary full" disabled={busy || (multiMode && !selectedRooms.size)} onClick={multiMode ? saveSelectedRooms : () => choose('bathroom')}>{multiMode ? `保存 ${selectedRooms.size} 个房间并继续` : '检查卫生间'}</button>
-    <button className="button quiet full" onClick={() => setMultiMode(value => !value)}>{multiMode ? '返回单房间检查' : '一次检查多个房间'}</button>
+    <button className="button primary full" disabled={busy || (multiMode && !selectedRooms.size)} onClick={multiMode ? saveSelectedRooms : () => choose('bathroom')}>{multiMode ? `保存计划并开始（${selectedRooms.size} 个房间）` : '优先检查卫生间'}</button>
   </section>;
 }
 
@@ -278,15 +331,25 @@ function UploadPage() {
   const {session, showToast} = useApp();
   const {assessment, loading, error, reload} = useAssessment();
   const [busy, setBusy] = useState(false);
+  const [pendingDeleteMediaId, setPendingDeleteMediaId] = useState<string | null>(null);
   if (!session) return <Navigate to="/home" replace />;
   if (loading && !assessment) return <Loading />;
   if (error) return <ErrorState error={error} retry={reload} />;
   const room = assessment?.rooms.find(item => item.room_id === roomId);
   if (!room) return <ErrorState error={new Error('没有找到这个房间')} />;
+  const roomName = ROOM_COPY[room.room_type].name;
+  const photoGuides = ROOM_PHOTO_GUIDES[room.room_type];
   const usable = room.media.some(item => item.quality.usable);
   const upload = async (event: ChangeEvent<HTMLInputElement>) => {
-    const files = [...(event.target.files || [])].slice(0, Math.max(0, 6 - room.media.length));
-    if (!files.length) return;
+    const selectedFiles = [...(event.target.files || [])];
+    const remaining = Math.max(0, 6 - room.media.length);
+    const files = selectedFiles.slice(0, remaining);
+    const droppedCount = selectedFiles.length - files.length;
+    if (!files.length) {
+      if (selectedFiles.length) showToast('最多上传 6 张，本次选择的照片未添加');
+      event.target.value = '';
+      return;
+    }
     setBusy(true);
     showToast(`正在处理 ${files.length} 张照片…`);
     for (const file of files) {
@@ -298,6 +361,7 @@ function UploadPage() {
     setBusy(false);
     reload();
     event.target.value = '';
+    if (droppedCount) showToast(`已添加 ${files.length} 张，另 ${droppedCount} 张因达到上限未添加`);
   };
   const analyze = async () => {
     setBusy(true);
@@ -309,16 +373,16 @@ function UploadPage() {
     catch (value) { showToast(friendlyError(value)); }
   };
   return <section className="page upload-page">
-    <div className="page-intro"><h1>上传卫生间照片</h1><p>拍摄越完整，分析结果越准确。</p></div>
+    <div className="page-intro"><h1>上传{roomName}照片</h1><p>拍摄越完整，分析结果越准确。</p></div>
     <label className="upload-drop"><input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={upload} disabled={busy || room.media.length >= 6} /><span className="upload-icon"><Icon name="photo_camera" filled /></span><b>拍照或从相册选择</b><small>最多 6 张，推荐 1—3 张</small></label>
-    <section><h2>拍摄建议</h2><div className="photo-tips">
-      <PhotoTip image="guide-doorway.jpg" icon="pan_tool_alt" text="在门口拍一张全景" />
-      <PhotoTip image="guide-floor.jpg" icon="door_front" text="拍清楚地面和门槛" />
-      <PhotoTip image="guide-shower.jpg" icon="shower" text="补拍马桶或淋浴区域" />
-    </div></section>
-    <section className="quality-card"><h2>当前照片状态</h2>{room.media.length === 0 ? <p className="muted">还没有照片</p> : <div className="quality-list">{room.media.map(media => <MediaRow key={media.media_id} media={media} remove={() => remove(media.media_id)} />)}</div>}</section>
+    <section><h2>拍摄建议</h2><div className="photo-tips">{photoGuides.map(guide => <PhotoTip key={guide.text} {...guide} />)}</div></section>
+    <section className="quality-card"><h2>当前照片状态</h2>{room.media.length === 0 ? <p className="muted">还没有照片</p> : <div className="quality-list">{room.media.map(media => <MediaRow key={media.media_id} media={media} remove={() => setPendingDeleteMediaId(media.media_id)} />)}</div>}</section>
     <div className="thumb-strip">{room.media.map(media => <MediaThumb key={media.media_id} media={media} />)}{room.media.length < 6 && <label className="add-thumb"><input type="file" accept="image/jpeg,image/png,image/webp" onChange={upload} disabled={busy} /><Icon name="add_photo_alternate" /></label>}</div>
     <div className="sticky-footer"><button className="button primary full" disabled={!usable || busy} onClick={analyze}><Icon name="document_scanner" />{busy ? '正在处理…' : '开始 AI 检查'}</button></div>
+    {pendingDeleteMediaId && <Modal title="删除这张照片？" close={() => setPendingDeleteMediaId(null)}>
+      <p>删除后需要重新上传，相关照片不会再用于本次分析。</p>
+      <div className="button-stack"><button className="button danger full" onClick={async () => { const mediaId = pendingDeleteMediaId; setPendingDeleteMediaId(null); await remove(mediaId); }}>确认删除</button><button className="button quiet full" onClick={() => setPendingDeleteMediaId(null)}>取消</button></div>
+    </Modal>}
   </section>;
 }
 
@@ -344,14 +408,16 @@ function AnalyzingPage() {
   const assessmentState = useAssessment();
   const [status, setStatus] = useState<AnalysisStatus | null>(null);
   const [error, setError] = useState<unknown>(null);
-  const media = assessmentState.assessment?.rooms.find(item => item.room_id === roomId)?.media.find(item => item.quality.usable);
+  const [visualStage, setVisualStage] = useState(0);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const room = assessmentState.assessment?.rooms.find(item => item.room_id === roomId);
+  const media = room?.media.find(item => item.quality.usable);
   const {url} = useProtectedImage(media?.content_path);
   const poll = useCallback(async (signal?: AbortSignal) => {
     try {
       const value = await api.status(roomId, signal);
       setStatus(value);
       setError(null);
-      if (value.status === 'completed') navigate(`/result/${roomId}`, {replace: true});
     } catch (value) { if ((value as Error).name !== 'AbortError') setError(value); }
   }, [navigate, roomId]);
   useEffect(() => {
@@ -361,17 +427,41 @@ function AnalyzingPage() {
     const timer = window.setInterval(() => poll(controller.signal), 1200);
     return () => { controller.abort(); window.clearInterval(timer); };
   }, [poll, session]);
+  useEffect(() => {
+    const timer = window.setInterval(() => setElapsedSeconds(value => value + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const stages = ['scene_understood', 'risks_detecting', 'regions_grounded', 'rules_applied', 'score_calculated', 'solutions_ready'];
+  useEffect(() => {
+    if (status?.status === 'failed') return;
+    if (visualStage < stages.length - 1) {
+      const timer = window.setTimeout(() => setVisualStage(value => value + 1), 850);
+      return () => window.clearTimeout(timer);
+    }
+    if (status?.status === 'completed') {
+      const timer = window.setTimeout(() => navigate(`/result/${roomId}`, {replace: true}), 500);
+      return () => window.clearTimeout(timer);
+    }
+  }, [navigate, roomId, status?.status, visualStage]);
   if (!session) return <Navigate to="/home" replace />;
   if (error || assessmentState.error) return <ErrorState error={error || assessmentState.error} retry={() => { poll(); assessmentState.reload(); }} />;
-  const stages = ['quality_checked', 'scene_understood', 'risks_detecting', 'regions_grounded', 'rules_applied', 'score_calculated', 'solutions_ready'];
-  const active = Math.max(0, stages.indexOf(status?.stage || 'quality_checked'));
+  const roomName = room ? ROOM_COPY[room.room_type].name : '房间';
+  const recognizedElements = [...new Set(media?.quality.scene_elements || [])].filter(item => SCENE_ELEMENT_COPY[item]);
+  const tagElements = recognizedElements.slice(0, 3);
   const retry = async () => { try { await api.analyze(roomId); await poll(); } catch (value) { showToast(friendlyError(value)); } };
+  const progressPercent = status?.status === 'completed' ? 100 : Math.min(95, Math.round((visualStage + 1) / stages.length * 100));
+  const timeExpectation = elapsedSeconds < 8
+    ? `预计还需约 ${Math.max(1, 8 - elapsedSeconds)} 秒`
+    : elapsedSeconds < 30 ? '正在生成结果，通常会在 1 分钟内完成' : '分析时间比平时久，可以退出等待，稍后从首页继续';
   return <section className="page analyzing-page">
-    <div className="center-heading"><h1>正在检查卫生间</h1><p>AI 正在深度分析您的居家环境</p></div>
-    <div className="scan-visual"><img src={url || `${ASSETS}/analysis-bathroom.jpg`} alt="正在检查的卫生间" /><span className="scan-line" /><span className="scan-tag one">洗手台</span><span className="scan-tag two">马桶</span><span className="scan-tag three">地面</span></div>
-    <div className="recognized-card"><b><Icon name="check_circle" filled />已识别环境要素</b><div className="chip-row"><span>卫生间</span><span>淋浴区</span><span>马桶</span><span>洗手台</span><span>门槛</span><span>地面</span></div></div>
-    <div className="analysis-steps" role="status" aria-live="polite">{stages.slice(1).map((stage, index) => <div key={stage} className={index < active ? 'done' : index === active ? 'active' : ''}><span><Icon name={index < active ? 'check' : index === active ? 'progress_activity' : 'circle'} filled={index < active} /></span><p><b>{STAGE_COPY[stage]}</b>{index === active && <small>分析画面中可见的环境特征</small>}</p></div>)}</div>
+    <div className="center-heading"><h1>正在检查{roomName}</h1><p>AI 正在深度分析您的居家环境</p></div>
+    <div className="analysis-progress" role="status" aria-live="polite"><div><b>{progressPercent}%</b><span>{timeExpectation}</span></div><div className="progress"><i style={{width: `${progressPercent}%`}} /></div></div>
+    <div className="scan-visual"><img src={url || `${ASSETS}/analysis-bathroom.jpg`} alt={`正在检查的${roomName}`} /><span className="scan-line" />{tagElements.map((element, index) => <span key={element} className={`scan-tag tag-${index + 1}`}>{SCENE_ELEMENT_COPY[element]}</span>)}</div>
+    <div className="recognized-card"><b><Icon name={recognizedElements.length ? 'check_circle' : 'progress_activity'} filled={Boolean(recognizedElements.length)} />{recognizedElements.length ? '已识别环境要素' : '正在识别环境要素'}</b><div className="chip-row">{recognizedElements.length ? recognizedElements.map(element => <span key={element}>{SCENE_ELEMENT_COPY[element]}</span>) : <span>请稍候…</span>}</div></div>
+    <div className="analysis-steps" role="status" aria-live="polite">{stages.map((stage, index) => <div key={stage} className={index < visualStage ? 'done' : index === visualStage ? 'active' : ''}><span><Icon name={index < visualStage ? 'check' : index === visualStage ? 'progress_activity' : 'circle'} filled={index < visualStage} /></span><p><b>{STAGE_COPY[stage]}</b>{index === visualStage && <small>分析画面中可见的环境特征</small>}</p></div>)}</div>
     {status?.status === 'failed' && <div className="error-panel"><b>分析没有完成</b><p>{friendlyError({message: status.error || '', code: status.error})}</p><button className="button primary full" onClick={retry}>重新分析</button></div>}
+    {status?.status !== 'failed' && <button className="button quiet full" onClick={() => { showToast('已退出等待，服务端会继续分析'); navigate('/rooms'); }}>退出等待，返回房间列表</button>}
+    <p className="analysis-exit-note">退出只会停止本页轮询，服务端仍会继续分析；之后点击该房间即可返回进度页。</p>
     <p className="fine-print"><Icon name="info" />我们只分析居家环境，不进行健康或医疗诊断。</p>
   </section>;
 }
@@ -401,37 +491,36 @@ function ResultPage() {
   const {session} = useApp();
   const assessmentState = useAssessment();
   const {result, loading, error, reload} = useRoomResult(roomId);
+  const [scoreOpen, setScoreOpen] = useState(false);
   if (!session) return <Navigate to="/home" replace />;
   if (loading || assessmentState.loading || !result) return <Loading label="正在准备检查结果…" />;
   if (error || assessmentState.error) return <ErrorState error={error || assessmentState.error} retry={() => { reload(); assessmentState.reload(); }} />;
   const lead = result.risks[0];
   const leadMedia = assessmentState.assessment?.rooms.find(item => item.room_id === roomId)?.media.find(item => item.media_id === lead?.media_id);
+  const roomName = ROOM_COPY[result.room_type].name;
   return <section className="page result-page">
     <div className="complete-mark"><Icon name="check_circle" filled /></div>
-    <div className="center-heading"><h1>卫生间检查完成</h1><p>大部分问题都可以通过低成本措施改善。</p></div>
-    <article className="summary-card"><div><small>{result.score_label}</small><b className="score-number">{result.score}<em>/100</em></b></div><div className="coverage-block"><span>检查覆盖度 {result.coverage.percent}%</span><div className="progress"><i style={{width: `${result.coverage.percent}%`}} /></div></div><button className="text-button" onClick={() => document.getElementById('score-detail')?.scrollIntoView({behavior: 'smooth'})}>查看评分依据</button></article>
-    <article className="risk-summary"><h2>发现 {result.risks.length} 个需要注意的问题</h2><p>根据您的卫生间照片分析得出</p>{(['high', 'medium', 'low'] as const).map(level => <div key={level} className={`risk-count ${level}`}><Icon name={level === 'high' ? 'error' : level === 'medium' ? 'warning' : 'info'} filled /><span>{result.counts[level]} 个{level === 'high' ? '建议优先处理' : level === 'medium' ? '建议近期改善' : '可以继续观察'}</span><b>{SEVERITY_COPY[level]}</b></div>)}</article>
+    <div className="center-heading"><h1>{roomName}检查完成</h1><p>大部分问题都可以通过低成本措施改善。</p></div>
+    <div className="result-overview"><article className="summary-card"><div><small>{result.score_label}</small><b className="score-number">{result.score}<em>/100</em></b></div><div className="coverage-block"><span>检查覆盖度 {result.coverage.percent}%</span><div className="progress"><i style={{width: `${result.coverage.percent}%`}} /></div></div><button className="text-button" onClick={() => setScoreOpen(true)}>查看评分依据</button></article>
+    <article className="risk-summary"><small>发现问题</small><b className="issue-number">{result.risks.length}<em>个</em></b></article></div>
     {lead && <section><h2>主要风险展示</h2><article className="lead-risk"><ProtectedImage media={leadMedia} fallback={`${ASSETS}/result-shower.jpg`} /><div><span className={`severity ${lead.severity}`}><Icon name="priority_high" />优先处理</span><h3>{lead.title}</h3><p>{lead.evidence}</p><button className="button primary full" onClick={() => navigate(`/risk/${roomId}/${lead.risk_id}`)}>查看怎么改</button></div></article></section>}
-    <details id="score-detail" className="detail-card"><summary>参考分的计算依据</summary><p>分数由经过校验的风险、家人情况和本地规则确定性计算。覆盖度与参考分分开展示。</p>{result.main_deductions.map(item => <div key={item.risk_id}><b>{item.title}</b><span>扣 {item.deduction} 分</span></div>)}</details>
     <div className="button-stack"><button className="button secondary full" onClick={() => lead && navigate(`/risk/${roomId}/${lead.risk_id}`)}>查看全部 {result.risks.length} 个问题</button><button className="button quiet full" onClick={() => navigate('/report')}>查看改造清单</button></div>
-    <BottomNav active="risks" navigate={navigate} />
+    {scoreOpen && <Modal title="参考分的计算依据" close={() => setScoreOpen(false)}><div className="score-basis-sheet"><p>参考分由经过校验的风险、家人情况和本地规则确定性计算；覆盖度与参考分分开展示。</p>{result.main_deductions.length ? <div>{result.main_deductions.map(item => <div key={item.risk_id}><span>{item.title}</span><b>扣 {item.deduction} 分</b></div>)}</div> : <p className="muted">当前没有扣分项。</p>}<button className="button primary full" onClick={() => setScoreOpen(false)}>知道了</button></div></Modal>}
   </section>;
-}
-
-function BottomNav({active, navigate}: {active: string; navigate: ReturnType<typeof useNavigate>}) {
-  const items = [['home', 'home_health', '首页', '/home'], ['risks', 'visibility', '风险', ''], ['solutions', 'verified_user', '方案', '/report'], ['profile', 'person', '我的', '/profile']];
-  return <nav className="bottom-nav" aria-label="主导航">{items.map(([key, icon, label, path]) => <button key={key} className={active === key ? 'active' : ''} onClick={() => path && navigate(path)}><Icon name={icon} filled={active === key} /><span>{label}</span></button>)}</nav>;
 }
 
 function RiskPage() {
   const {roomId = '', riskId = ''} = useParams();
   const navigate = useNavigate();
-  const {session, assessment, showToast} = useApp();
+  const {session, assessment} = useApp();
   const assessmentState = useAssessment();
   const resultState = useRoomResult(roomId);
   const [zoom, setZoom] = useState(1);
-  const [drawing, setDrawing] = useState(false);
-  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const pendingResult = resultState.result;
+  const pendingIndex = pendingResult ? Math.max(0, pendingResult.risks.findIndex(item => item.risk_id === riskId)) : 0;
+  const pendingRisk = pendingResult?.risks[pendingIndex];
+  const pendingMedia = assessment?.rooms.find(item => item.room_id === roomId)?.media.find(item => item.media_id === pendingRisk?.media_id);
+  const {url} = useProtectedImage(pendingMedia?.content_path);
   if (!session) return <Navigate to="/home" replace />;
   if ((assessmentState.loading && !assessment) || resultState.loading || !resultState.result) return <Loading />;
   if (assessmentState.error || resultState.error) return <ErrorState error={assessmentState.error || resultState.error} retry={() => { assessmentState.reload(); resultState.reload(); }} />;
@@ -439,24 +528,12 @@ function RiskPage() {
   const index = Math.max(0, result.risks.findIndex(item => item.risk_id === riskId));
   const risk = result.risks[index];
   if (!risk) return <ErrorState error={new Error('没有找到这项风险')} />;
-  const media = assessment?.rooms.find(item => item.room_id === roomId)?.media.find(item => item.media_id === risk.media_id);
-  const {url} = useProtectedImage(media?.content_path);
-  const updateRegion = async (region: SafetyRisk['region']) => {
-    if (!region) return;
-    try { await api.region(risk.risk_id, region); setDrawing(false); resultState.reload(); showToast('新位置已保存'); }
-    catch (value) { showToast(friendlyError(value)); }
-  };
-  const feedback = async (value: string) => {
-    try { await api.feedback(risk.risk_id, value); setFeedbackOpen(false); resultState.reload(); showToast('反馈已保存，参考分已更新'); }
-    catch (error) { showToast(friendlyError(error)); }
-  };
   const switchRisk = (next: number) => navigate(`/risk/${roomId}/${result.risks[next].risk_id}`, {replace: true});
   return <section className="risk-page">
     <div className="risk-toolbar"><span className="glass-chip"><Icon name="cloud_done" filled />AI 已识别 {result.risks.length} 处风险</span><button className="glass-button" onClick={() => setZoom(value => value >= 1.8 ? 1 : value + 0.2)} aria-label="放大照片"><Icon name={zoom > 1 ? 'zoom_out_map' : 'zoom_in'} /></button></div>
-    <RiskOverlay imageUrl={url} fallbackUrl={`${ASSETS}/risk-bathroom.jpg`} risks={result.risks} activeId={risk.risk_id} zoom={zoom} drawing={drawing} onSelect={id => navigate(`/risk/${roomId}/${id}`, {replace: true})} onRegionChange={updateRegion} />
+    <RiskOverlay imageUrl={url} fallbackUrl={`${ASSETS}/risk-bathroom.jpg`} risks={result.risks} activeId={risk.risk_id} zoom={zoom} drawing={false} onSelect={id => navigate(`/risk/${roomId}/${id}`, {replace: true})} onRegionChange={() => undefined} />
     <div className="risk-switcher"><button disabled={index === 0} onClick={() => switchRisk(index - 1)}><Icon name="chevron_left" /></button><span>风险 {index + 1} / {result.risks.length}</span><button disabled={index === result.risks.length - 1} onClick={() => switchRisk(index + 1)}><Icon name="chevron_right" /></button></div>
-    <article className="risk-detail"><span className={`severity ${risk.severity}`}><Icon name="warning" filled />{SEVERITY_COPY[risk.severity]}</span><h1>{risk.title}</h1><p>{risk.evidence}</p><small>参考扣分 {risk.score_deduction} 分 · {risk.region ? '已标出可参考位置' : '位置仍待确认'}</small><button className="button primary full" onClick={() => navigate(`/solutions/${roomId}/${risk.risk_id}`)}><Icon name="location_on" filled />查看解决方案</button><div className="split-actions"><button className="button secondary" onClick={() => setFeedbackOpen(true)}><Icon name="help" />为什么有风险？</button><button className="button quiet" onClick={() => setDrawing(value => !value)}><Icon name="draw" />{drawing ? '取消圈选' : '这里判断不准确'}</button></div></article>
-    {feedbackOpen && <Modal title="这里判断不准确" close={() => setFeedbackOpen(false)}><p>反馈会保存并重新计算参考分。</p><div className="button-stack"><button className="button quiet full" onClick={() => feedback('not_a_risk')}>不是风险</button><button className="button quiet full" onClick={() => { setFeedbackOpen(false); setDrawing(true); }}>位置不准确，重新圈选</button><button className="button quiet full" onClick={() => feedback('photo_unclear')}>照片看不清</button><button className="button quiet full" onClick={() => feedback('already_resolved')}>已经整改，等待复查</button><button className="button primary full" onClick={() => feedback('confirmed')}>确认存在</button></div></Modal>}
+    <article className="risk-detail"><span className={`severity ${risk.severity}`}><Icon name="warning" filled />{SEVERITY_COPY[risk.severity]}</span><h1>{risk.title}</h1><p>{risk.evidence}</p><small>参考扣分 {risk.score_deduction} 分 · {risk.region ? '已标出可参考位置' : '位置仍待确认'}</small><button className="button primary full" onClick={() => navigate(`/solutions/${roomId}/${risk.risk_id}`)}><Icon name="location_on" filled />查看解决方案</button></article>
   </section>;
 }
 
@@ -473,7 +550,10 @@ function SolutionsPage() {
     setData(null);
     return api.solutions(riskId).then(value => { setData(value); setError(null); }).catch(setError);
   }, [riskId]);
-  useEffect(() => { if (session) load(); }, [load, session]);
+  const riskAvailable = Boolean(resultState.result?.risks.some(item => item.risk_id === riskId));
+  useEffect(() => {
+    if (session && !resultState.loading && riskAvailable) load();
+  }, [load, resultState.loading, riskAvailable, session]);
   useEffect(() => {
     if (resultState.loading || !resultState.result || resultState.result.risks.some(item => item.risk_id === riskId)) return;
     const latest = resultState.result.risks[0];
@@ -484,6 +564,8 @@ function SolutionsPage() {
   if (assessmentState.loading || resultState.loading || !data) return error ? <ErrorState error={error} retry={load} /> : <Loading />;
   const risk = resultState.result?.risks.find(item => item.risk_id === riskId);
   if (!risk) return <ErrorState error={new Error('没有找到这项风险')} />;
+  const riskIndex = resultState.result?.risks.findIndex(item => item.risk_id === riskId) ?? -1;
+  const nextRisk = resultState.result?.risks[riskIndex + 1];
   const media = (assessment || assessmentState.assessment)?.rooms.find(item => item.room_id === roomId)?.media.find(item => item.media_id === risk.media_id);
   const select = async (solution: SolutionPackage) => {
     setBusy(solution.solution_package_id);
@@ -520,8 +602,170 @@ function SolutionsPage() {
     })}</div>
     <details className="detail-card" open><summary>改造详情</summary><div className="detail-grid"><span><Icon name="handyman" />改造难度</span><b>{DIFFICULTY_COPY[data.solutions.find(item => item.solution_package_id === data.selected_solution_package_id)?.difficulty || ''] || '选择后查看'}</b><span><Icon name="schedule" />预计处理时间</span><b>{data.solutions.find(item => item.solution_package_id === data.selected_solution_package_id)?.duration || '视方案而定'}</b><span><Icon name="engineering" />是否建议专业安装</span><b>{data.solutions.find(item => item.solution_package_id === data.selected_solution_package_id)?.professional_installation || '视方案而定'}</b></div></details>
     <p className="fine-print">{data.price_disclaimer}</p>
-    <div className="button-stack"><button className="button secondary full" onClick={() => navigate(`/risk/${roomId}/${riskId}`)}>继续查看下一个问题<Icon name="arrow_forward" /></button><button className="button quiet full" onClick={() => navigate('/report')}>查看改造清单</button></div>
+    <div className="button-stack"><button className="button secondary full" onClick={() => navigate(nextRisk ? `/risk/${roomId}/${nextRisk.risk_id}` : `/result/${roomId}`)}>{nextRisk ? '继续查看下一个问题' : '返回检查结果'}<Icon name="arrow_forward" /></button><button className="button quiet full" onClick={() => navigate('/report')}>查看改造清单</button></div>
   </section>;
+}
+
+function SelectedSolutionPage() {
+  const {roomId = '', riskId = '', solutionId = ''} = useParams();
+  const navigate = useNavigate();
+  const {session, assessment} = useApp();
+  const assessmentState = useAssessment();
+  const resultState = useRoomResult(roomId);
+  const [data, setData] = useState<Awaited<ReturnType<typeof api.solutions>> | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  useEffect(() => {
+    if (!session || resultState.loading || !resultState.result?.risks.some(item => item.risk_id === riskId)) return;
+    const controller = new AbortController();
+    api.solutions(riskId, controller.signal).then(value => { setData(value); setError(null); }).catch(value => { if ((value as Error).name !== 'AbortError') setError(value); });
+    return () => controller.abort();
+  }, [resultState.loading, resultState.result, riskId, session]);
+  if (!session) return <Navigate to="/home" replace />;
+  if (assessmentState.loading || resultState.loading || !data) return error ? <ErrorState error={error} /> : <Loading />;
+  const risk = resultState.result?.risks.find(item => item.risk_id === riskId);
+  const solution = data.solutions.find(item => item.solution_package_id === solutionId);
+  if (!risk || !solution) return <ErrorState error={new Error('没有找到这项已选方案')} />;
+  const media = (assessment || assessmentState.assessment)?.rooms.find(item => item.room_id === roomId)?.media.find(item => item.media_id === risk.media_id);
+  return <section className="page selected-solution-page">
+    <div className="page-intro"><small className="eyebrow">已选改造方案</small><h1>{solution.title}</h1><p>对应问题：{risk.title}</p></div>
+    <ProtectedImage media={media} fallback={`${ASSETS}/solution-shower.jpg`} className="solution-hero" />
+    <article className="selected-solution-detail">
+      <div className="solution-title"><span className="tier-icon"><Icon name={solution.tier === 'A' ? 'timer' : solution.tier === 'B' ? 'thumb_up' : 'construction'} filled /></span><div><small>{solution.tier === 'A' ? '临时止险' : solution.tier === 'B' ? '推荐方案' : '专业改造'}</small><h2>{solution.summary}</h2></div></div>
+      <div className="solution-price">{formatRange(solution.price.total_min, solution.price.total_max, solution.price.currency)}</div>
+      <div className="chip-row"><span>{solution.duration}</span><span>{solution.construction_required ? '需要施工' : '无需施工'}</span><span>改善程度 {solution.improvement}</span></div>
+      <section><h3>具体怎么做</h3><ol>{solution.actions.map(action => <li key={action}>{action}</li>)}</ol></section>
+      <section><h3>费用明细</h3><div className="price-breakdown"><span>材料</span><b>{formatRange(solution.price.material_min, solution.price.material_max, solution.price.currency)}</b><span>人工</span><b>{formatRange(solution.price.labor_min, solution.price.labor_max, solution.price.currency)}</b><span>其他</span><b>{formatRange(solution.price.other_min, solution.price.other_max, solution.price.currency)}</b></div></section>
+      <section><h3>实施说明</h3><p>{solution.professional_installation} · 难度 {DIFFICULTY_COPY[solution.difficulty] || '需现场确认'}</p>{solution.limitations.length ? <p><b>限制：</b>{solution.limitations.join('；')}</p> : null}</section>
+    </article>
+    <p className="fine-print">{data.price_disclaimer}</p>
+    <div className="button-stack"><button className="button secondary full" onClick={() => navigate(`/solutions/${roomId}/${riskId}`)}>更换方案</button><button className="button quiet full" onClick={() => navigate('/report')}>返回改造清单</button></div>
+  </section>;
+}
+
+function ReportDetails({report}: {report: AssessmentReport}) {
+  const risks = report.rooms.flatMap(room => room.risks.map(risk => ({...risk, roomName: ROOM_COPY[room.room_type].name})));
+  const selectedByRisk = new Map(report.selected_items.map(item => [item.risk_id, item]));
+  return <>
+    <section className="report-dimension"><div className="report-section-title"><span>01</span><div><h2>存在的隐患</h2><p>共发现 {risks.length} 个有图像证据的问题</p></div></div>
+      <div className="report-risk-list">{risks.length ? risks.map(risk => <article key={risk.risk_id} className={`report-risk-row ${risk.severity}`}><div><span className="severity-label">{SEVERITY_COPY[risk.severity]}</span><small>{risk.roomName}</small></div><h3>{risk.title}</h3><p>{risk.evidence}</p></article>) : <p className="empty-copy">当前已检查区域暂未发现明确隐患</p>}</div>
+    </section>
+    <section className="report-dimension"><div className="report-section-title"><span>02</span><div><h2>改造建议与预算</h2><p>预算来自结构化价格规则，仅供规划参考</p></div></div>
+      <div className="report-recommendations">{risks.length ? risks.map(risk => {
+        const selected = selectedByRisk.get(risk.risk_id);
+        return <article key={risk.risk_id} className="report-recommendation"><div className="recommendation-heading"><div><small>{risk.roomName} · 对应隐患</small><h3>{risk.title}</h3></div>{selected && <b>{formatRange(selected.solution.price.total_min, selected.solution.price.total_max, selected.solution.price.currency)}</b>}</div>
+          {selected ? <><p className="recommendation-name"><span>{selected.solution.tier} 档</span>{selected.solution.title}</p><p>{selected.solution.summary}</p><ol>{selected.solution.actions.map(action => <li key={action}>{action}</li>)}</ol><div className="recommendation-meta"><span>材料 {formatRange(selected.solution.price.material_min, selected.solution.price.material_max, selected.solution.price.currency)}</span><span>人工 {formatRange(selected.solution.price.labor_min, selected.solution.price.labor_max, selected.solution.price.currency)}</span><span>{selected.solution.duration}</span></div>{selected.solution.limitations.length ? <p className="recommendation-limit">实施前确认：{selected.solution.limitations.join('；')}</p> : null}</> : <p className="unselected-solution">尚未选择改造方案，可从隐患详情中查看 A/B/C 三档建议。</p>}
+        </article>;
+      }) : <p className="empty-copy">暂无需要列入报告的改造建议</p>}</div>
+    </section>
+    <article className="budget-card report-total-budget"><div><span><Icon name="payments" filled /></span><div><small>已选 {report.selected_items.length} 项 · 参考总预算</small><b>{formatRange(report.budget.total_min, report.budget.total_max, report.budget.currency)}</b></div></div><div className="budget-breakdown"><span>材料 {formatRange(report.budget.material_min, report.budget.material_max, report.budget.currency)}</span><span>人工 {formatRange(report.budget.labor_min, report.budget.labor_max, report.budget.currency)}</span></div>{report.budget.unknown_items.length ? <p className="unknown-price">另有 {report.budget.unknown_items.length} 项需现场询价</p> : null}<p>{report.price_disclaimer}</p></article>
+  </>;
+}
+
+function drawWrappedText(context: CanvasRenderingContext2D, value: string, x: number, y: number, maxWidth: number, lineHeight: number) {
+  let line = '';
+  for (const character of Array.from(value)) {
+    const next = line + character;
+    if (line && context.measureText(next).width > maxWidth) {
+      context.fillText(line, x, y);
+      line = character;
+      y += lineHeight;
+    } else line = next;
+  }
+  if (line) context.fillText(line, x, y);
+  return y + lineHeight;
+}
+
+async function downloadReportImage(report: AssessmentReport) {
+  await document.fonts?.ready;
+  const risks = report.rooms.flatMap(room => room.risks.map(risk => ({...risk, roomName: ROOM_COPY[room.room_type].name})));
+  const selectedByRisk = new Map(report.selected_items.map(item => [item.risk_id, item]));
+  const contentHeight = 800 + risks.length * 190 + risks.reduce((sum, risk) => sum + (selectedByRisk.get(risk.risk_id)?.solution.actions.length || 0) * 58 + (selectedByRisk.has(risk.risk_id) ? 300 : 160), 0);
+  const canvas = document.createElement('canvas');
+  canvas.width = 1242;
+  canvas.height = Math.max(1754, contentHeight);
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('当前浏览器无法生成报告图片');
+  const left = 90;
+  const width = canvas.width - left * 2;
+  context.fillStyle = '#fffbe2';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = '#443d1f';
+  context.font = '700 34px "Noto Sans SC", sans-serif';
+  context.fillText(PRODUCT_NAME, left, 95);
+  context.font = '800 58px "Noto Sans SC", sans-serif';
+  context.fillText('居家安全检查报告', left, 180);
+  context.font = '400 25px "Noto Sans SC", sans-serif';
+  context.fillStyle = '#6f6848';
+  context.fillText(`已检查 ${report.checked_room_count} 个房间 · 覆盖度 ${report.coverage_percent}%`, left, 232);
+  const metricY = 278;
+  context.fillStyle = '#fffef8';
+  context.fillRect(left, metricY, width, 180);
+  context.fillStyle = '#6f6848';
+  context.font = '400 23px "Noto Sans SC", sans-serif';
+  context.fillText(report.score_title, left + 36, metricY + 50);
+  context.fillText('发现隐患', left + 400, metricY + 50);
+  context.fillText('参考总预算', left + 730, metricY + 50);
+  context.fillStyle = '#27240f';
+  context.font = '800 52px "Noto Sans SC", sans-serif';
+  context.fillText(String(report.assessed_area_score ?? '—'), left + 36, metricY + 125);
+  context.fillText(`${risks.length} 个`, left + 400, metricY + 125);
+  context.font = '800 38px "Noto Sans SC", sans-serif';
+  context.fillText(formatRange(report.budget.total_min, report.budget.total_max, report.budget.currency), left + 730, metricY + 122);
+  let y = 535;
+  const sectionTitle = (number: string, title: string, subtitle: string) => {
+    context.fillStyle = '#443d1f';
+    context.font = '800 28px "Noto Sans SC", sans-serif';
+    context.fillText(number, left, y);
+    context.font = '800 40px "Noto Sans SC", sans-serif';
+    context.fillText(title, left + 70, y);
+    context.fillStyle = '#6f6848';
+    context.font = '400 22px "Noto Sans SC", sans-serif';
+    context.fillText(subtitle, left + 70, y + 38);
+    y += 88;
+  };
+  sectionTitle('01', '存在的隐患', `共发现 ${risks.length} 个有图像证据的问题`);
+  if (!risks.length) {
+    context.fillStyle = '#6f6848'; context.font = '400 25px "Noto Sans SC", sans-serif'; context.fillText('当前已检查区域暂未发现明确隐患', left + 28, y + 45); y += 110;
+  }
+  risks.forEach(risk => {
+    context.fillStyle = risk.severity === 'high' ? '#fff0ed' : risk.severity === 'medium' ? '#fff3cd' : '#eef4fb';
+    context.fillRect(left, y, width, 150);
+    context.fillStyle = risk.severity === 'high' ? '#a51018' : risk.severity === 'medium' ? '#6b5100' : '#31445c';
+    context.font = '700 22px "Noto Sans SC", sans-serif'; context.fillText(`${SEVERITY_COPY[risk.severity]} · ${risk.roomName}`, left + 28, y + 40);
+    context.fillStyle = '#27240f'; context.font = '800 29px "Noto Sans SC", sans-serif'; context.fillText(risk.title, left + 28, y + 80);
+    context.fillStyle = '#625e48'; context.font = '400 21px "Noto Sans SC", sans-serif'; drawWrappedText(context, risk.evidence, left + 28, y + 116, width - 56, 28);
+    y += 170;
+  });
+  y += 32;
+  sectionTitle('02', '改造建议与预算', '已选方案的具体做法与结构化参考预算');
+  risks.forEach(risk => {
+    const selected = selectedByRisk.get(risk.risk_id);
+    const boxHeight = selected ? 250 + selected.solution.actions.length * 52 : 132;
+    context.fillStyle = '#fffef8'; context.fillRect(left, y, width, boxHeight);
+    context.fillStyle = '#6f6848'; context.font = '400 20px "Noto Sans SC", sans-serif'; context.fillText(`${risk.roomName} · ${risk.title}`, left + 28, y + 38);
+    if (!selected) {
+      context.fillStyle = '#625e48'; context.font = '400 24px "Noto Sans SC", sans-serif'; context.fillText('尚未选择改造方案', left + 28, y + 88); y += boxHeight + 20; return;
+    }
+    context.fillStyle = '#27240f'; context.font = '800 29px "Noto Sans SC", sans-serif'; context.fillText(`${selected.solution.tier} 档 · ${selected.solution.title}`, left + 28, y + 82);
+    context.fillStyle = '#443d1f'; context.font = '800 28px "Noto Sans SC", sans-serif'; context.fillText(formatRange(selected.solution.price.total_min, selected.solution.price.total_max, selected.solution.price.currency), left + width - 250, y + 82);
+    let detailY = y + 124;
+    context.fillStyle = '#625e48'; context.font = '400 22px "Noto Sans SC", sans-serif';
+    detailY = drawWrappedText(context, selected.solution.summary, left + 28, detailY, width - 56, 30);
+    selected.solution.actions.forEach((action, index) => { detailY = drawWrappedText(context, `${index + 1}. ${action}`, left + 40, detailY + 10, width - 80, 29); });
+    context.fillStyle = '#6f6848'; context.font = '400 20px "Noto Sans SC", sans-serif'; context.fillText(`材料 ${formatRange(selected.solution.price.material_min, selected.solution.price.material_max)}  ·  人工 ${formatRange(selected.solution.price.labor_min, selected.solution.price.labor_max)}  ·  ${selected.solution.duration}`, left + 28, y + boxHeight - 30);
+    y += boxHeight + 20;
+  });
+  y += 28;
+  context.fillStyle = '#443d1f'; context.font = '800 34px "Noto Sans SC", sans-serif'; context.fillText(`参考总预算  ${formatRange(report.budget.total_min, report.budget.total_max, report.budget.currency)}`, left, y);
+  context.fillStyle = '#6f6848'; context.font = '400 20px "Noto Sans SC", sans-serif'; drawWrappedText(context, report.price_disclaimer, left, y + 42, width, 28);
+  const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'));
+  if (!blob) throw new Error('报告图片生成失败');
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `${PRODUCT_NAME}-居家安全检查报告.png`;
+  anchor.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function ReportPage() {
@@ -529,47 +773,82 @@ function ReportPage() {
   const {session, showToast} = useApp();
   const [report, setReport] = useState<AssessmentReport | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const [downloading, setDownloading] = useState(false);
   const load = useCallback(() => api.report().then(value => { setReport(value); setError(null); }).catch(setError), []);
   useEffect(() => { if (session) load(); }, [load, session]);
   if (!session) return <Navigate to="/home" replace />;
   if (!report) return error ? <ErrorState error={error} retry={load} /> : <Loading />;
-  const share = async () => {
-    try {
-      const value = await api.share();
-      const url = new URL(value.path, location.href).href;
-      if (navigator.share) await navigator.share({title: '安心家 AI 检查报告', text: '父母家的环境安全检查报告', url});
-      else { await navigator.clipboard.writeText(url); showToast('分享链接已复制，24 小时内有效'); }
-    } catch (value) { showToast(friendlyError(value)); }
-  };
+  const download = async () => { setDownloading(true); try { await downloadReportImage(report); showToast('报告图片已下载'); } catch (value) { showToast(friendlyError(value)); } finally { setDownloading(false); } };
   const save = async () => { try { const value = await api.complete(); setReport(value); showToast('报告已保存'); } catch (value) { showToast(friendlyError(value)); } };
   return <section className="page report-page">
-    <div className="page-intro"><h1>父母家的安全改造清单</h1></div>
-    <div className="report-status"><span className="icon-disc teal-soft"><Icon name="check_circle" filled /></span><div><b>卫生间已完成检查</b><p>家庭检查进度 {report.checked_room_count} / {report.planned_room_count}</p></div></div>
-    <div className="report-task" role="status"><Icon name={report.status === 'completed' ? 'task_alt' : 'pending_actions'} /><span><b>{report.status === 'completed' ? '报告已保存' : '检查仍可继续'}</b><small>可以刷新恢复，并继续补拍或检查其他房间</small></span></div>
+    <div className="page-intro"><small className="eyebrow">{PRODUCT_NAME}</small><h1>居家安全检查报告</h1><p>把已发现的隐患、具体改造建议和预算整理在一起。</p></div>
+    <div className="report-status"><span className="icon-disc teal-soft"><Icon name="check_circle" filled /></span><div><b>已完成 {report.checked_room_count} 个房间检查</b><p>家庭检查进度 {report.checked_room_count} / {report.planned_room_count}</p></div></div>
     <div className="report-metrics"><div><small>{report.score_title}</small><b>{report.assessed_area_score ?? '—'}</b></div><div><small>家庭覆盖度</small><b>{report.coverage_percent}%</b></div><div><small>预计整改后</small><b>{report.projected_score?.display ?? '—'}</b></div></div>
-    {(['high', 'medium', 'low'] as const).map(level => {
-      const items = report.selected_items.filter(item => item.severity === level);
-      return <section key={level} className={`checklist-group ${level}`}><h2><i />{level === 'high' ? '建议优先处理' : level === 'medium' ? '建议近期改善' : '可以继续观察'}</h2>{items.length ? items.map(item => <button key={item.selected_solution_id} className="checklist-item" onClick={() => navigate(`/solutions/${report.rooms[0]?.room_id || ''}/${item.risk_id}`)}><span className="task-box" /><span><b>{item.solution.summary}</b><small>{SEVERITY_COPY[item.severity]} · {formatRange(item.solution.price.total_min, item.solution.price.total_max)}</small></span><Icon name="chevron_right" /></button>) : <p className="empty-copy">还没有选择这一级别的整改方案</p>}</section>;
-    })}
-    <article className="budget-card"><h2>参考预算</h2><b>{formatRange(report.budget.total_min, report.budget.total_max, report.budget.currency)}</b><div><span>材料 {formatRange(report.budget.material_min, report.budget.material_max)}</span><span>人工 {formatRange(report.budget.labor_min, report.budget.labor_max)}</span></div>{report.budget.unknown_items.length ? <p className="unknown-price">另有 {report.budget.unknown_items.length} 项需现场询价</p> : null}<p>{report.price_disclaimer}</p></article>
+    <ReportDetails report={report} />
     <p className="fine-print">不用一次做完，先从最重要的一件事开始。</p>
     <button className="button primary full" onClick={save}><Icon name="save" filled />保存检查报告</button>
-    <div className="split-actions"><button className="button secondary" onClick={share}><Icon name="ios_share" />分享给家人</button><button className="button quiet" onClick={() => navigate('/rooms')}>继续检查其他房间</button></div>
+    <div className="split-actions"><button className="button secondary" disabled={downloading} onClick={download}><Icon name="download" />{downloading ? '正在生成…' : '下载报告图片'}</button><button className="button quiet" onClick={() => navigate('/rooms')}>继续检查其他房间</button></div>
   </section>;
 }
 
-function SharePage() {
-  const {token = ''} = useParams();
+function MyMediaThumbnail({media}: {media: MediaAsset}) {
+  const {url} = useProtectedImage(media.content_path);
+  return <img src={url || `${ASSETS}/demo-upload-floor.jpg`} alt="已上传照片" />;
+}
+
+function MyPage() {
+  const navigate = useNavigate();
+  const {session, showToast} = useApp();
+  const assessmentState = useAssessment();
   const [report, setReport] = useState<AssessmentReport | null>(null);
-  const [error, setError] = useState<unknown>(null);
+  const [downloading, setDownloading] = useState(false);
   useEffect(() => {
+    if (!session) return;
     const controller = new AbortController();
-    api.sharedReport(token, controller.signal).then(setReport).catch(value => { if ((value as Error).name !== 'AbortError') setError(value); });
+    api.report(controller.signal).then(setReport).catch(() => undefined);
     return () => controller.abort();
-  }, [token]);
-  if (error) return <ErrorState error={error} />;
-  if (!report) return <Loading />;
-  return <section className="page share-page"><div className="share-brand"><span className="icon-disc teal-soft"><Icon name="home_health" filled /></span><strong>{PRODUCT_NAME}</strong><small>24 小时只读报告</small></div><h1>父母家的环境安全检查</h1><div className="report-metrics"><div><small>{report.score_title}</small><b>{report.assessed_area_score ?? '—'}</b></div><div><small>家庭覆盖度</small><b>{report.coverage_percent}%</b></div></div><article className="budget-card"><h2>已选择 {report.selected_items.length} 项改造</h2><b>{formatRange(report.budget.total_min, report.budget.total_max)}</b></article><p className="fine-print">这是临时只读分享页，不包含原始照片、完整家人档案或内部日志。</p></section>;
+  }, [session]);
+  if (!session) return <section className="page my-page empty-my"><Icon name="person" className="state-icon" /><h1>我的</h1><p>开始一次检查后，这里会集中展示档案、图片、房屋问题和改造清单。</p><button className="button primary full" onClick={() => navigate('/home')}>开始检查</button></section>;
+  if (assessmentState.loading && !assessmentState.assessment) return <Loading />;
+  if (assessmentState.error) return <ErrorState error={assessmentState.error} retry={assessmentState.reload} />;
+  const assessment = assessmentState.assessment;
+  const profile = assessment?.profile || assessment?.profile_json;
+  const mobilityCopy: Record<string, string> = {normal: '行走基本正常', limited: '腿脚不太方便', cane: '使用拐杖', walker: '使用助行器', wheelchair: '使用轮椅'};
+  const fallCopy: Record<string, string> = {none: '没有', once: '发生过一次', multiple: '发生过多次'};
+  const livingCopy: Record<string, string> = {alone: '独居', with_family: '与家人同住'};
+  const roomTarget = (room: RoomAssessment) => room.status === 'result_ready' ? `/result/${room.room_id}` : room.status === 'analyzing' ? `/analyzing/${room.room_id}` : `/upload/${room.room_id}`;
+  const risks = report?.rooms.flatMap(room => room.risks.map(risk => ({...risk, roomType: room.room_type}))) || [];
+  const download = async () => {
+    if (!report) { showToast('完成至少一个房间检查后即可下载报告'); return; }
+    setDownloading(true);
+    try { await downloadReportImage(report); showToast('报告图片已下载'); }
+    catch (value) { showToast(friendlyError(value)); }
+    finally { setDownloading(false); }
+  };
+  return <section className="page my-page">
+    <div className="page-intro"><h1>我的</h1><p>档案、检查记录与改造方案都集中在这里。</p></div>
+    <details className="my-section" open><summary><span><Icon name="person" filled />个人档案</span><Icon name="expand_more" /></summary><div className="my-section-body">
+      <div className="section-heading"><b>家人情况</b><button className="text-button" onClick={() => navigate('/profile?from=my')}>编辑</button></div>
+      {profile ? <div className="profile-summary"><span>行动能力<b>{mobilityCopy[profile.mobility]}</b></span><span>跌倒史<b>{fallCopy[profile.fall_history]}</b></span><span>居住状态<b>{livingCopy[profile.living_status]}</b></span></div> : <button className="button quiet full" onClick={() => navigate('/profile?from=my')}>完善个人档案</button>}
+    </div></details>
+    <details className="my-section" open><summary><span><Icon name="photo_library" filled />我的图片</span><Icon name="expand_more" /></summary><div className="my-section-body my-room-list">
+      {assessment?.rooms.filter(room => room.media.length).length ? assessment.rooms.filter(room => room.media.length).map(room => <button key={room.room_id} className="my-room-card" onClick={() => navigate(roomTarget(room))}><span><b>{ROOM_COPY[room.room_type].name}</b><small>{room.media.length} 张 · {room.status === 'result_ready' ? '已完成检查' : room.status === 'analyzing' ? '正在分析' : '待继续检查'}</small></span><Icon name="chevron_right" /><span className="my-thumbnails">{room.media.slice(0, 4).map(media => <MyMediaThumbnail key={media.media_id} media={media} />)}</span></button>) : <p className="empty-copy">还没有上传图片</p>}
+    </div></details>
+    <details className="my-section" open><summary><span><Icon name="warning" filled />房屋问题</span><Icon name="expand_more" /></summary><div className="my-section-body issue-groups">
+      {(['high', 'medium', 'low'] as const).map(level => {
+        const items = risks.filter(risk => risk.severity === level);
+        const title = level === 'high' ? '建议优先处理' : level === 'medium' ? '建议近期改善' : '可以继续观察';
+        return <div key={level} className={`my-issue-group ${level}`}><div><b>{title}</b><span>{items.length} 个</span></div>{items.length ? items.map(risk => <button key={risk.risk_id} onClick={() => navigate(`/risk/${risk.room_id}/${risk.risk_id}`)}><span>{risk.title}</span><small>{ROOM_COPY[risk.roomType].name}</small><Icon name="chevron_right" /></button>) : <p>暂时没有这一级别的问题</p>}</div>;
+      })}
+    </div></details>
+    <details className="my-section" open><summary><span><Icon name="handyman" filled />改造清单</span><Icon name="expand_more" /></summary><div className="my-section-body">
+      <div className="my-solution-summary"><b>已选 {report?.selected_items.length || 0} 项</b>{report?.selected_items.map(item => {
+        const roomId = report.rooms.find(room => room.risks.some(risk => risk.risk_id === item.risk_id))?.room_id || '';
+        return <button key={item.selected_solution_id} onClick={() => navigate(`/selected-solution/${roomId}/${item.risk_id}/${item.solution.solution_package_id}`)}><span>{item.solution.summary}</span><b>{formatRange(item.solution.price.total_min, item.solution.price.total_max)}</b><Icon name="chevron_right" /></button>;
+      })}<div className="my-budget"><span>参考总预算</span><b>{report ? formatRange(report.budget.total_min, report.budget.total_max, report.budget.currency) : '—'}</b></div><button className="button secondary full" onClick={() => navigate('/report')}>查看报告</button></div>
+    </div></details>
+    <details className="my-section" open><summary><span><Icon name="download" filled />下载报告给家人</span><Icon name="expand_more" /></summary><div className="my-section-body share-summary"><p>生成包含隐患、具体改造建议与参考预算的长图，可直接发送给家人。</p><button className="button primary full" disabled={!report || downloading} onClick={download}><Icon name="image" />{downloading ? '正在生成报告图片…' : '下载报告图片'}</button></div></details>
+  </section>;
 }
 
 export default function App() {

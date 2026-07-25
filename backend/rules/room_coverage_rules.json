@@ -10,6 +10,61 @@
         {"id":"support_wall","label":"主要墙面和支撑位置","weight":15},
         {"id":"lighting","label":"照明条件","weight":10}
       ]
+    },
+    "bedroom": {
+      "elements": [
+        {"id":"floor","label":"完整地面","weight":20},
+        {"id":"bed","label":"床铺","weight":20},
+        {"id":"bedside","label":"床边起身区","weight":20},
+        {"id":"wardrobe","label":"衣柜和储物区","weight":10},
+        {"id":"walking_path","label":"主要通行区","weight":15},
+        {"id":"lighting","label":"照明条件","weight":10},
+        {"id":"switch","label":"开关位置","weight":5}
+      ]
+    },
+    "living_room": {
+      "elements": [
+        {"id":"floor","label":"完整地面","weight":20},
+        {"id":"sofa","label":"沙发区","weight":15},
+        {"id":"coffee_table","label":"茶几区","weight":10},
+        {"id":"rug","label":"地毯和地垫","weight":15},
+        {"id":"cable","label":"线缆区域","weight":10},
+        {"id":"walking_path","label":"主要通行区","weight":20},
+        {"id":"lighting","label":"照明条件","weight":10}
+      ]
+    },
+    "kitchen": {
+      "elements": [
+        {"id":"floor","label":"完整地面","weight":20},
+        {"id":"counter","label":"操作台","weight":15},
+        {"id":"stove","label":"灶台区","weight":15},
+        {"id":"sink","label":"水槽区","weight":15},
+        {"id":"storage","label":"储物区","weight":15},
+        {"id":"walking_path","label":"主要通行区","weight":10},
+        {"id":"lighting","label":"照明条件","weight":10}
+      ]
+    },
+    "corridor": {
+      "elements": [
+        {"id":"floor","label":"完整地面","weight":20},
+        {"id":"doorway","label":"出入口","weight":15},
+        {"id":"entrance_threshold","label":"门槛和高差","weight":15},
+        {"id":"shoe_area","label":"换鞋区","weight":15},
+        {"id":"handrail","label":"支撑位置","weight":10},
+        {"id":"walking_path","label":"主要通行区","weight":15},
+        {"id":"lighting","label":"照明条件","weight":10}
+      ]
+    },
+    "balcony": {
+      "elements": [
+        {"id":"floor","label":"完整地面","weight":20},
+        {"id":"balcony_door","label":"阳台门","weight":15},
+        {"id":"entrance_threshold","label":"门槛和高差","weight":15},
+        {"id":"drying_area","label":"晾衣区","weight":20},
+        {"id":"guardrail","label":"护栏区","weight":15},
+        {"id":"walking_path","label":"主要通行区","weight":10},
+        {"id":"lighting","label":"照明条件","weight":5}
+      ]
     }
   },
   "room_weights": {"bathroom":25,"bedroom":20,"living_room":20,"kitchen":15,"corridor":10,"balcony":10}

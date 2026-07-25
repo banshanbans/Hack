@@ -1,14 +1,56 @@
 import type {RoomType, Severity} from './types';
 
-export const PRODUCT_NAME = '安心家 AI';
+export const PRODUCT_NAME = '长者友好家';
 
-export const ROOM_COPY: Record<RoomType, {name: string; icon: string; hint: string; supported: boolean}> = {
-  bathroom: {name: '卫生间', icon: 'bathtub', hint: '湿滑、起身和支撑问题较集中', supported: true},
-  bedroom: {name: '卧室', icon: 'bed', hint: '起夜照明、床边防跌倒隐患', supported: false},
-  living_room: {name: '客厅', icon: 'chair', hint: '动线障碍、地毯与线缆绊倒风险', supported: false},
-  kitchen: {name: '厨房', icon: 'kitchen', hint: '高低处取物、地面油水防滑', supported: false},
-  corridor: {name: '玄关走廊', icon: 'door_front', hint: '换鞋支撑、夜间光线照明', supported: false},
-  balcony: {name: '阳台', icon: 'balcony', hint: '门槛高低差、晾衣安全', supported: false},
+export const ROOM_COPY: Record<RoomType, {name: string; icon: string; hint: string; supported: boolean; priority?: boolean}> = {
+  bathroom: {name: '卫生间', icon: 'bathtub', hint: '湿滑、起身和支撑问题较集中', supported: true, priority: true},
+  bedroom: {name: '卧室', icon: 'bed', hint: '起夜照明、床边起身与通行风险', supported: true},
+  living_room: {name: '客厅', icon: 'chair', hint: '动线障碍、地毯与线缆绊倒风险', supported: true},
+  kitchen: {name: '厨房', icon: 'kitchen', hint: '高低处取物、地面油水防滑', supported: true},
+  corridor: {name: '玄关走廊', icon: 'door_front', hint: '换鞋支撑、门槛与夜间照明', supported: true},
+  balcony: {name: '阳台', icon: 'balcony', hint: '门槛高低差、通行与晾衣安全', supported: true},
+};
+
+export const SCENE_ELEMENT_COPY: Record<string, string> = {
+  floor: '地面', entrance_threshold: '门槛', shower: '淋浴区', toilet: '马桶', support_wall: '支撑墙面', lighting: '照明',
+  bed: '床铺', bedside: '床边', wardrobe: '衣柜', walking_path: '通行区', switch: '开关',
+  sofa: '沙发', coffee_table: '茶几', rug: '地毯', cable: '线缆',
+  counter: '操作台', stove: '灶台', sink: '水槽', storage: '储物区',
+  doorway: '出入口', shoe_area: '换鞋区', handrail: '扶手',
+  balcony_door: '阳台门', drying_area: '晾衣区', guardrail: '护栏',
+};
+
+export const ROOM_PHOTO_GUIDES: Record<RoomType, Array<{image: string; icon: string; text: string}>> = {
+  bathroom: [
+    {image: 'guide-doorway.jpg', icon: 'pan_tool_alt', text: '在门口拍一张全景'},
+    {image: 'guide-floor.jpg', icon: 'door_front', text: '拍清楚地面和门槛'},
+    {image: 'guide-shower.jpg', icon: 'shower', text: '补拍马桶或淋浴区域'},
+  ],
+  bedroom: [
+    {image: 'guide-doorway.jpg', icon: 'pan_tool_alt', text: '在门口拍床和主通道'},
+    {image: 'guide-floor.jpg', icon: 'bed', text: '拍清床边起身区'},
+    {image: 'hero-living-room.jpg', icon: 'light', text: '补拍开关和夜间照明'},
+  ],
+  living_room: [
+    {image: 'hero-living-room.jpg', icon: 'pan_tool_alt', text: '拍沙发到出入口全景'},
+    {image: 'guide-floor.jpg', icon: 'rug', text: '拍清地毯和通行地面'},
+    {image: 'guide-doorway.jpg', icon: 'cable', text: '补拍线缆与家具间隙'},
+  ],
+  kitchen: [
+    {image: 'guide-doorway.jpg', icon: 'pan_tool_alt', text: '在门口拍厨房全景'},
+    {image: 'guide-floor.jpg', icon: 'floor', text: '拍清水槽前和主通道'},
+    {image: 'hero-living-room.jpg', icon: 'shelves', text: '补拍高位和低位储物区'},
+  ],
+  corridor: [
+    {image: 'guide-doorway.jpg', icon: 'door_front', text: '拍清出入口和门槛'},
+    {image: 'guide-floor.jpg', icon: 'directions_walk', text: '沿主通道拍完整地面'},
+    {image: 'hero-living-room.jpg', icon: 'chair', text: '补拍换鞋区和支撑位置'},
+  ],
+  balcony: [
+    {image: 'guide-doorway.jpg', icon: 'door_front', text: '拍清阳台门和高差'},
+    {image: 'guide-floor.jpg', icon: 'directions_walk', text: '拍完整地面与通道'},
+    {image: 'hero-living-room.jpg', icon: 'dry_cleaning', text: '补拍晾衣区和护栏'},
+  ],
 };
 
 export const SEVERITY_COPY: Record<Severity, string> = {
@@ -44,6 +86,5 @@ export const ERROR_COPY: Record<string, string> = {
   provider_refusal: '这张照片暂时无法完成分析',
   room_rules_not_ready: '这个房间的完整规则仍在完善中',
   no_usable_media: '至少需要一张可以看清的照片',
-  share_expired: '分享链接已失效',
   analysis_interrupted: '服务重启中断了分析，请重新开始',
 };

@@ -2,7 +2,7 @@ import AnjuCore
 import UIKit
 
 enum ProductCopy {
-    static let appName = "安居守护"
+    static let appName = "长者友好家"
     static let homeTitle = "让家里住得更安心"
     static let homeSubtitle = "用手机看一圈，找出值得先处理的地方"
     static let startRoom = "开始看看这个房间"

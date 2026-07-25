@@ -97,7 +97,7 @@
     "manual_checks": ["是否处于腰腿高度"],
     "needs_manual_check": true,
     "source": {
-      "name": "安居守护适老化辅助筛查规则",
+      "name": "长者友好家适老化辅助筛查规则",
       "url": null
     }
   },
@@ -131,7 +131,7 @@
     "manual_checks": ["是否会移动或倾倒", "是否牢固固定"],
     "needs_manual_check": true,
     "source": {
-      "name": "安居守护适老化辅助筛查规则",
+      "name": "长者友好家适老化辅助筛查规则",
       "url": null
     }
   },

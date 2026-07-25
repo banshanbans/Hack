@@ -13,6 +13,17 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
+ROOM_SCENE_ELEMENTS = {
+    "bathroom": ["floor", "entrance_threshold", "shower", "toilet", "support_wall", "lighting"],
+    "bedroom": ["floor", "bed", "bedside", "wardrobe", "walking_path", "lighting", "switch"],
+    "living_room": ["floor", "sofa", "coffee_table", "rug", "cable", "walking_path", "lighting"],
+    "kitchen": ["floor", "counter", "stove", "sink", "storage", "walking_path", "lighting"],
+    "corridor": ["floor", "doorway", "entrance_threshold", "shoe_area", "handrail", "walking_path", "lighting"],
+    "balcony": ["floor", "balcony_door", "entrance_threshold", "drying_area", "guardrail", "walking_path", "lighting"],
+}
+ALL_SCENE_ELEMENTS = sorted({item for values in ROOM_SCENE_ELEMENTS.values() for item in values})
+
+
 class ProviderError(RuntimeError):
     def __init__(self, code: str, retryable: bool = True) -> None:
         super().__init__(code)
@@ -40,7 +51,7 @@ QUALITY_SCHEMA = {
         "path_visible": {"type": "boolean"},
         "lighting_sufficient": {"type": "boolean"},
         "major_occlusion": {"type": "boolean"},
-        "scene_elements": {"type": "array", "items": {"type": "string", "enum": ["floor", "entrance_threshold", "shower", "toilet", "support_wall", "lighting"]}},
+        "scene_elements": {"type": "array", "items": {"type": "string", "enum": ALL_SCENE_ELEMENTS}},
         "missing_views": {"type": "array", "items": {"type": "string"}},
     },
 }
@@ -52,7 +63,7 @@ ANALYSIS_SCHEMA = {
     "required": ["room_type", "scene_elements", "risk_candidates"],
     "properties": {
         "room_type": {"type": "string"},
-        "scene_elements": {"type": "array", "items": {"type": "string", "enum": ["floor", "entrance_threshold", "shower", "toilet", "support_wall", "lighting"]}},
+        "scene_elements": {"type": "array", "items": {"type": "string", "enum": ALL_SCENE_ELEMENTS}},
         "risk_candidates": {
             "type": "array",
             "maxItems": 12,
@@ -105,9 +116,12 @@ class OpenAIVisionProvider:
         return detail
 
     def quality(self, assessment_id: str, media: dict) -> tuple[dict, dict]:
+        room_type = str(media.get("room_type", "bathroom"))
+        allowed_elements = ROOM_SCENE_ELEMENTS.get(room_type, ROOM_SCENE_ELEMENTS["bathroom"])
         prompt = (
-            "检查这张居家卫生间照片是否适合做环境安全辅助筛查。只描述画面中可观察的内容。"
+            f"检查这张居家 {room_type} 照片是否适合做环境安全辅助筛查。只描述画面中可观察的内容。"
             "判断清晰度、主要地面和通道、光线、遮挡，并从允许的场景要素中选择已清楚拍到的项。"
+            f"允许的场景要素仅为: {allowed_elements}。"
             "不要输出医疗结论，也不要把未拍到的区域当作安全。"
         )
         return self._request(assessment_id, prompt, [media], QUALITY_SCHEMA, "media_quality", "low")
@@ -115,7 +129,7 @@ class OpenAIVisionProvider:
     def analyze(self, assessment_id: str, room_type: str, media: list[dict], allowed_risks: list[str]) -> tuple[dict, dict]:
         media_ids = [item["media_id"] for item in media]
         prompt = (
-            "你正在辅助筛查老人家庭卫生间的环境跌倒与行动风险。只报告图片中可观察且有证据的候选，"
+            f"你正在辅助筛查老人家庭 {room_type} 的环境跌倒与行动风险。只报告图片中可观察且有证据的候选，"
             "不得推断遮挡区域，不得给最终风险等级、分数、价格、施工结论、HTML 或 SVG。"
             f"只允许 risk_code: {allowed_risks}。media_id 必须从 {media_ids} 选择。"
             "bbox 坐标为相对对应原图的 0 到 1 值；无法可靠定位时 region 为 null 且 needs_manual_check 为 true。"
@@ -197,25 +211,31 @@ class MockVisionProvider:
     prompt_version = "demo_fixture_v2"
 
     def quality(self, assessment_id: str, media: dict) -> tuple[dict, dict]:
+        room_type = str(media.get("room_type", "bathroom"))
+        scene_elements = ROOM_SCENE_ELEMENTS.get(room_type, ROOM_SCENE_ELEMENTS["bathroom"])
         return ({
             "usable": True, "clear": True, "floor_visible": True, "path_visible": True,
             "lighting_sufficient": True, "major_occlusion": False,
-            "scene_elements": ["floor", "entrance_threshold", "shower", "toilet", "support_wall", "lighting"],
+            "scene_elements": scene_elements,
             "missing_views": [],
         }, self._usage())
 
     def analyze(self, assessment_id: str, room_type: str, media: list[dict], allowed_risks: list[str]) -> tuple[dict, dict]:
         media_id = media[0]["media_id"]
-        candidates = [
-            ("BATH_NO_GRAB_BAR", "淋浴区缺少稳定支撑点", "淋浴区入口及内部未看到可靠固定扶手", 0.91, [0.55, 0.25, 0.25, 0.32]),
-            ("BATH_WET_FLOOR", "地面湿滑容易失足", "淋浴区域地面可见水迹", 0.86, [0.28, 0.66, 0.45, 0.25]),
-            ("FALL_THRESHOLD_HEIGHT", "门槛存在绊倒风险", "入口位置可见明显高度差", 0.74, [0.05, 0.64, 0.28, 0.16]),
-            ("FALL_TRIP_LOOSE_MAT", "松动地垫可能滑移", "通行区域存在活动地垫", 0.72, [0.34, 0.55, 0.24, 0.16]),
-            ("LIGHTING_NIGHT_INSUFFICIENT", "夜间照明可能不足", "主要通道附近未看到夜间辅助照明", 0.64, [0.02, 0.12, 0.20, 0.24]),
+        room_candidates = {
+            "bathroom": [("BATH_NO_GRAB_BAR", "淋浴区缺少稳定支撑点", "淋浴区入口及内部未看到可靠固定扶手", 0.91, [0.55, 0.25, 0.25, 0.32])],
+            "bedroom": [("BED_TRANSFER_NO_SUPPORT", "床边起身缺少稳定支撑", "床边常用起身位置未见可靠支撑点", 0.88, [0.52, 0.34, 0.24, 0.38])],
+            "living_room": [("LIVING_PATH_OBSTRUCTION", "客厅通行动线有障碍", "沙发与茶几之间的通行空间较紧张", 0.86, [0.26, 0.56, 0.48, 0.28])],
+            "kitchen": [("KITCHEN_HIGH_REACH", "常用物品放置过高", "常用储物区需明显抬手或踮脚取物", 0.84, [0.58, 0.10, 0.30, 0.32])],
+            "corridor": [("CORRIDOR_SHOE_OBSTRUCTION", "换鞋区物品占用通道", "鞋物进入主要通行动线", 0.89, [0.18, 0.62, 0.42, 0.24])],
+            "balcony": [("BALCONY_REACHING_RISK", "晾衣位置需过度伸展", "晾衣杆位置较高，操作时可能需踮脚或探身", 0.83, [0.46, 0.12, 0.36, 0.44])],
+        }
+        candidates = room_candidates.get(room_type, []) + [
+            ("LIGHTING_NIGHT_INSUFFICIENT", "夜间照明可能不足", "主要通道附近未看到夜间辅助照明", 0.64, [0.02, 0.12, 0.20, 0.24])
         ]
         return ({
             "room_type": room_type,
-            "scene_elements": ["floor", "entrance_threshold", "shower", "toilet", "support_wall", "lighting"],
+            "scene_elements": ROOM_SCENE_ELEMENTS.get(room_type, ROOM_SCENE_ELEMENTS["bathroom"]),
             "risk_candidates": [{
                 "risk_code": code, "media_id": media_id, "title": title, "evidence": evidence,
                 "confidence": confidence, "needs_manual_check": confidence < 0.8,

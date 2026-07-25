@@ -17,7 +17,7 @@ from .scoring import calculate_coverage, score_risks
 
 ALLOWED_INPUT_MODES = {"photo", "video_frame"}
 ALLOWED_ROOMS = {"bathroom", "bedroom", "living_room", "kitchen", "corridor", "balcony"}
-SUPPORTED_ROOMS = {"bathroom"}
+SUPPORTED_ROOMS = set(ALLOWED_ROOMS)
 ALLOWED_FEEDBACK = {"not_a_risk", "location_inaccurate", "photo_unclear", "already_resolved", "other", "confirmed"}
 MIME_SIGNATURES = {
     "image/jpeg": (b"\xff\xd8\xff",),
@@ -129,10 +129,10 @@ class AssessmentService:
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / f"{media_id}{extension}"
         path.write_bytes(body)
-        media_input = {"media_id": media_id, "path": str(path), "mime_type": mime_type}
+        media_input = {"media_id": media_id, "path": str(path), "mime_type": mime_type, "room_type": room["room_type"]}
         try:
             quality, usage = self.provider().quality(assessment_id, media_input)
-            quality = self._validate_quality(quality)
+            quality = self._validate_quality(quality, room["room_type"])
             self.event(assessment_id, room_id, "ai_call_completed", {"skill_name": "media_quality", **usage})
         except ProviderError as error:
             quality = {"usable": False, "clear": False, "floor_visible": False, "path_visible": False, "lighting_sufficient": False, "major_occlusion": False, "scene_elements": [], "missing_views": [], "error": error.code}
@@ -417,11 +417,11 @@ class AssessmentService:
             raise AssessmentError("risk_not_found", 404)
         return row
 
-    def _validate_quality(self, value: dict) -> dict:
+    def _validate_quality(self, value: dict, room_type: str) -> dict:
         required = {"usable", "clear", "floor_visible", "path_visible", "lighting_sufficient", "major_occlusion", "scene_elements", "missing_views"}
         if not isinstance(value, dict) or not required.issubset(value):
             raise ProviderError("provider_invalid_response")
-        allowed_elements = {item["id"] for item in self.rules.coverage_document["rooms"]["bathroom"]["elements"]}
+        allowed_elements = {item["id"] for item in self.rules.coverage_document["rooms"][room_type]["elements"]}
         value["scene_elements"] = [item for item in value["scene_elements"] if item in allowed_elements]
         value["missing_views"] = [str(item)[:80] for item in value["missing_views"]][:6]
         return value

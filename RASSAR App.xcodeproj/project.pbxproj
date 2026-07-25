@@ -689,7 +689,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = SVRNMKJ8X4;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "安居守护";
+				INFOPLIST_KEY_CFBundleDisplayName = "长者友好家";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSCameraUsageDescription = "打开相机，才能一起看看这个房间。";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -725,7 +725,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = SVRNMKJ8X4;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "安居守护";
+				INFOPLIST_KEY_CFBundleDisplayName = "长者友好家";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSCameraUsageDescription = "打开相机，才能一起看看这个房间。";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;

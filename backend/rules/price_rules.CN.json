@@ -1,5 +1,5 @@
 {
-  "version":"cn_price_v1",
+  "version":"cn_price_v2_all_rooms",
   "region":"CN_DEFAULT",
   "updated_at":"2026-07",
   "disclaimer":"费用为常见材料与人工的参考区间，实际价格会因地区、尺寸、墙体条件和施工方而变化；施工前请以现场报价为准。",
@@ -21,6 +21,26 @@
     {"price_rule_id":"PRICE_MAT_C","currency":"CNY","unit":"fen","material_min":80000,"material_max":300000,"labor_min":120000,"labor_max":400000,"other_min":0,"other_max":0,"total_min":200000,"total_max":700000,"includes":["连续防滑面层","施工"],"excludes":["防水修复"]},
     {"price_rule_id":"PRICE_LIGHT_A","currency":"CNY","unit":"fen","material_min":3000,"material_max":15000,"labor_min":0,"labor_max":0,"other_min":0,"other_max":0,"total_min":3000,"total_max":15000,"includes":["感应夜灯"],"excludes":["线路改造"]},
     {"price_rule_id":"PRICE_LIGHT_B","currency":"CNY","unit":"fen","material_min":15000,"material_max":60000,"labor_min":10000,"labor_max":40000,"other_min":0,"other_max":0,"total_min":25000,"total_max":100000,"includes":["防潮灯具","感应控制","安装"],"excludes":["主线路更换"]},
-    {"price_rule_id":"PRICE_LIGHT_C","currency":"CNY","unit":"fen","material_min":60000,"material_max":250000,"labor_min":80000,"labor_max":250000,"other_min":0,"other_max":0,"total_min":140000,"total_max":500000,"includes":["分区照明","线路与人工"],"excludes":["配电箱升级"]}
+    {"price_rule_id":"PRICE_LIGHT_C","currency":"CNY","unit":"fen","material_min":60000,"material_max":250000,"labor_min":80000,"labor_max":250000,"other_min":0,"other_max":0,"total_min":140000,"total_max":500000,"includes":["分区照明","线路与人工"],"excludes":["配电箱升级"]},
+
+    {"price_rule_id":"PRICE_BED_SUPPORT_A","currency":"CNY","unit":"fen","material_min":0,"material_max":10000,"labor_min":0,"labor_max":0,"other_min":0,"other_max":0,"total_min":0,"total_max":10000,"includes":["床边整理、小件防滑"],"excludes":["固定扶手"]},
+    {"price_rule_id":"PRICE_BED_SUPPORT_B","currency":"CNY","unit":"fen","material_min":18000,"material_max":80000,"labor_min":5000,"labor_max":30000,"other_min":0,"other_max":0,"total_min":23000,"total_max":110000,"includes":["床边扶手、安装"],"excludes":["床架更换"]},
+    {"price_rule_id":"PRICE_BED_SUPPORT_C","currency":"CNY","unit":"fen","material_min":180000,"material_max":800000,"labor_min":80000,"labor_max":300000,"other_min":0,"other_max":0,"total_min":260000,"total_max":1100000,"includes":["床高调整、支撑系统、安装"],"excludes":["护理床或医疗设备"]},
+
+    {"price_rule_id":"PRICE_LIVING_PATH_A","currency":"CNY","unit":"fen","material_min":0,"material_max":8000,"labor_min":0,"labor_max":0,"other_min":0,"other_max":0,"total_min":0,"total_max":8000,"includes":["线缆收纳与防滑辅料"],"excludes":["家具更换"]},
+    {"price_rule_id":"PRICE_LIVING_PATH_B","currency":"CNY","unit":"fen","material_min":10000,"material_max":100000,"labor_min":0,"labor_max":30000,"other_min":0,"other_max":0,"total_min":10000,"total_max":130000,"includes":["固定收纳、家具重排"],"excludes":["定制家具"]},
+    {"price_rule_id":"PRICE_LIVING_PATH_C","currency":"CNY","unit":"fen","material_min":120000,"material_max":500000,"labor_min":80000,"labor_max":300000,"other_min":0,"other_max":0,"total_min":200000,"total_max":800000,"includes":["定制收纳、线路收口、人工"],"excludes":["整屋装修"]},
+
+    {"price_rule_id":"PRICE_KITCHEN_REACH_A","currency":"CNY","unit":"fen","material_min":0,"material_max":5000,"labor_min":0,"labor_max":0,"other_min":0,"other_max":0,"total_min":0,"total_max":5000,"includes":["储物重排"],"excludes":["柜体五金"]},
+    {"price_rule_id":"PRICE_KITCHEN_REACH_B","currency":"CNY","unit":"fen","material_min":30000,"material_max":180000,"labor_min":10000,"labor_max":50000,"other_min":0,"other_max":0,"total_min":40000,"total_max":230000,"includes":["下拉篮或抽屉五金、安装"],"excludes":["柜体重做"]},
+    {"price_rule_id":"PRICE_KITCHEN_REACH_C","currency":"CNY","unit":"fen","material_min":500000,"material_max":2000000,"labor_min":300000,"labor_max":1000000,"other_min":0,"other_max":0,"total_min":800000,"total_max":3000000,"includes":["局部柜体、五金、安装"],"excludes":["整套厨房、大规模水电改造"]},
+
+    {"price_rule_id":"PRICE_CORRIDOR_PATH_A","currency":"CNY","unit":"fen","material_min":0,"material_max":5000,"labor_min":0,"labor_max":0,"other_min":0,"other_max":0,"total_min":0,"total_max":5000,"includes":["分区收纳辅料"],"excludes":["固定鞋柜"]},
+    {"price_rule_id":"PRICE_CORRIDOR_PATH_B","currency":"CNY","unit":"fen","material_min":30000,"material_max":180000,"labor_min":10000,"labor_max":50000,"other_min":0,"other_max":0,"total_min":40000,"total_max":230000,"includes":["窄型鞋柜、换鞋座椅、安装"],"excludes":["定制柜体"]},
+    {"price_rule_id":"PRICE_CORRIDOR_PATH_C","currency":"CNY","unit":"fen","material_min":250000,"material_max":900000,"labor_min":120000,"labor_max":400000,"other_min":0,"other_max":0,"total_min":370000,"total_max":1300000,"includes":["定制收纳、照明和安装"],"excludes":["入户门更换"]},
+
+    {"price_rule_id":"PRICE_BALCONY_REACH_A","currency":"CNY","unit":"fen","material_min":3000,"material_max":20000,"labor_min":0,"labor_max":0,"other_min":0,"other_max":0,"total_min":3000,"total_max":20000,"includes":["长柄晾衣工具"],"excludes":["晾衣架安装"]},
+    {"price_rule_id":"PRICE_BALCONY_REACH_B","currency":"CNY","unit":"fen","material_min":50000,"material_max":250000,"labor_min":20000,"labor_max":80000,"other_min":0,"other_max":0,"total_min":70000,"total_max":330000,"includes":["升降晾衣架、标准安装"],"excludes":["顶部结构加固"]},
+    {"price_rule_id":"PRICE_BALCONY_REACH_C","currency":"CNY","unit":"fen","material_min":180000,"material_max":700000,"labor_min":120000,"labor_max":400000,"other_min":0,"other_max":0,"total_min":300000,"total_max":1100000,"includes":["晾衣系统、照明、收纳和人工"],"excludes":["防水重做、结构加固"]}
   ]
 }

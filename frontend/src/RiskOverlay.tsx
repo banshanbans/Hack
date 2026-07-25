@@ -108,7 +108,7 @@ export default function RiskOverlay({imageUrl, fallbackUrl, risks, activeId, zoo
     <img
       ref={imageRef}
       src={imageUrl || fallbackUrl}
-      alt="卫生间照片，已标出环境风险位置"
+      alt="房间照片，已标出环境风险位置"
       style={{transform: `scale(${zoom})`}}
       onLoad={event => setNatural({width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight})}
     />

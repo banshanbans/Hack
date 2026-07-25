@@ -18,7 +18,7 @@ class V2APITests(unittest.TestCase):
         root = Path(self.temp.name)
         static = root / "static"
         static.mkdir()
-        (static / "index.html").write_text("<!doctype html><title>安心家 AI</title>", encoding="utf-8")
+        (static / "index.html").write_text("<!doctype html><title>长者友好家</title>", encoding="utf-8")
         (static / "assets").mkdir()
         (static / "assets" / "app.js").write_text("export {};", encoding="utf-8")
         self.service = AssessmentService(SQLiteRepository(root / "api.db"), root / "media", provider=MockVisionProvider())

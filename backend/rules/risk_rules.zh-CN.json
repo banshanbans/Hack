@@ -1,11 +1,16 @@
 {
-  "version": "risk_rules_v2",
+  "version": "risk_rules_v3_all_rooms",
   "rules": [
     {"rule_id":"BATH-001","risk_code":"BATH_NO_GRAB_BAR","category":"support_and_transfer","room_types":["bathroom"],"default_severity":"high","base_deduction":12,"title":"淋浴区缺少稳定支撑点","solution_package_ids":["SOL_BAR_A","SOL_BAR_B","SOL_BAR_C"]},
     {"rule_id":"BATH-002","risk_code":"BATH_WET_FLOOR","category":"pathway","room_types":["bathroom"],"default_severity":"high","base_deduction":12,"title":"地面湿滑容易失足","solution_package_ids":["SOL_WET_A","SOL_WET_B","SOL_WET_C"]},
     {"rule_id":"BATH-003","risk_code":"BATH_UNSTABLE_GLASS_SUPPORT","category":"support_and_transfer","room_types":["bathroom"],"default_severity":"high","base_deduction":12,"title":"玻璃门不宜作为支撑","solution_package_ids":["SOL_GLASS_A","SOL_GLASS_B","SOL_GLASS_C"]},
     {"rule_id":"BATH-004","risk_code":"FALL_THRESHOLD_HEIGHT","category":"threshold","room_types":["bathroom"],"default_severity":"medium","base_deduction":6,"title":"门槛存在绊倒风险","solution_package_ids":["SOL_THRESHOLD_A","SOL_THRESHOLD_B","SOL_THRESHOLD_C"]},
     {"rule_id":"BATH-005","risk_code":"FALL_TRIP_LOOSE_MAT","category":"pathway","room_types":["bathroom"],"default_severity":"medium","base_deduction":6,"title":"松动地垫可能滑移","solution_package_ids":["SOL_MAT_A","SOL_MAT_B","SOL_MAT_C"]},
-    {"rule_id":"BATH-006","risk_code":"LIGHTING_NIGHT_INSUFFICIENT","category":"lighting","room_types":["bathroom"],"default_severity":"low","base_deduction":2,"title":"夜间照明可能不足","solution_package_ids":["SOL_LIGHT_A","SOL_LIGHT_B","SOL_LIGHT_C"]}
+    {"rule_id":"BED-001","risk_code":"BED_TRANSFER_NO_SUPPORT","category":"support_and_transfer","room_types":["bedroom"],"default_severity":"high","base_deduction":10,"title":"床边起身缺少稳定支撑","solution_package_ids":["SOL_BED_SUPPORT_A","SOL_BED_SUPPORT_B","SOL_BED_SUPPORT_C"]},
+    {"rule_id":"LIVING-001","risk_code":"LIVING_PATH_OBSTRUCTION","category":"pathway","room_types":["living_room"],"default_severity":"medium","base_deduction":7,"title":"客厅通行动线有障碍","solution_package_ids":["SOL_LIVING_PATH_A","SOL_LIVING_PATH_B","SOL_LIVING_PATH_C"]},
+    {"rule_id":"KITCHEN-001","risk_code":"KITCHEN_HIGH_REACH","category":"support_and_transfer","room_types":["kitchen"],"default_severity":"medium","base_deduction":7,"title":"常用物品放置过高","solution_package_ids":["SOL_KITCHEN_REACH_A","SOL_KITCHEN_REACH_B","SOL_KITCHEN_REACH_C"]},
+    {"rule_id":"CORRIDOR-001","risk_code":"CORRIDOR_SHOE_OBSTRUCTION","category":"pathway","room_types":["corridor"],"default_severity":"medium","base_deduction":7,"title":"换鞋区物品占用通道","solution_package_ids":["SOL_CORRIDOR_PATH_A","SOL_CORRIDOR_PATH_B","SOL_CORRIDOR_PATH_C"]},
+    {"rule_id":"BALCONY-001","risk_code":"BALCONY_REACHING_RISK","category":"support_and_transfer","room_types":["balcony"],"default_severity":"medium","base_deduction":7,"title":"晾衣位置需过度伸展","solution_package_ids":["SOL_BALCONY_REACH_A","SOL_BALCONY_REACH_B","SOL_BALCONY_REACH_C"]},
+    {"rule_id":"COMMON-001","risk_code":"LIGHTING_NIGHT_INSUFFICIENT","category":"lighting","room_types":["bathroom","bedroom","living_room","kitchen","corridor","balcony"],"default_severity":"low","base_deduction":2,"title":"夜间照明可能不足","solution_package_ids":["SOL_LIGHT_A","SOL_LIGHT_B","SOL_LIGHT_C"]}
   ]
 }

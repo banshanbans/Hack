@@ -83,6 +83,28 @@ class AssessmentServiceTests(unittest.TestCase):
         share = self.service.create_share(self.assessment_id)
         self.assertEqual(self.service.shared_report(share["token"])["checked_room_count"], 0)
 
+    def test_every_room_has_coverage_risks_and_solutions(self) -> None:
+        for room_type in ("bedroom", "living_room", "kitchen", "corridor", "balcony"):
+            with self.subTest(room_type=room_type):
+                room = self.service.create_room(self.assessment_id, {"room_type": room_type})
+                self.assertTrue(room["supported"])
+                uploaded = self.service.upload_media(self.assessment_id, room["room_id"], JPEG, "image/jpeg", 1200, 900)
+                self.assertTrue(uploaded["quality"]["scene_elements"])
+                self.service.start_analysis(self.assessment_id, room["room_id"])
+                deadline = time.time() + 3
+                while time.time() < deadline:
+                    status = self.service.analysis_status(self.assessment_id, room["room_id"])
+                    if status["status"] in {"completed", "failed"}:
+                        break
+                    time.sleep(0.02)
+                self.assertEqual(status["status"], "completed")
+                result = self.service.room_result(self.assessment_id, room["room_id"])
+                self.assertGreater(result["coverage"]["percent"], 0)
+                self.assertGreater(len(result["risks"]), 0)
+                for risk in result["risks"]:
+                    solutions = self.service.risk_solutions(self.assessment_id, risk["risk_id"])["solutions"]
+                    self.assertEqual([item["tier"] for item in solutions], ["A", "B", "C"])
+
 
 if __name__ == "__main__":
     unittest.main()

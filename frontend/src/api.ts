@@ -66,8 +66,6 @@ export const api = {
   removeSolution: (riskId: string) => request<void>(assessmentPath(`/risks/${riskId}/selected-solution`), {method: 'DELETE'}),
   report: (signal?: AbortSignal) => request<AssessmentReport>(assessmentPath('/report'), {signal}),
   complete: () => request<AssessmentReport>(assessmentPath(':complete'), {method: 'POST'}),
-  share: () => request<{path: string; expires_at: string}>(assessmentPath('/share'), {method: 'POST'}),
-  sharedReport: (token: string, signal?: AbortSignal) => request<AssessmentReport>(`/api/v2/shared-reports/${encodeURIComponent(token)}`, {signal}, false),
   deleteAssessment: () => request<void>(assessmentPath(), {method: 'DELETE'}),
 };
 
@@ -81,7 +79,6 @@ export function friendlyError(error: unknown): string {
     provider_refusal: '这张照片暂时无法完成分析',
     room_rules_not_ready: '这个房间的完整规则仍在完善中',
     no_usable_media: '至少需要一张可以看清的照片',
-    share_expired: '分享链接已失效',
     analysis_interrupted: '服务重启中断了分析，请重新开始',
   };
   return messages[value?.code || ''] || value?.message || '这次操作没有完成，请稍后重试';
