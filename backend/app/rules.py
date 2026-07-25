@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 RULE_ROOT = Path(__file__).resolve().parent.parent / "rules"
+SUPPORTED_ROOM_TYPES = {"bathroom", "bedroom", "living_room", "kitchen", "corridor", "balcony"}
 
 
 class RuleValidationError(ValueError):
@@ -54,6 +55,13 @@ class RuleStore:
         risk_codes: set[str] = set()
         solution_ids: set[str] = set()
         price_ids: set[str] = set()
+        coverage_rooms = set(self.coverage_document.get("rooms", {}))
+        if coverage_rooms != SUPPORTED_ROOM_TYPES or set(self.coverage_document.get("room_weights", {})) != SUPPORTED_ROOM_TYPES:
+            raise RuleValidationError("coverage rules must define every supported room")
+        for room_type, room in self.coverage_document["rooms"].items():
+            elements = room.get("elements", [])
+            if not elements or sum(item.get("weight", 0) for item in elements) != 100:
+                raise RuleValidationError(f"coverage weights must total 100 for {room_type}")
         for price in self.price_document.get("prices", []):
             required = {"price_rule_id", "currency", "material_min", "material_max", "labor_min", "labor_max", "total_min", "total_max"}
             if not required.issubset(price):
@@ -84,6 +92,9 @@ class RuleStore:
             if {self._solution_tier(item) for item in risk["solution_package_ids"]} != {"A", "B", "C"}:
                 raise RuleValidationError("supported risks require A/B/C solutions")
             risk_codes.add(risk["risk_code"])
+        covered_by_risks = {room_type for risk in self.risk_document.get("rules", []) for room_type in risk.get("room_types", [])}
+        if not SUPPORTED_ROOM_TYPES.issubset(covered_by_risks):
+            raise RuleValidationError("risk rules must cover every supported room")
 
     def _solution_tier(self, solution_id: str) -> str:
         for item in self.solution_document.get("solutions", []):

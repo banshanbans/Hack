@@ -23,6 +23,7 @@ export interface MediaQuality {
   lighting_sufficient: boolean;
   major_occlusion: boolean;
   scene_elements: string[];
+  missing_element_ids?: string[];
   missing_views: string[];
   error?: string;
 }
@@ -34,6 +35,23 @@ export interface MediaAsset {
   height: number;
   content_path: string;
   quality: MediaQuality;
+  source_kind?: 'photo' | 'video_frame' | 'h5_camera_frame' | 'ios_ar_frame';
+  source_id?: string | null;
+  frame_index?: number | null;
+  captured_at_ms?: number | null;
+  orientation?: 'up' | 'right' | 'down' | 'left';
+  perceptual_hash?: string | null;
+  zone_id?: string | null;
+}
+
+export interface MediaUploadMetadata {
+  sourceKind: 'photo' | 'video_frame' | 'h5_camera_frame' | 'ios_ar_frame';
+  sourceId?: string;
+  frameIndex?: number;
+  capturedAtMs?: number;
+  orientation?: 'up' | 'right' | 'down' | 'left';
+  perceptualHash?: string;
+  zoneId?: string;
 }
 
 export interface RoomAssessment {
@@ -53,6 +71,7 @@ export interface Assessment {
   profile_json?: ElderProfile;
   profile?: ElderProfile;
   planned_rooms_json?: RoomType[];
+  planned_rooms?: RoomType[];
   rooms: RoomAssessment[];
   rule_set_version: string;
   price_rule_version: string;
@@ -77,6 +96,7 @@ export interface SafetyRisk {
   risk_id: string;
   room_id: string;
   media_id: string;
+  evidence_media_ids?: string[];
   risk_code: string;
   state: string;
   feedback: string | null;
@@ -172,6 +192,15 @@ export interface SelectedItem {
   solution: SolutionPackage;
 }
 
+export interface ReportRecommendation {
+  risk_id: string;
+  risk_title: string;
+  room_id: string;
+  room_type: RoomType;
+  selected_solution_package_id: string | null;
+  solutions: SolutionPackage[];
+}
+
 export interface Budget {
   currency: string;
   total_min: number;
@@ -194,6 +223,7 @@ export interface AssessmentReport {
   household_score: number | null;
   rooms: RoomResult[];
   selected_items: SelectedItem[];
+  recommendations?: ReportRecommendation[];
   budget: Budget;
   projected_score: {current: number; min: number; max: number; display: number} | null;
   price_disclaimer: string;
@@ -204,4 +234,33 @@ export interface AssessmentReport {
 export interface ApiFailure extends Error {
   code?: string;
   status?: number;
+}
+
+export interface ServerCapabilities {
+  h5_video: boolean;
+  h5_camera: boolean;
+  ios_fair_ar: boolean;
+}
+
+export interface CameraSuggestion {
+  suggestion_id: string;
+  risk_code: string;
+  title: string;
+  evidence: string;
+  confidence: number;
+  needs_manual_check: boolean;
+  possible_repeat: boolean;
+  region: RiskRegion | null;
+  temporary: true;
+  save_as_evidence_recommended: boolean;
+}
+
+export interface CameraInspectionResult {
+  frame_id: string;
+  temporary: true;
+  quality_usable: boolean;
+  scene_elements: string[];
+  suggestions: CameraSuggestion[];
+  save_as_evidence_recommended: boolean;
+  prompt_version: 'anju_h5_camera_adaptive_v1' | string;
 }

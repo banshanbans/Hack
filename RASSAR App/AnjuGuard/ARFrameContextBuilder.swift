@@ -32,7 +32,8 @@ enum ARFrameContextBuilder {
             ),
             imageWidth: imageWidth,
             imageHeight: imageHeight,
-            orientationRawValue: orientation.rawValue
+            orientationRawValue: orientation.rawValue,
+            modelImageOrientation: .right
         )
         let depthBuffer = frame.smoothedSceneDepth?.depthMap ?? frame.sceneDepth?.depthMap
         return StoredFrameContext(context: context, depth: depthBuffer.flatMap(makeDepthGrid))

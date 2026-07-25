@@ -690,8 +690,9 @@
 				DEVELOPMENT_TEAM = SVRNMKJ8X4;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "长者友好家";
+				INFOPLIST_KEY_AnjuAnalysisBaseURL = "https://shotapi.socialdog.cn";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
-				INFOPLIST_KEY_NSCameraUsageDescription = "打开相机，才能一起看看这个房间。";
+				INFOPLIST_KEY_NSCameraUsageDescription = "打开相机，才能在游园会现场进行分区安全辅助筛查。";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UIMainStoryboardFile = Main;
@@ -726,8 +727,9 @@
 				DEVELOPMENT_TEAM = SVRNMKJ8X4;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "长者友好家";
+				INFOPLIST_KEY_AnjuAnalysisBaseURL = "https://shotapi.socialdog.cn";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
-				INFOPLIST_KEY_NSCameraUsageDescription = "打开相机，才能一起看看这个房间。";
+				INFOPLIST_KEY_NSCameraUsageDescription = "打开相机，才能在游园会现场进行分区安全辅助筛查。";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UIMainStoryboardFile = Main;

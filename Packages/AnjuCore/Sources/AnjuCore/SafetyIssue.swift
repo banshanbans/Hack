@@ -102,12 +102,43 @@ public struct Matrix4x4Codable: Codable, Equatable, Sendable {
     }
 }
 
+public struct CameraMotionGate: Sendable {
+    public let minimumTranslation: Float
+    public let minimumRotationRadians: Float
+
+    public init(minimumTranslation: Float = 0.15, minimumRotationRadians: Float = 0.14) {
+        self.minimumTranslation = minimumTranslation
+        self.minimumRotationRadians = minimumRotationRadians
+    }
+
+    public func hasMeaningfulChange(previous: Matrix4x4Codable?, current: Matrix4x4Codable) -> Bool {
+        guard let previous else { return true }
+        let p = previous.values, c = current.values
+        let dx = c[12] - p[12], dy = c[13] - p[13], dz = c[14] - p[14]
+        let translation = (dx * dx + dy * dy + dz * dz).squareRoot()
+        let previousForward = SIMD3<Float>(p[8], p[9], p[10])
+        let currentForward = SIMD3<Float>(c[8], c[9], c[10])
+        let denominator = max(0.0001, length(previousForward) * length(currentForward))
+        let cosine = max(-1, min(1, dot(previousForward, currentForward) / denominator))
+        return translation >= minimumTranslation || acos(cosine) >= minimumRotationRadians
+    }
+
+    private func length(_ value: SIMD3<Float>) -> Float {
+        (value.x * value.x + value.y * value.y + value.z * value.z).squareRoot()
+    }
+
+    private func dot(_ left: SIMD3<Float>, _ right: SIMD3<Float>) -> Float {
+        left.x * right.x + left.y * right.y + left.z * right.z
+    }
+}
+
 public struct IssueEvidence: Codable, Equatable, Sendable {
     public var frameID: UUID?
     public var boundingBox: NormalizedBoundingBox?
     public var roomObjectID: UUID?
     public var roomSurfaceID: UUID?
     public var snapshotFilename: String?
+    public var zoneID: String?
     public var worldPoint: WorldPoint?
     public var measurementStatus: MeasurementStatus
 
@@ -117,6 +148,7 @@ public struct IssueEvidence: Codable, Equatable, Sendable {
         roomObjectID: UUID? = nil,
         roomSurfaceID: UUID? = nil,
         snapshotFilename: String? = nil,
+        zoneID: String? = nil,
         worldPoint: WorldPoint? = nil,
         measurementStatus: MeasurementStatus = .unavailable
     ) {
@@ -125,6 +157,7 @@ public struct IssueEvidence: Codable, Equatable, Sendable {
         self.roomObjectID = roomObjectID
         self.roomSurfaceID = roomSurfaceID
         self.snapshotFilename = snapshotFilename
+        self.zoneID = zoneID
         self.worldPoint = worldPoint
         self.measurementStatus = measurementStatus
     }

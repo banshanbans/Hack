@@ -39,6 +39,44 @@ describe('recoverable product states', () => {
     expect(await screen.findByText('可以用于分析')).toBeVisible();
     expect(screen.getByText(/画面清晰/)).toBeVisible();
     expect(screen.queryByText(/建议补拍|缺少：马桶区/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', {name: '查看卫生间拍摄建议'}));
+    expect(screen.getByRole('dialog', {name: '卫生间拍摄建议'})).toBeVisible();
+  });
+
+  it('requires a second confirmation for one room and uses the selected room name', async () => {
+    restoreAt('/rooms');
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/health')) return json({analysis: 'ark'});
+      if (url.endsWith('/api/v2/assessments/a-1') && (!init?.method || init.method === 'GET')) return json({assessment_id: 'a-1', planned_rooms: [], rooms: []});
+      if (url.endsWith('/planned-rooms') && init?.method === 'PUT') return json({planned_rooms: ['bedroom']});
+      if (url.endsWith('/rooms') && init?.method === 'POST') return json({room_id: 'room-bed', room_type: 'bedroom', status: 'collecting_media', coverage_percent: 0, score: null, supported: true, media: []}, 201);
+      return json({code: 'not_found', message: 'not found'}, 404);
+    });
+    render(<App />);
+    const bedroom = await screen.findByRole('button', {name: /卧室 起夜照明/});
+    fireEvent.click(bedroom);
+    expect(screen.getByRole('button', {name: '开始检查卧室'})).toBeEnabled();
+    expect(fetchMock.mock.calls.some(([input, init]) => String(input).endsWith('/rooms') && init?.method === 'POST')).toBe(false);
+    fireEvent.click(screen.getByRole('button', {name: '开始检查卧室'}));
+    await waitFor(() => expect(window.location.hash).toBe('#/upload/room-bed'));
+  });
+
+  it('restores a saved multi-room plan as independent room tasks', async () => {
+    restoreAt('/rooms');
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      const url = String(input);
+      if (url.endsWith('/health')) return json({analysis: 'ark'});
+      if (url.endsWith('/api/v2/assessments/a-1')) return json({assessment_id: 'a-1', planned_rooms: ['bathroom', 'bedroom'], rooms: [
+        {room_id: 'bath', room_type: 'bathroom', status: 'collecting_media', media: [], score: null},
+        {room_id: 'bed', room_type: 'bedroom', status: 'result_ready', media: [], score: 88},
+      ]});
+      return json({code: 'not_found', message: 'not found'}, 404);
+    });
+    render(<App />);
+    expect(await screen.findByRole('heading', {name: '房间检查任务'})).toBeVisible();
+    expect(screen.getByRole('button', {name: '上传照片'})).toBeVisible();
+    expect(screen.getByRole('button', {name: '查看结果'})).toBeVisible();
   });
 
   it('keeps profile edits as a draft until the user explicitly saves', async () => {
@@ -82,7 +120,10 @@ describe('recoverable product states', () => {
     expect(screen.getByRole('heading', {name: '存在的隐患'})).toBeVisible();
     expect(screen.getByText('当前已检查区域暂未发现明确隐患')).toBeVisible();
     expect(screen.getByRole('heading', {name: '改造建议与预算'})).toBeVisible();
-    expect(screen.getByRole('button', {name: /下载报告图片/})).toBeEnabled();
+    expect(screen.getByRole('button', {name: '预览报告'})).toBeEnabled();
+    expect(screen.getByRole('button', {name: '保存到手机相册'})).toBeEnabled();
+    expect(screen.getByRole('button', {name: '生成分享报告'})).toBeEnabled();
+    expect(screen.queryByText('参考总预算')).not.toBeInTheDocument();
   });
 
   it('saves profile edits from My and returns to My instead of entering the check flow', async () => {
@@ -162,5 +203,20 @@ describe('recoverable product states', () => {
     expect(await screen.findByRole('heading', {name: /给父母的家/})).toBeVisible();
     expect(window.location.hash).toBe('#/home');
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/result') || String(input).includes('/solutions'))).toBe(false);
+  });
+
+  it('requires the fair invitation before entering the temporary H5 camera', async () => {
+    window.location.hash = '#/home';
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      if (String(input).endsWith('/health')) return json({analysis: 'ark', capabilities: {h5_video: true, h5_camera: true, ios_fair_ar: true}});
+      return json({code: 'not_found', message: 'not found'}, 404);
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', {name: '相机'}));
+    expect(screen.getByRole('dialog', {name: '来游园会现场，解锁 iPhone AR 体验'})).toBeVisible();
+    expect(window.location.hash).toBe('#/home');
+    fireEvent.click(screen.getByRole('button', {name: /进入网页相机/}));
+    await waitFor(() => expect(window.location.hash).toBe('#/camera'));
+    expect(await screen.findByRole('heading', {name: '实时相机辅助检查'})).toBeVisible();
   });
 });

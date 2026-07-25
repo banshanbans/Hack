@@ -23,6 +23,8 @@ public class ViewController: UIViewController {
     private let issueMiniMapView = IssueMiniMapView()
     private var remoteAnalysisTask: Task<Void, Never>?
     private var lastRemoteAnalysisTime: TimeInterval = 0
+    private var lastRemoteCameraTransform: Matrix4x4Codable?
+    private let remoteMotionGate = CameraMotionGate()
     private var lastQualityAnalysisTime: TimeInterval = 0
     private let frameQualityService = FrameQualityService()
     private let analysisQueue = DispatchQueue(label: "com.anjuguard.frame-analysis", qos: .utility)
@@ -80,12 +82,16 @@ public class ViewController: UIViewController {
     var speechAuthorized:Bool=false
     var audioQueue = [AudioFeedback]()
     private let guidanceLabel = UILabel()
+    private let zoneControl = UISegmentedControl(items: ["入口", "主通道", "展位", "休息"])
+    private var currentFairZone: VenueZone = .entrance
     
     public override func viewDidLoad() {
         super.viewDidLoad()
         if appContext == nil {
-            appContext = AnjuAppContext.makeDefault(profiles: ["older_adult"], roomType: "bedroom")
+            appContext = AnjuAppContext.makeDefault(profiles: ["older_adult"], roomType: "entrance")
         }
+        currentFairZone = VenueZone(rawValue: appContext.session.roomType ?? "") ?? .entrance
+        Task { await appContext.remoteAnalysis.selectFairZone(currentFairZone) }
         Settings.instance.viewcontroller=self
         Settings.instance.community = legacyCommunities(for: appContext.session.profiles)
         UIApplication.shared.isIdleTimerDisabled=true
@@ -230,12 +236,12 @@ public class ViewController: UIViewController {
         stopAnalysisWork()
     }
 
-    private func stopAnalysisWork() {
+    private func stopAnalysisWork(cancelRemote: Bool = true) {
         visionTimer?.invalidate()
         ruleTimer?.invalidate()
         remoteAnalysisTask?.cancel()
         Task {
-            await appContext.remoteAnalysis.cancelPending()
+            if cancelRemote { await appContext.remoteAnalysis.cancelPending() }
             await frameContextStore.removeAll()
         }
     }
@@ -490,6 +496,21 @@ private extension ViewController {
         guidanceLabel.translatesAutoresizingMaskIntoConstraints = false
         arView.addSubview(guidanceLabel)
 
+        zoneControl.selectedSegmentIndex = VenueZone.allCases.firstIndex(of: currentFairZone) ?? 0
+        zoneControl.selectedSegmentTintColor = AnjuTheme.teal
+        zoneControl.setTitleTextAttributes([.foregroundColor: UIColor.white], for: .selected)
+        zoneControl.backgroundColor = UIColor.black.withAlphaComponent(0.58)
+        zoneControl.accessibilityLabel = "游园会扫描区域"
+        zoneControl.translatesAutoresizingMaskIntoConstraints = false
+        zoneControl.addAction(UIAction { [weak self] action in
+            guard let self, let control = action.sender as? UISegmentedControl,
+                  VenueZone.allCases.indices.contains(control.selectedSegmentIndex) else { return }
+            self.currentFairZone = VenueZone.allCases[control.selectedSegmentIndex]
+            Task { await self.appContext.remoteAnalysis.selectFairZone(self.currentFairZone) }
+            self.guidanceLabel.text = "已切换区域，请缓慢扫描"
+        }, for: .valueChanged)
+        arView.addSubview(zoneControl)
+
         let pause = UIButton(type: .system)
         var pauseConfiguration = UIButton.Configuration.filled()
         pauseConfiguration.image = UIImage(systemName: "pause.fill")
@@ -518,6 +539,10 @@ private extension ViewController {
             guidanceLabel.centerXAnchor.constraint(equalTo: arView.centerXAnchor),
             guidanceLabel.widthAnchor.constraint(lessThanOrEqualTo: arView.widthAnchor, multiplier: 0.66),
             guidanceLabel.heightAnchor.constraint(greaterThanOrEqualToConstant: 48),
+            zoneControl.topAnchor.constraint(equalTo: guidanceLabel.bottomAnchor, constant: 10),
+            zoneControl.leadingAnchor.constraint(equalTo: arView.safeAreaLayoutGuide.leadingAnchor, constant: 16),
+            zoneControl.trailingAnchor.constraint(equalTo: arView.safeAreaLayoutGuide.trailingAnchor, constant: -16),
+            zoneControl.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
             pause.leadingAnchor.constraint(equalTo: arView.safeAreaLayoutGuide.leadingAnchor, constant: 16),
             pause.centerYAnchor.constraint(equalTo: guidanceLabel.centerYAnchor),
             pause.widthAnchor.constraint(equalToConstant: 48),
@@ -548,7 +573,7 @@ private extension ViewController {
         finishButton.configuration = configuration
         finishButton.isEnabled = false
 
-        stopAnalysisWork()
+        stopAnalysisWork(cancelRemote: false)
         let didRequestSessionStop = captureCoordinator.stop()
         scheduleFinishFallback(delay: didRequestSessionStop ? 2 : 0)
     }
@@ -575,9 +600,24 @@ private extension ViewController {
         if let error {
             logger.error("Room capture ended with recoverable error: \(error.localizedDescription, privacy: .public)")
         }
-        let report = ReportViewController(context: appContext)
-        report.modalPresentationStyle = .fullScreen
-        present(report, animated: true)
+        let context = appContext!
+        let pendingAnalysis = remoteAnalysisTask
+        Task { [weak self] in
+            await pendingAnalysis?.value
+            do {
+                if let reviewed = try await context.remoteAnalysis.completeFairScan() {
+                    await MainActor.run { context.applyFairReport(reviewed) }
+                }
+            } catch {
+                self?.logger.notice("Pro review unavailable; report remains clearly partial")
+            }
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                let report = ReportViewController(context: context)
+                report.modalPresentationStyle = .fullScreen
+                self.present(report, animated: true)
+            }
+        }
     }
 
     func togglePause(button: UIButton) {
@@ -630,13 +670,23 @@ private extension ViewController {
     }
 
     func scheduleRemoteAnalysisIfNeeded(_ frame: ARFrame) {
+        guard case .normal = frame.camera.trackingState,
+              (frame.lightEstimate?.ambientIntensity ?? 1_000) >= 80 else { return }
+        let transform = frame.camera.transform
+        guard let currentTransform = Matrix4x4Codable(values: [
+            transform.columns.0.x, transform.columns.0.y, transform.columns.0.z, transform.columns.0.w,
+            transform.columns.1.x, transform.columns.1.y, transform.columns.1.z, transform.columns.1.w,
+            transform.columns.2.x, transform.columns.2.y, transform.columns.2.z, transform.columns.2.w,
+            transform.columns.3.x, transform.columns.3.y, transform.columns.3.z, transform.columns.3.w
+        ]), remoteMotionGate.hasMeaningfulChange(previous: lastRemoteCameraTransform, current: currentTransform) else { return }
         guard appContext.remoteAnalysis.isEnabled,
               frame.timestamp - lastRemoteAnalysisTime >= 5,
               remoteAnalysisTask == nil else { return }
         lastRemoteAnalysisTime = frame.timestamp
+        lastRemoteCameraTransform = currentTransform
         let frameID = UUID()
         let remote = appContext.remoteAnalysis
-        let roomType = appContext.session.roomType
+        let roomType = currentFairZone.rawValue
         let profiles = appContext.session.profiles
         let sessionID = appContext.session.id
         let detectionEngine = appContext.detectionEngine

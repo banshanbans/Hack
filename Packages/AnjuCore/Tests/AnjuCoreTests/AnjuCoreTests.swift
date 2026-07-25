@@ -119,6 +119,20 @@ final class AnjuCoreTests: XCTestCase {
         XCTAssertEqual(store.issues.count, 1)
     }
 
+    func testVenueZonesKeepSceneWideCandidatesIsolated() {
+        var store = IssueStore()
+        let sessionID = UUID()
+        for zone in ["entrance", "booth"] {
+            store.observe(SafetyIssue(
+                sessionID: sessionID, type: .lowLighting, state: .tentative, severity: .check,
+                title: "照明待确认", observation: "区域较暗", recommendation: "补充照明",
+                needsManualCheck: true, source: .remoteVision,
+                evidence: .init(frameID: UUID(), boundingBox: NormalizedBoundingBox(array: [0, 0, 1, 1]), zoneID: zone)
+            ))
+        }
+        XCTAssertEqual(store.issues.count, 2)
+    }
+
     func testDismissedIssueDoesNotReappearInSession() {
         var store = IssueStore()
         let issue = makeIssue(sessionID: UUID(), point: .init(x: 1, y: 0, z: 1))
@@ -197,6 +211,25 @@ final class AnjuCoreTests: XCTestCase {
         XCTAssertEqual(point?.x ?? 0, 10, accuracy: 0.001)
         XCTAssertEqual(point?.y ?? 0, 1, accuracy: 0.001)
         XCTAssertEqual(point?.z ?? 0, -4, accuracy: 0.001)
+    }
+
+    func testRightOrientedModelCoordinatesMapBackToCapturedImage() throws {
+        let modelBox = try XCTUnwrap(NormalizedBoundingBox(array: [0.1, 0.2, 0.3, 0.6]))
+        let captured = try XCTUnwrap(ModelImageOrientation.right.capturedImageBox(from: modelBox))
+        XCTAssertEqual(captured.array[0], 0.2, accuracy: 0.0001)
+        XCTAssertEqual(captured.array[1], 0.7, accuracy: 0.0001)
+        XCTAssertEqual(captured.array[2], 0.6, accuracy: 0.0001)
+        XCTAssertEqual(captured.array[3], 0.9, accuracy: 0.0001)
+    }
+
+    func testCameraMotionGateSuppressesStaticFrames() throws {
+        let identity = try XCTUnwrap(Matrix4x4Codable(values: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]))
+        let smallMove = try XCTUnwrap(Matrix4x4Codable(values: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0.04, 0, 0, 1]))
+        let moved = try XCTUnwrap(Matrix4x4Codable(values: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0.3, 0, 0, 1]))
+        let gate = CameraMotionGate()
+        XCTAssertTrue(gate.hasMeaningfulChange(previous: nil, current: identity))
+        XCTAssertFalse(gate.hasMeaningfulChange(previous: identity, current: smallMove))
+        XCTAssertTrue(gate.hasMeaningfulChange(previous: identity, current: moved))
     }
 
     func testRemoteSchemaDecoding() throws {

@@ -73,7 +73,8 @@ public struct IssueStore: Sendable {
 
     private func duplicateIndex(for incoming: SafetyIssue) -> Int? {
         issues.firstIndex { existing in
-            guard existing.type == incoming.type, existing.state != .dismissed else { return false }
+            guard existing.type == incoming.type, existing.state != .dismissed,
+                  existing.evidence.zoneID == incoming.evidence.zoneID else { return false }
             switch (existing.evidence.worldPoint, incoming.evidence.worldPoint) {
             case let (.some(lhs), .some(rhs)):
                 return lhs.distance(to: rhs) < configuration.duplicateDistanceMeters
@@ -89,15 +90,16 @@ public struct IssueStore: Sendable {
 
     private func dismissalKey(for issue: SafetyIssue) -> String {
         guard let point = issue.evidence.worldPoint else {
-            return "\(issue.type.rawValue):\(issue.evidence.frameID?.uuidString ?? "evidence")"
+            return "\(issue.evidence.zoneID ?? "none"):\(issue.type.rawValue):\(issue.evidence.frameID?.uuidString ?? "evidence")"
         }
         let grid = configuration.duplicateDistanceMeters
-        return "\(issue.type.rawValue):\(Int((point.x / grid).rounded())):\(Int((point.y / grid).rounded())):\(Int((point.z / grid).rounded()))"
+        return "\(issue.evidence.zoneID ?? "none"):\(issue.type.rawValue):\(Int((point.x / grid).rounded())):\(Int((point.y / grid).rounded())):\(Int((point.z / grid).rounded()))"
     }
 
     private func isDismissedDuplicate(_ incoming: SafetyIssue) -> Bool {
         issues.contains { existing in
-            guard existing.state == .dismissed, existing.type == incoming.type else { return false }
+            guard existing.state == .dismissed, existing.type == incoming.type,
+                  existing.evidence.zoneID == incoming.evidence.zoneID else { return false }
             switch (existing.evidence.worldPoint, incoming.evidence.worldPoint) {
             case let (.some(lhs), .some(rhs)):
                 return lhs.distance(to: rhs) < configuration.duplicateDistanceMeters

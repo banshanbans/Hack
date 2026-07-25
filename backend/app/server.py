@@ -5,8 +5,11 @@ import os
 
 import uvicorn
 
+from .environment import load_environment
+
 
 def main() -> None:
+    load_environment()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     host = os.environ.get("ANJU_HOST", "127.0.0.1")
     port = int(os.environ.get("ANJU_PORT", "8080"))

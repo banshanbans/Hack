@@ -20,3 +20,4 @@ frontend/dist/
 frontend/coverage/
 *.tsbuildinfo
 output/playwright/
+frontend/output/playwright/

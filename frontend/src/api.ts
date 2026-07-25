@@ -8,8 +8,11 @@ import type {
   RoomAssessment,
   RoomResult,
   RoomType,
+  MediaUploadMetadata,
   RiskRegion,
   SolutionsResult,
+  CameraInspectionResult,
+  ServerCapabilities,
 } from './types';
 
 async function request<T>(path: string, options: RequestInit = {}, authenticated = true): Promise<T> {
@@ -40,7 +43,7 @@ function assessmentPath(suffix = ''): string {
 }
 
 export const api = {
-  health: () => request<{status: string; analysis: string; version: string}>('/health', {}, false),
+  health: () => request<{status: string; analysis: string; version: string; capabilities?: ServerCapabilities}>('/health', {}, false),
   async createAssessment(input_mode: InputMode) {
     const value = await request<{assessment_id: string; access_token: string}>('/api/v2/assessments', json('POST', {input_mode}), false);
     writeSession({assessment_id: value.assessment_id, access_token: value.access_token});
@@ -48,14 +51,31 @@ export const api = {
   },
   getAssessment: (signal?: AbortSignal) => request<Assessment>(assessmentPath(), {signal}),
   saveProfile: (profile: ElderProfile) => request<ElderProfile>(assessmentPath('/profile'), json('PUT', profile)),
+  savePlannedRooms: (planned_rooms: RoomType[]) => request<{planned_rooms: RoomType[]}>(assessmentPath('/planned-rooms'), json('PUT', {planned_rooms})),
   createRoom: (room_type: RoomType) => request<RoomAssessment>(assessmentPath('/rooms'), json('POST', {room_type})),
-  uploadMedia: (roomId: string, blob: Blob, width: number, height: number) => request<unknown>(assessmentPath(`/rooms/${roomId}/media`), {
+  uploadMedia: (roomId: string, blob: Blob, width: number, height: number, metadata?: MediaUploadMetadata) => request<unknown>(assessmentPath(`/rooms/${roomId}/media`), {
     method: 'POST',
-    headers: {'Content-Type': blob.type || 'image/jpeg', 'X-Image-Width': String(width), 'X-Image-Height': String(height)},
+    headers: {
+      'Content-Type': blob.type || 'image/jpeg', 'X-Image-Width': String(width), 'X-Image-Height': String(height),
+      ...(metadata ? {
+        'X-Media-Source-Kind': metadata.sourceKind,
+        ...(metadata.sourceId ? {'X-Media-Source-Id': metadata.sourceId} : {}),
+        ...(metadata.frameIndex !== undefined ? {'X-Media-Frame-Index': String(metadata.frameIndex)} : {}),
+        ...(metadata.capturedAtMs !== undefined ? {'X-Media-Captured-At-Ms': String(metadata.capturedAtMs)} : {}),
+        ...(metadata.orientation ? {'X-Media-Orientation': metadata.orientation} : {}),
+        ...(metadata.perceptualHash ? {'X-Media-Perceptual-Hash': metadata.perceptualHash} : {}),
+        ...(metadata.zoneId ? {'X-Media-Zone-Id': metadata.zoneId} : {}),
+      } : {}),
+    },
     body: blob,
   }),
   deleteMedia: (roomId: string, mediaId: string) => request<void>(assessmentPath(`/rooms/${roomId}/media/${mediaId}`), {method: 'DELETE'}),
   mediaBlob: (path: string, signal?: AbortSignal) => request<Blob>(path, {signal}),
+  inspectCamera: (blob: Blob, width: number, height: number, context: {frame_id: string; room_type: RoomType; previous_summary: string[]}, signal?: AbortSignal) => request<CameraInspectionResult>(assessmentPath('/camera/frames:inspect'), {
+    method: 'POST', signal,
+    headers: {'Content-Type': blob.type || 'image/jpeg', 'X-Image-Width': String(width), 'X-Image-Height': String(height), 'X-Camera-Context': JSON.stringify(context)},
+    body: blob,
+  }),
   analyze: (roomId: string) => request<{job_id: string}>(assessmentPath(`/rooms/${roomId}:analyze`), {method: 'POST'}),
   status: (roomId: string, signal?: AbortSignal) => request<AnalysisStatus>(assessmentPath(`/rooms/${roomId}/status`), {signal}),
   result: (roomId: string, signal?: AbortSignal) => request<RoomResult>(assessmentPath(`/rooms/${roomId}/result`), {signal}),

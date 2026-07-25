@@ -5,7 +5,9 @@ interface Props {
   imageUrl: string;
   fallbackUrl: string;
   risks: SafetyRisk[];
+  mediaId?: string;
   activeId: string;
+  numberById?: Record<string, number>;
   zoom: number;
   drawing: boolean;
   onSelect: (riskId: string) => void;
@@ -43,7 +45,7 @@ export function unmapStagePoint(point: [number, number], metrics: Metrics): [num
   ];
 }
 
-export default function RiskOverlay({imageUrl, fallbackUrl, risks, activeId, zoom, drawing, onSelect, onRegionChange}: Props) {
+export default function RiskOverlay({imageUrl, fallbackUrl, risks, mediaId, activeId, numberById = {}, zoom, drawing, onSelect, onRegionChange}: Props) {
   const stageRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
   const [size, setSize] = useState({width: 1, height: 1});
@@ -95,7 +97,7 @@ export default function RiskOverlay({imageUrl, fallbackUrl, risks, activeId, zoo
     setPreview(null);
   };
 
-  const displayed = risks.filter(item => item.region && (item.severity === 'high' || item.risk_id === activeId));
+  const displayed = risks.filter(item => item.region && (!mediaId || item.media_id === mediaId));
   const regionFor = (risk: SafetyRisk) => risk.risk_id === activeId && preview ? preview : risk.region;
 
   return <div
@@ -141,7 +143,7 @@ export default function RiskOverlay({imageUrl, fallbackUrl, risks, activeId, zoo
             ? <rect x={mapped[0][0] * 1000} y={mapped[0][1] * 1000} width={(mapped[1][0] - mapped[0][0]) * 1000} height={(mapped[1][1] - mapped[0][1]) * 1000} rx="18" className="risk-region" vectorEffect="non-scaling-stroke" />
             : <polygon points={mapped.map(point => `${point[0] * 1000},${point[1] * 1000}`).join(' ')} className="risk-region" vectorEffect="non-scaling-stroke" />}
           <circle cx={center[0] * 1000} cy={center[1] * 1000} r="34" className="risk-pin" />
-          <text x={center[0] * 1000} y={center[1] * 1000 + 11} className="risk-pin-text">{index + 1}</text>
+          <text x={center[0] * 1000} y={center[1] * 1000 + 11} className="risk-pin-text">{numberById[risk.risk_id] || index + 1}</text>
         </g>;
       })}
     </svg>

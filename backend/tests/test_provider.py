@@ -25,7 +25,7 @@ class OpenAIProviderTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, "provider_refusal")
 
     def test_http_request_is_private_structured_and_retried(self) -> None:
-        quality = {"usable": True, "clear": True, "floor_visible": True, "path_visible": True, "lighting_sufficient": True, "major_occlusion": False, "scene_elements": ["floor"], "missing_views": []}
+        quality = {"usable": True, "clear": True, "floor_visible": True, "path_visible": True, "lighting_sufficient": True, "major_occlusion": False, "scene_elements": ["floor"], "missing_element_ids": []}
 
         class Handler(BaseHTTPRequestHandler):
             calls = 0
@@ -86,7 +86,7 @@ class OpenAIProviderTests(unittest.TestCase):
         self.assertEqual(request.call_count, 2)
 
     def test_ark_request_disables_thinking(self) -> None:
-        quality = {"usable": True, "clear": True, "floor_visible": True, "path_visible": True, "lighting_sufficient": True, "major_occlusion": False, "scene_elements": ["floor"], "missing_views": []}
+        quality = {"usable": True, "clear": True, "floor_visible": True, "path_visible": True, "lighting_sufficient": True, "major_occlusion": False, "scene_elements": ["floor"], "missing_element_ids": []}
         response = {
             "status": "completed",
             "model": "doubao-test-model",
@@ -165,6 +165,12 @@ class OpenAIProviderTests(unittest.TestCase):
         self.assertEqual(provider.model_name, "doubao-test-model")
         self.assertEqual(provider.endpoint, "https://ark.cn-beijing.volces.com/api/v3/responses")
         self.assertEqual(provider.timeout_seconds, 60)
+
+    def test_ark_uses_pro_model_and_disables_thinking_by_default(self) -> None:
+        with patch.dict("os.environ", {"ANJU_MOCK_ANALYSIS": "0", "ANJU_VISION_PROVIDER": "ark", "ARK_API_KEY": "ark-test-key"}, clear=True):
+            provider = provider_from_environment()
+        self.assertEqual(provider.model_name, "doubao-seed-2-1-pro-260628")
+        self.assertEqual(provider._generation_options(), {"thinking": {"type": "disabled"}})
 
     def test_ark_provider_requires_server_side_key(self) -> None:
         with patch.dict("os.environ", {"ANJU_VISION_PROVIDER": "ark"}, clear=True):

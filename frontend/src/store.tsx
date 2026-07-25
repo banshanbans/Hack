@@ -1,5 +1,5 @@
 import {createContext, useCallback, useContext, useMemo, useReducer, useState, type ReactNode} from 'react';
-import type {Assessment, RoomResult, SessionState} from './types';
+import type {Assessment, RoomResult, ServerCapabilities, SessionState} from './types';
 
 const STORAGE_KEY = 'anju_h5_session_v2';
 
@@ -23,13 +23,15 @@ interface AppState {
   assessment: Assessment | null;
   roomResult: RoomResult | null;
   health: string;
+  capabilities: ServerCapabilities | null;
 }
 
 type Action =
   | {type: 'session'; value: SessionState | null}
   | {type: 'assessment'; value: Assessment | null}
   | {type: 'roomResult'; value: RoomResult | null}
-  | {type: 'health'; value: string};
+  | {type: 'health'; value: string}
+  | {type: 'capabilities'; value: ServerCapabilities | null};
 
 function reducer(state: AppState, action: Action): AppState {
   return {...state, [action.type]: action.value};
@@ -40,6 +42,7 @@ interface AppContextValue extends AppState {
   setAssessment: (value: Assessment | null) => void;
   setRoomResult: (value: RoomResult | null) => void;
   setHealth: (value: string) => void;
+  setCapabilities: (value: ServerCapabilities | null) => void;
   toast: string | null;
   showToast: (value: string) => void;
 }
@@ -47,7 +50,7 @@ interface AppContextValue extends AppState {
 const AppContext = createContext<AppContextValue | null>(null);
 
 export function AppProvider({children}: {children: ReactNode}) {
-  const [state, dispatch] = useReducer(reducer, {session: readSession(), assessment: null, roomResult: null, health: 'loading'});
+  const [state, dispatch] = useReducer(reducer, {session: readSession(), assessment: null, roomResult: null, health: 'loading', capabilities: null});
   const [toast, setToast] = useState<string | null>(null);
   const setSession = useCallback((value: SessionState | null) => {
     writeSession(value);
@@ -56,6 +59,7 @@ export function AppProvider({children}: {children: ReactNode}) {
   const setAssessment = useCallback((value: Assessment | null) => dispatch({type: 'assessment', value}), []);
   const setRoomResult = useCallback((value: RoomResult | null) => dispatch({type: 'roomResult', value}), []);
   const setHealth = useCallback((value: string) => dispatch({type: 'health', value}), []);
+  const setCapabilities = useCallback((value: ServerCapabilities | null) => dispatch({type: 'capabilities', value}), []);
   const showToast = useCallback((value: string) => {
     setToast(value);
     window.setTimeout(() => setToast(current => current === value ? null : current), 2800);
@@ -66,9 +70,10 @@ export function AppProvider({children}: {children: ReactNode}) {
     setAssessment,
     setRoomResult,
     setHealth,
+    setCapabilities,
     toast,
     showToast,
-  }), [setAssessment, setHealth, setRoomResult, setSession, showToast, state, toast]);
+  }), [setAssessment, setCapabilities, setHealth, setRoomResult, setSession, showToast, state, toast]);
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
 

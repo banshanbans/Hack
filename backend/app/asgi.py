@@ -15,9 +15,13 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .assessment_service import AssessmentError, AssessmentService
+from .environment import load_environment
 from .providers import VisionProvider
 from .repositories import SQLiteRepository
 from .service import SessionService, demo_analysis, empty_analysis
+
+
+load_environment()
 
 
 LOGGER = logging.getLogger("anjuguard.backend")
@@ -25,7 +29,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_STATIC_ROOT = PROJECT_ROOT / "frontend" / "dist"
 MAX_BODY_BYTES = 6 * 1024 * 1024
-STRICT_CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self'; font-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+STRICT_CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; font-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
 
 ERROR_MESSAGES = {
     "assessment_access_denied": "没有找到这次检查或访问已失效",
@@ -35,6 +39,15 @@ ERROR_MESSAGES = {
     "room_rules_not_ready": "这个房间的完整规则仍在完善中",
     "invalid_image_format": "照片格式暂不支持，请重新选择",
     "invalid_image_dimensions": "照片尺寸不正确，请重新选择",
+    "invalid_media_metadata": "媒体来源信息不正确，请重新选择",
+    "invalid_camera_frame": "相机画面信息不完整，请重试",
+    "camera_request_in_progress": "上一张画面仍在检查，请稍候",
+    "camera_not_enabled": "实时相机功能暂未开放",
+    "video_not_enabled": "视频检查功能暂未开放",
+    "fair_ar_not_enabled": "游园会 AR 功能暂未开放",
+    "fair_scan_access_denied": "没有找到本次游园会扫描或访问已失效",
+    "invalid_fair_frame": "游园会画面信息不完整，请重试",
+    "invalid_fair_zone": "请选择正确的游园会区域",
     "too_many_images": "每个房间最多上传 6 张照片",
     "no_usable_media": "至少需要一张可以看清的照片",
     "provider_not_configured": "分析服务尚未配置",
@@ -63,6 +76,10 @@ class ProfileUpdate(DTO):
     living_status: str
 
 
+class PlannedRoomsUpdate(DTO):
+    planned_rooms: list[str]
+
+
 class RoomCreate(DTO):
     room_type: str
 
@@ -83,6 +100,12 @@ class AnalyticsCreate(DTO):
     event_name: str
     room_id: Optional[str] = None
     payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class CameraFrameContext(DTO):
+    frame_id: str
+    room_type: str
+    previous_summary: list[str] = Field(default_factory=list, max_length=5)
 
 
 ModelT = TypeVar("ModelT", bound=DTO)
@@ -151,6 +174,16 @@ def _integer_header(request: Request, name: str) -> int:
         return 0
 
 
+def _optional_integer_header(request: Request, name: str) -> int | None:
+    raw = request.headers.get(name)
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return -1
+
+
 def _service(request: Request) -> AssessmentService:
     return request.app.state.v2_service
 
@@ -163,6 +196,12 @@ def _authorize(request: Request, assessment_id: str) -> None:
     header = request.headers.get("authorization", "")
     token = header[7:].strip() if header.startswith("Bearer ") else ""
     _service(request).authorize(assessment_id, token)
+
+
+def _authorize_fair(request: Request, scan_id: str) -> None:
+    header = request.headers.get("authorization", "")
+    token = header[7:].strip() if header.startswith("Bearer ") else ""
+    _service(request).authorize_fair_scan(scan_id, token)
 
 
 def create_app(
@@ -222,8 +261,15 @@ def create_app(
         return JSONResponse({"code": "invalid_request", "message": ERROR_MESSAGES["invalid_request"]}, status_code=400)
 
     @application.get("/health")
-    def health() -> dict[str, str]:
-        return {"status": "ok", "analysis": _analysis_mode(), "version": "v2"}
+    def health() -> dict[str, Any]:
+        return {
+            "status": "ok", "analysis": _analysis_mode(), "version": "v2",
+            "capabilities": {
+                "h5_video": os.environ.get("ANJU_ENABLE_H5_VIDEO", "0") == "1",
+                "h5_camera": os.environ.get("ANJU_ENABLE_H5_CAMERA", "0") == "1",
+                "ios_fair_ar": os.environ.get("ANJU_ENABLE_IOS_FAIR_AR", "0") == "1",
+            },
+        }
 
     @application.get("/favicon.ico", include_in_schema=False)
     def favicon() -> Response:
@@ -282,6 +328,32 @@ def create_app(
         payload = await _read_model(request, AssessmentCreate)
         return _service(request).create_assessment(payload.model_dump())
 
+    @application.post("/api/v2/fair-scans", status_code=201)
+    def create_fair_scan(request: Request) -> dict[str, Any]:
+        return _service(request).create_fair_scan()
+
+    @application.post("/api/v2/fair-scans/{scan_id}/zones/{zone_id}/frames:turbo")
+    async def analyze_fair_frame(scan_id: str, zone_id: str, request: Request) -> dict[str, Any]:
+        _authorize_fair(request, scan_id)
+        mime_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        frame_id = request.headers.get("x-frame-id", "")
+        orientation = request.headers.get("x-model-image-orientation", "right")
+        body = await _read_limited_body(request)
+        return _service(request).analyze_fair_frame(
+            scan_id, zone_id, frame_id, body, mime_type,
+            _integer_header(request, "x-image-width"), _integer_header(request, "x-image-height"), orientation,
+        )
+
+    @application.post("/api/v2/fair-scans/{scan_id}/zones/{zone_id}:review")
+    def review_fair_zone(scan_id: str, zone_id: str, request: Request) -> dict[str, Any]:
+        _authorize_fair(request, scan_id)
+        return _service(request).review_fair_zone(scan_id, zone_id)
+
+    @application.get("/api/v2/fair-scans/{scan_id}/report")
+    def fair_report(scan_id: str, request: Request) -> dict[str, Any]:
+        _authorize_fair(request, scan_id)
+        return _service(request).fair_report(scan_id)
+
     @application.get("/api/v2/assessments/{assessment_id}")
     def get_assessment(assessment_id: str, request: Request) -> dict[str, Any]:
         _authorize(request, assessment_id)
@@ -299,6 +371,12 @@ def create_app(
         payload = await _read_model(request, ProfileUpdate)
         return _service(request).save_profile(assessment_id, payload.model_dump())
 
+    @application.put("/api/v2/assessments/{assessment_id}/planned-rooms")
+    async def save_planned_rooms(assessment_id: str, request: Request) -> dict[str, Any]:
+        _authorize(request, assessment_id)
+        payload = await _read_model(request, PlannedRoomsUpdate)
+        return _service(request).save_planned_rooms(assessment_id, payload.planned_rooms)
+
     @application.post("/api/v2/assessments/{assessment_id}/rooms", status_code=201)
     async def create_room(assessment_id: str, request: Request) -> dict[str, Any]:
         _authorize(request, assessment_id)
@@ -311,8 +389,17 @@ def create_app(
         mime_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
         width = _integer_header(request, "x-image-width")
         height = _integer_header(request, "x-image-height")
+        metadata = {
+            "source_kind": request.headers.get("x-media-source-kind", "photo"),
+            "source_id": request.headers.get("x-media-source-id") or None,
+            "frame_index": _optional_integer_header(request, "x-media-frame-index"),
+            "captured_at_ms": _optional_integer_header(request, "x-media-captured-at-ms"),
+            "orientation": request.headers.get("x-media-orientation", "up"),
+            "perceptual_hash": request.headers.get("x-media-perceptual-hash") or None,
+            "zone_id": request.headers.get("x-media-zone-id") or None,
+        }
         body = await _read_limited_body(request)
-        return _service(request).upload_media(assessment_id, room_id, body, mime_type, width, height)
+        return _service(request).upload_media(assessment_id, room_id, body, mime_type, width, height, metadata)
 
     @application.delete("/api/v2/assessments/{assessment_id}/rooms/{room_id}/media/{media_id}", status_code=204)
     def delete_media(assessment_id: str, room_id: str, media_id: str, request: Request) -> Response:
@@ -325,6 +412,20 @@ def create_app(
         _authorize(request, assessment_id)
         path, mime_type = _service(request).media_content(assessment_id, media_id)
         return FileResponse(path, media_type=mime_type, headers={"Cache-Control": "no-store"})
+
+    @application.post("/api/v2/assessments/{assessment_id}/camera/frames:inspect")
+    async def inspect_camera_frame(assessment_id: str, request: Request) -> dict[str, Any]:
+        _authorize(request, assessment_id)
+        mime_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        width = _integer_header(request, "x-image-width")
+        height = _integer_header(request, "x-image-height")
+        context_header = request.headers.get("x-camera-context", "")
+        try:
+            context = CameraFrameContext.model_validate_json(context_header)
+        except (ValidationError, ValueError) as error:
+            raise AssessmentError("invalid_camera_frame") from error
+        body = await _read_limited_body(request)
+        return _service(request).inspect_camera_frame(assessment_id, body, mime_type, width, height, context.model_dump())
 
     @application.post("/api/v2/assessments/{assessment_id}/rooms/{room_id}:analyze", status_code=202)
     def start_analysis(assessment_id: str, room_id: str, request: Request) -> dict[str, Any]:

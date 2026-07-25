@@ -1,5 +1,6 @@
 import AnjuCore
 import Foundation
+import ImageIO
 import OSLog
 
 enum RemoteAnalysisError: Error {
@@ -12,6 +13,8 @@ enum RemoteAnalysisError: Error {
 protocol RemoteAnalysisServing: Sendable {
     var isEnabled: Bool { get }
     func analyze(frameID: UUID, jpegData: Data, roomType: String?) async throws -> [IssueCandidate]
+    func selectFairZone(_ zone: VenueZone) async
+    func completeFairScan() async throws -> FairScanReportDTO?
     func cancelPending() async
 }
 
@@ -21,6 +24,9 @@ struct DisabledRemoteAnalysisClient: RemoteAnalysisServing {
     func analyze(frameID: UUID, jpegData: Data, roomType: String?) async throws -> [IssueCandidate] {
         throw RemoteAnalysisError.disabled
     }
+
+    func selectFairZone(_ zone: VenueZone) async {}
+    func completeFairScan() async throws -> FairScanReportDTO? { nil }
 
     func cancelPending() async {}
 }
@@ -33,6 +39,9 @@ actor RemoteAnalysisClient: RemoteAnalysisServing {
     private let urlSession: URLSession
     private let logger = Logger(subsystem: "com.anjuguard.app", category: "network")
     private var remoteSessionID: UUID?
+    private var fairScanToken: String?
+    private var selectedZone: VenueZone = .entrance
+    private var scannedZones: Set<VenueZone> = []
 
     init?(baseURL: URL, sessionID: UUID, profiles: [String] = [], timeout: TimeInterval = 15) {
         guard baseURL.scheme?.lowercased() == "https" else { return nil }
@@ -48,18 +57,26 @@ actor RemoteAnalysisClient: RemoteAnalysisServing {
 
     func analyze(frameID: UUID, jpegData: Data, roomType: String?) async throws -> [IssueCandidate] {
         await cancelPending()
-        let sessionID = try await ensureRemoteSession(roomType: roomType)
+        let sessionID = try await ensureFairScan()
         let endpoint = baseURL
             .appendingPathComponent("api")
-            .appendingPathComponent("v1")
-            .appendingPathComponent("sessions")
+            .appendingPathComponent("v2")
+            .appendingPathComponent("fair-scans")
             .appendingPathComponent(sessionID.uuidString)
-            .appendingPathComponent("frames:analyze")
+            .appendingPathComponent("zones")
+            .appendingPathComponent(selectedZone.rawValue)
+            .appendingPathComponent("frames:turbo")
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
         request.setValue(frameID.uuidString, forHTTPHeaderField: "X-Frame-ID")
-        if let roomType { request.setValue(roomType, forHTTPHeaderField: "X-Room-Type") }
+        request.setValue("right", forHTTPHeaderField: "X-Model-Image-Orientation")
+        if let token = fairScanToken { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        if let source = CGImageSourceCreateWithData(jpegData as CFData, nil),
+           let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] {
+            request.setValue(String(properties[kCGImagePropertyPixelWidth] as? Int ?? 0), forHTTPHeaderField: "X-Image-Width")
+            request.setValue(String(properties[kCGImagePropertyPixelHeight] as? Int ?? 0), forHTTPHeaderField: "X-Image-Height")
+        }
         request.httpBody = jpegData
 
         do {
@@ -67,9 +84,10 @@ actor RemoteAnalysisClient: RemoteAnalysisServing {
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
                 throw RemoteAnalysisError.invalidResponse
             }
-            let dto = try JSONDecoder().decode(RemoteAnalysisResponseDTO.self, from: data)
-            guard dto.frameID == frameID else { throw RemoteAnalysisError.invalidResponse }
-            return dto.issues.prefix(5).compactMap { $0.validatedCandidate(frameID: frameID) }
+            let dto = try JSONDecoder().decode(FairTurboResponseDTO.self, from: data)
+            guard dto.frameID == frameID, dto.zoneID == selectedZone else { throw RemoteAnalysisError.invalidResponse }
+            scannedZones.insert(selectedZone)
+            return dto.candidates.prefix(5).compactMap { $0.validatedCandidate() }
         } catch is CancellationError {
             throw CancellationError()
         } catch let error as URLError where error.code == .timedOut {
@@ -86,30 +104,48 @@ actor RemoteAnalysisClient: RemoteAnalysisServing {
         tasks.forEach { $0.cancel() }
     }
 
-    private func ensureRemoteSession(roomType: String?) async throws -> UUID {
+    func selectFairZone(_ zone: VenueZone) async {
+        selectedZone = zone
+    }
+
+    func completeFairScan() async throws -> FairScanReportDTO? {
+        guard let scanID = remoteSessionID, let token = fairScanToken else { return nil }
+        for zone in scannedZones {
+            let review = baseURL.appendingPathComponent("api").appendingPathComponent("v2").appendingPathComponent("fair-scans").appendingPathComponent(scanID.uuidString).appendingPathComponent("zones").appendingPathComponent("\(zone.rawValue):review")
+            var request = URLRequest(url: review)
+            request.httpMethod = "POST"
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            let (_, response) = try await urlSession.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw RemoteAnalysisError.invalidResponse }
+        }
+        let endpoint = baseURL.appendingPathComponent("api").appendingPathComponent("v2").appendingPathComponent("fair-scans").appendingPathComponent(scanID.uuidString).appendingPathComponent("report")
+        var request = URLRequest(url: endpoint)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await urlSession.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw RemoteAnalysisError.invalidResponse }
+        return try JSONDecoder().decode(FairScanReportDTO.self, from: data)
+    }
+
+    private func ensureFairScan() async throws -> UUID {
         if let remoteSessionID { return remoteSessionID }
         let endpoint = baseURL
             .appendingPathComponent("api")
-            .appendingPathComponent("v1")
-            .appendingPathComponent("sessions")
+            .appendingPathComponent("v2")
+            .appendingPathComponent("fair-scans")
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: [
-            "device_id": localSessionID.uuidString,
-            "room_type": roomType ?? "unknown",
-            "profiles": profiles,
-            "app_version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1"
-        ])
+        request.setValue(localSessionID.uuidString, forHTTPHeaderField: "X-Device-Session-ID")
         let (data, response) = try await urlSession.data(for: request)
         guard let http = response as? HTTPURLResponse,
               (200..<300).contains(http.statusCode),
               let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let value = payload["session_id"] as? String,
+              let value = payload["scan_id"] as? String,
+              let token = payload["access_token"] as? String,
               let sessionID = UUID(uuidString: value) else {
             throw RemoteAnalysisError.invalidResponse
         }
         remoteSessionID = sessionID
+        fairScanToken = token
         return sessionID
     }
 }

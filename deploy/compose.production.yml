@@ -22,7 +22,7 @@ services:
           import json,urllib.request;
           response=urllib.request.urlopen('http://127.0.0.1:8080/health',timeout=3);
           payload=json.load(response);
-          assert response.status == 200 and payload.get('status') == 'ok'
+          assert response.status == 200 and payload.get('status') == 'ok' and payload.get('analysis') not in {'not_configured','demo'}
       interval: 10s
       timeout: 5s
       retries: 12

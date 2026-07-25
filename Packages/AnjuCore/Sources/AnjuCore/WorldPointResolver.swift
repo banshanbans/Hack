@@ -22,6 +22,7 @@ public struct CapturedFrameContext: Codable, Equatable, Sendable {
     public let imageWidth: Int
     public let imageHeight: Int
     public let orientationRawValue: Int
+    public let modelImageOrientation: ModelImageOrientation
 
     public init(
         frameID: UUID,
@@ -30,7 +31,8 @@ public struct CapturedFrameContext: Codable, Equatable, Sendable {
         intrinsics: CameraIntrinsics,
         imageWidth: Int,
         imageHeight: Int,
-        orientationRawValue: Int
+        orientationRawValue: Int,
+        modelImageOrientation: ModelImageOrientation = .up
     ) {
         self.frameID = frameID
         self.timestamp = timestamp
@@ -39,6 +41,32 @@ public struct CapturedFrameContext: Codable, Equatable, Sendable {
         self.imageWidth = imageWidth
         self.imageHeight = imageHeight
         self.orientationRawValue = orientationRawValue
+        self.modelImageOrientation = modelImageOrientation
+    }
+}
+
+public enum ModelImageOrientation: String, Codable, Equatable, Sendable {
+    case up, right, down, left
+
+    /// Converts a model-space, top-left normalized box into captured-image coordinates.
+    public func capturedImageBox(from box: NormalizedBoundingBox) -> NormalizedBoundingBox? {
+        let corners = [
+            (box.xMin, box.yMin), (box.xMax, box.yMin),
+            (box.xMin, box.yMax), (box.xMax, box.yMax)
+        ].map { point -> (Double, Double) in
+            switch self {
+            case .up: point
+            case .right: (point.1, 1 - point.0)
+            case .down: (1 - point.0, 1 - point.1)
+            case .left: (1 - point.1, point.0)
+            }
+        }
+        return NormalizedBoundingBox(
+            xMin: corners.map { $0.0 }.min() ?? 0,
+            yMin: corners.map { $0.1 }.min() ?? 0,
+            xMax: corners.map { $0.0 }.max() ?? 0,
+            yMax: corners.map { $0.1 }.max() ?? 0
+        )
     }
 }
 
@@ -93,8 +121,9 @@ public struct WorldPointResolver: Sendable {
         frame: CapturedFrameContext,
         depth: DepthGrid
     ) -> WorldPoint? {
-        let imageU = Float((boundingBox.xMin + boundingBox.xMax) * 0.5) * Float(frame.imageWidth)
-        let imageV = Float((boundingBox.yMin + boundingBox.yMax) * 0.5) * Float(frame.imageHeight)
+        guard let capturedBox = frame.modelImageOrientation.capturedImageBox(from: boundingBox) else { return nil }
+        let imageU = Float((capturedBox.xMin + capturedBox.xMax) * 0.5) * Float(frame.imageWidth)
+        let imageV = Float((capturedBox.yMin + capturedBox.yMax) * 0.5) * Float(frame.imageHeight)
         let depthX = Int((imageU / Float(frame.imageWidth) * Float(depth.width)).rounded())
         let depthY = Int((imageV / Float(frame.imageHeight) * Float(depth.height)).rounded())
 

@@ -2,6 +2,18 @@ import type {RoomType, Severity} from './types';
 
 export const PRODUCT_NAME = '长者友好家';
 
+export const CAMERA_COPY = {
+  invitationTitle: '来游园会现场，解锁 iPhone AR 体验',
+  invitationBody: '网页相机会提供实时的结构化安全提示；现场 iPhone 版本还可结合空间定位呈现风险位置。网页端不会显示虚假的三维锚点。',
+  enter: '进入网页相机',
+  privacy: '只有通过本地质量与场景变化检查的候选画面才会发送；离开页面后摄像头会立即关闭。',
+};
+
+export const HOME_HERO_COPY = {
+  rugCallout: '留意地毯边缘',
+  handrailCallout: '建议增设扶手',
+};
+
 export const ROOM_COPY: Record<RoomType, {name: string; icon: string; hint: string; supported: boolean; priority?: boolean}> = {
   bathroom: {name: '卫生间', icon: 'bathtub', hint: '湿滑、起身和支撑问题较集中', supported: true, priority: true},
   bedroom: {name: '卧室', icon: 'bed', hint: '起夜照明、床边起身与通行风险', supported: true},

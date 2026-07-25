@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import tempfile
 import unittest
 
 from fastapi.testclient import TestClient
+from unittest.mock import patch
 
 from backend.app.assessment_service import AssessmentService
 from backend.app.asgi import MAX_BODY_BYTES, create_app
@@ -14,6 +16,8 @@ from backend.app.repositories import SQLiteRepository
 
 class V2APITests(unittest.TestCase):
     def setUp(self) -> None:
+        self.feature_flags = patch.dict(os.environ, {"ANJU_ENABLE_H5_VIDEO": "1", "ANJU_ENABLE_H5_CAMERA": "1", "ANJU_ENABLE_IOS_FAIR_AR": "1"})
+        self.feature_flags.start()
         self.temp = tempfile.TemporaryDirectory()
         root = Path(self.temp.name)
         static = root / "static"
@@ -29,6 +33,7 @@ class V2APITests(unittest.TestCase):
         self.client_context.__exit__(None, None, None)
         self.service.close()
         self.temp.cleanup()
+        self.feature_flags.stop()
 
     def create_assessment(self) -> tuple[str, str]:
         response = self.client.post("/api/v2/assessments", json={"input_mode": "photo"})
@@ -68,6 +73,16 @@ class V2APITests(unittest.TestCase):
         )
         self.assertEqual(profile.status_code, 200)
         self.assertEqual(profile.json()["mobility"], "normal")
+
+        plan = self.client.put(
+            f"/api/v2/assessments/{assessment_id}/planned-rooms",
+            headers=self.auth(token),
+            json={"planned_rooms": ["bathroom", "bedroom"]},
+        )
+        self.assertEqual(plan.status_code, 200)
+        self.assertEqual(plan.json()["planned_rooms"], ["bathroom", "bedroom"])
+        refreshed = self.client.get(f"/api/v2/assessments/{assessment_id}", headers=self.auth(token)).json()
+        self.assertEqual(refreshed["planned_rooms"], ["bathroom", "bedroom"])
 
     def test_raw_media_response_and_read_only_share(self) -> None:
         assessment_id, token = self.create_assessment()
@@ -127,6 +142,53 @@ class V2APITests(unittest.TestCase):
         )
         self.assertEqual(too_large.status_code, 413)
         self.assertEqual(too_large.json()["code"], "request_too_large")
+
+    def test_camera_inspection_is_temporary_and_does_not_create_formal_risks(self) -> None:
+        assessment_id, token = self.create_assessment()
+        response = self.client.post(
+            f"/api/v2/assessments/{assessment_id}/camera/frames:inspect",
+            headers={
+                **self.auth(token), "Content-Type": "image/jpeg", "X-Image-Width": "960", "X-Image-Height": "720",
+                "X-Camera-Context": '{"frame_id":"frame-1","room_type":"bathroom","previous_summary":[]}',
+            },
+            content=b"\xff\xd8\xffcamera-frame",
+        )
+        self.assertEqual(response.status_code, 200)
+        value = response.json()
+        self.assertTrue(value["temporary"])
+        self.assertEqual(value["prompt_version"], "anju_h5_camera_adaptive_v1")
+        self.assertTrue(all(item["temporary"] for item in value["suggestions"]))
+        count = self.service.repository.fetchone("SELECT COUNT(*) AS value FROM risks WHERE assessment_id=?", (assessment_id,))
+        media_count = self.service.repository.fetchone("SELECT COUNT(*) AS value FROM media WHERE assessment_id=?", (assessment_id,))
+        self.assertEqual(count["value"], 0)
+        self.assertEqual(media_count["value"], 0)
+        self.assertFalse(any((self.service.media_root / ".camera-tmp").glob("*")))
+
+    def test_fair_turbo_pro_review_and_deterministic_report(self) -> None:
+        created = self.client.post("/api/v2/fair-scans")
+        self.assertEqual(created.status_code, 201)
+        scan = created.json()
+        auth = self.auth(scan["access_token"])
+        denied = self.client.get(f"/api/v2/fair-scans/{scan['scan_id']}/report")
+        self.assertEqual(denied.status_code, 404)
+        for index in range(2):
+            turbo = self.client.post(
+                f"/api/v2/fair-scans/{scan['scan_id']}/zones/entrance/frames:turbo",
+                headers={**auth, "Content-Type": "image/jpeg", "X-Frame-ID": f"fair-frame-{index}", "X-Image-Width": "1280", "X-Image-Height": "720", "X-Model-Image-Orientation": "right"},
+                content=b"\xff\xd8\xfffair-frame" + bytes([index]),
+            )
+            self.assertEqual(turbo.status_code, 200)
+            self.assertEqual(turbo.json()["prompt_version"], "anju_ios_fair_turbo_v1")
+            self.assertTrue(turbo.json()["candidates"])
+        reviewed = self.client.post(f"/api/v2/fair-scans/{scan['scan_id']}/zones/entrance:review", headers=auth)
+        self.assertEqual(reviewed.status_code, 200)
+        self.assertEqual(reviewed.json()["prompt_version"], "anju_ios_fair_review_pro_v1")
+        self.assertEqual(len(reviewed.json()["risks"]), 2)
+        report = self.client.get(f"/api/v2/fair-scans/{scan['scan_id']}/report", headers=auth)
+        self.assertEqual(report.status_code, 200)
+        self.assertEqual(report.json()["coverage_percent"], 25)
+        self.assertLess(report.json()["assessed_area_score"], 100)
+        self.assertEqual([item["tier"] for item in report.json()["zones"][0]["risks"][0]["solutions"]], ["A", "B", "C"])
 
     def test_missing_frontend_build_returns_503(self) -> None:
         root = Path(self.temp.name) / "missing-static"

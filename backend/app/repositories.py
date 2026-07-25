@@ -112,8 +112,37 @@ class SQLiteRepository:
                     id TEXT PRIMARY KEY, assessment_id TEXT, room_id TEXT, event_name TEXT NOT NULL,
                     payload_json TEXT NOT NULL, created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS fair_scans (
+                    id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, status TEXT NOT NULL,
+                    result_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS fair_frames (
+                    id TEXT PRIMARY KEY, scan_id TEXT NOT NULL REFERENCES fair_scans(id) ON DELETE CASCADE,
+                    zone_id TEXT NOT NULL, path TEXT NOT NULL, mime_type TEXT NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL,
+                    orientation TEXT NOT NULL, candidates_json TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS fair_zones (
+                    id TEXT PRIMARY KEY, scan_id TEXT NOT NULL REFERENCES fair_scans(id) ON DELETE CASCADE,
+                    zone_id TEXT NOT NULL, status TEXT NOT NULL, result_json TEXT NOT NULL DEFAULT '{}', updated_at TEXT NOT NULL,
+                    UNIQUE(scan_id, zone_id)
+                );
                 INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, datetime('now'));
             """)
+            self._add_column(connection, "media", "source_kind", "TEXT NOT NULL DEFAULT 'photo'")
+            self._add_column(connection, "media", "source_id", "TEXT")
+            self._add_column(connection, "media", "frame_index", "INTEGER")
+            self._add_column(connection, "media", "captured_at_ms", "INTEGER")
+            self._add_column(connection, "media", "orientation", "TEXT NOT NULL DEFAULT 'up'")
+            self._add_column(connection, "media", "perceptual_hash", "TEXT")
+            self._add_column(connection, "media", "zone_id", "TEXT")
+            self._add_column(connection, "risks", "evidence_media_ids_json", "TEXT NOT NULL DEFAULT '[]'")
+            connection.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (2, datetime('now'))")
+
+    @staticmethod
+    def _add_column(connection: sqlite3.Connection, table: str, name: str, declaration: str) -> None:
+        columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+        if name not in columns:
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
 
 
 def decode_json_row(row: dict, fields: tuple[str, ...]) -> dict:

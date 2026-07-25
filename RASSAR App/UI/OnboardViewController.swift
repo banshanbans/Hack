@@ -29,10 +29,10 @@ final class OnboardViewController: UIViewController {
         FocusOption(title: "使用助行器", subtitle: "优先看看连续通道", profile: "mobility_aid")
     ]
     private let roomOptions = [
-        RoomOption(title: ProductCopy.bedroom, value: "bedroom"),
-        RoomOption(title: ProductCopy.livingRoom, value: "living_room"),
-        RoomOption(title: ProductCopy.bathroom, value: "bathroom"),
-        RoomOption(title: ProductCopy.corridor, value: "corridor")
+        RoomOption(title: "入口区", value: "entrance"),
+        RoomOption(title: "主通道", value: "main_aisle"),
+        RoomOption(title: "展位区", value: "booth"),
+        RoomOption(title: "休息区", value: "rest_area")
     ]
 
     private let contentStack = UIStackView()
@@ -41,7 +41,7 @@ final class OnboardViewController: UIViewController {
     private var optionButtons: [UIButton] = []
     private var step: Step = .landing
     private var voiceGuidanceEnabled = false
-    private var selectedRoomType = "bedroom"
+    private var selectedRoomType = "entrance"
 #if DEBUG
     private var didOpenDemoReport = false
 #endif
@@ -66,7 +66,7 @@ final class OnboardViewController: UIViewController {
         guard !didOpenDemoReport,
               ProcessInfo.processInfo.arguments.contains("-AnjuOpenDemoReport") else { return }
         didOpenDemoReport = true
-        let context = AnjuAppContext.makeDefault(profiles: ["older_adult"], roomType: "bedroom")
+        let context = AnjuAppContext.makeDefault(profiles: ["older_adult"], roomType: "entrance")
         DemoIssueFactory.populateIfRequested(context: context, force: true)
         let report = ReportViewController(context: context)
         report.modalPresentationStyle = .fullScreen
