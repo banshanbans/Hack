@@ -1,0 +1,16 @@
+{
+  "version": "coverage_rules_v1",
+  "rooms": {
+    "bathroom": {
+      "elements": [
+        {"id":"floor","label":"完整地面","weight":25},
+        {"id":"entrance_threshold","label":"门槛和入口","weight":15},
+        {"id":"shower","label":"淋浴区","weight":20},
+        {"id":"toilet","label":"马桶区","weight":15},
+        {"id":"support_wall","label":"主要墙面和支撑位置","weight":15},
+        {"id":"lighting","label":"照明条件","weight":10}
+      ]
+    }
+  },
+  "room_weights": {"bathroom":25,"bedroom":20,"living_room":20,"kitchen":15,"corridor":10,"balcony":10}
+}

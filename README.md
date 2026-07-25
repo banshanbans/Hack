@@ -15,7 +15,7 @@
 - 历史帧位姿、内参和深度反投影；无可靠深度时只生成证据卡；
 - 多来源候选融合、问题位置图、可选中文语音提示；
 - 确认、忽略、标记已处理、优先级报告和系统分享；
-- 零第三方 Python 依赖的本地开发服务与照片 H5；
+- FastAPI/Uvicorn 单进程服务、SQLite 持久化和 React 九页照片 H5；
 - 默认空分析实现和显式隔离的演示 fixture。
 
 ## iOS 构建
@@ -61,25 +61,29 @@ swift test
 
 ## 本地开发服务与 H5
 
-无需安装依赖：
+安装锁定依赖并构建 React：
 
 ```bash
-python3 -m backend.app.server
+python3 -m venv .venv
+.venv/bin/python -m pip install -r backend/requirements.txt
+cd frontend && npm install && npm run build && cd ..
+.venv/bin/python -m backend.app.server
 ```
 
-然后打开 `http://127.0.0.1:8080`。默认分析返回空数组。只有显式设置下面的环境变量才会返回固定演示结果：
+然后打开 `http://127.0.0.1:8080`。FastAPI 同时提供 v1/v2 API 和 `frontend/dist`；缺少构建产物时返回 503。只有显式设置下面的环境变量才会返回固定演示结果：
 
 ```bash
-ANJU_MOCK_ANALYSIS=1 python3 -m backend.app.server
+ANJU_MOCK_ANALYSIS=1 .venv/bin/python -m backend.app.server
 ```
 
 后端测试：
 
 ```bash
-python3 -m unittest discover -s backend/tests -v
+.venv/bin/python -m unittest discover -s backend/tests -v
+cd frontend && npm run typecheck && npm test && npm run build
 ```
 
-本地服务不保存上传图片。面向真机或外部网络部署时，必须放在 HTTPS 入口后，并将任何模型密钥放在服务端环境变量或密钥管理服务中。
+v2 将状态保存到 SQLite，并在 `ANJU_MEDIA_ROOT` 保存规范化分析副本；用户删除照片或评估时同步删除。面向真机或外部网络部署时，必须放在 HTTPS 入口后，并将模型密钥放在服务端环境变量或密钥管理服务中。
 
 ## 关键数据流
 
@@ -103,12 +107,12 @@ python3 -m unittest discover -s backend/tests -v
 - 规则 JSON、产品文案和工程文件校验通过；
 - generic iOS Debug 无签名编译通过；
 - iPhone 17 Pro（iOS 26.3）模拟器 Debug 编译、安装和首页启动通过；
-- 本地后端健康检查、H5 页面和创建 Session 请求通过。
+- FastAPI 健康检查、React H5 九页主路径和 v1/v2 请求通过。
 
 当前未完成的外部验证：
 
 - 尚未在 LiDAR 真机验证锚点稳定性、扫描 3 分钟内存、弱网、VoiceOver 和 Dynamic Type；
-- 尚未接入真实云端视觉模型，默认返回空结果；
+- 火山方舟与 OpenAI Responses Provider 已接入；真实风险识别效果仍需授权样本评测；
 - 演示的 5 类固定问题仅属于显式 Mock，不代表真实模型效果。
 
 详见 [实现状态](docs/IMPLEMENTATION_STATUS.md) 和 [真机测试记录](docs/DEVICE_TEST_RECORD.md)。

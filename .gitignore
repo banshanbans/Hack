@@ -12,3 +12,11 @@ __pycache__/
 *.key
 captures/
 user-photos/
+backend/data/
+.playwright-cli/
+.venv/
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+*.tsbuildinfo
+output/playwright/

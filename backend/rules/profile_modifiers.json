@@ -1,0 +1,6 @@
+{
+  "version":"profile_modifiers_v1",
+  "mobility":["normal","limited","cane","walker","wheelchair"],
+  "fall_history":["none","once","multiple"],
+  "living_status":["alone","with_family"]
+}

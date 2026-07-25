@@ -1,19 +1,87 @@
-# 本地开发服务
+# 安心家 AI H5 与本地服务
 
-该服务用于跑通 Session、关键帧结构化响应、反馈、完成报告、分享 token 和照片 H5。它不包含真实视觉模型。
+该服务同时保留 iOS 使用的 v1 Session API，并提供照片 H5 使用的 v2 Assessment API。v2 使用 SQLite 保存评估、反馈、整改方案、分享记录和事件，分析图片保存为已规范化副本。
 
-启动：
+## 安装与启动
+
+后端已完整迁移到 FastAPI。建议使用项目虚拟环境安装精确锁定的依赖：
 
 ```bash
-python3 -m backend.app.server
+python3 -m venv .venv
+.venv/bin/python -m pip install -r backend/requirements.txt
 ```
 
-环境变量：
+先构建 React，再启动单 worker ASGI 服务：
 
-- `ANJU_HOST`：默认 `127.0.0.1`；
-- `ANJU_PORT`：默认 `8080`；
-- `ANJU_MOCK_ANALYSIS=1`：显式启用一个固定演示问题；默认返回空数组。
+```bash
+cd frontend
+npm install
+npm run build
+cd ..
+uvicorn backend.app.asgi:app --host 127.0.0.1 --port 8080 --workers 1
+```
 
-健康检查：`GET /health`。
+`python3 -m backend.app.server` 是调用同一 Uvicorn 应用的兼容入口，不再启动旧 `ThreadingHTTPServer`。
 
-面向 iOS 真机部署时，请使用 HTTPS 反向代理或托管平台。iOS 客户端会拒绝 HTTP 分析地址。
+使用火山方舟进行真实分析：
+
+```bash
+export ANJU_VISION_PROVIDER="ark"
+export ARK_API_KEY="your-server-side-key"
+export ANJU_ARK_MODEL="doubao-seed-2-1-turbo-260628"
+.venv/bin/python -m backend.app.server
+```
+
+如需切换回 OpenAI，设置 `ANJU_VISION_PROVIDER=openai`、`OPENAI_API_KEY` 和 `ANJU_OPENAI_MODEL`。
+
+显式演示：
+
+```bash
+ANJU_MOCK_ANALYSIS=1 .venv/bin/python -m backend.app.server
+```
+
+访问 `http://127.0.0.1:8080`。演示模式会在页面顶部显示固定样例提示；正式分析失败时不会回退到演示数据。
+
+## 环境变量
+
+- `ANJU_VISION_PROVIDER`：`ark` 或 `openai`；样例配置默认使用方舟。
+- `ARK_API_KEY`：火山方舟服务端密钥，只通过运行时环境变量注入。
+- `ANJU_ARK_MODEL`：默认 `doubao-seed-2-1-turbo-260628`。
+- `ANJU_ARK_ENDPOINT`：默认 `https://ark.cn-beijing.volces.com/api/v3/responses`。
+- `OPENAI_API_KEY` / `ANJU_OPENAI_MODEL`：切换到 OpenAI Provider 时使用。
+- `ANJU_ANALYSIS_TIMEOUT_SECONDS`：模型请求超时，默认 60 秒；网络超时最多重试一次。
+- 方舟 Responses API 请求固定发送 `thinking.type=disabled`，关闭深度思考以降低质量检查和风险定位延迟。
+- 方舟图片质量检查使用 `detail=low`，正式风险分析使用其支持的最高细节等级 `detail=high`。
+- `ANJU_DB_PATH`：SQLite 路径，默认 `backend/data/anju.db`。
+- `ANJU_MEDIA_ROOT`：规范化图片目录，默认 `backend/data/media`。
+- `ANJU_SHARE_TTL_HOURS`：分享有效期，默认 24 小时，最大 168 小时。
+- `ANJU_MOCK_ANALYSIS=1`：显式启用固定演示 Provider，默认关闭。
+- `ANJU_HOST` / `ANJU_PORT`：默认 `127.0.0.1:8080`。
+- `ANJU_STATIC_ROOT`：React 构建目录，默认 `frontend/dist`；缺失时 `/` 明确返回 503。
+- `ANJU_ENABLE_API_DOCS=1`：仅在开发环境启用 Swagger、ReDoc 和 OpenAPI JSON。
+- `ANJU_ALLOWED_HOSTS`：受信 Host 白名单，生产需要加入实际域名。
+- `ANJU_FORWARDED_ALLOW_IPS`：允许提供转发头的边缘代理 IP，默认只信任本机。
+
+不要把 `.env`、密钥、数据库或用户照片提交到仓库。对外部署时必须使用 HTTPS，并为数据目录配置备份和删除策略。
+
+## H5 P0 范围
+
+- React 19 + TypeScript + Vite 的 P01—P09 主流程；
+- 三项家人档案；
+- 六类房间入口，其中卫生间具备完整风险、评分、方案和预算规则；
+- 1—6 张照片上传、浏览器去 EXIF/缩放、质量检查；
+- 火山方舟或 OpenAI Responses API 结构化视觉候选；
+- 前端 SVG 风险标注、反馈与重新圈选；
+- A/B/C 方案、参考价格、清单和 24 小时只读分享。
+
+视频抽帧、六房间完整规则、圈选连续问答、整改复查对比和 PDF/长图导出不在 P0 内。
+
+## 测试
+
+```bash
+.venv/bin/python -m unittest discover -s backend/tests -v
+cd frontend && npm run typecheck && npm test && npm run build
+python3 scripts/check_product_copy.py
+```
+
+单元测试使用本地 Stub 或显式 Demo Provider，不产生真实模型费用。真实调用必须同时设置 `ANJU_RUN_LIVE_TESTS=1` 和服务端密钥后单独执行人工样本验证。

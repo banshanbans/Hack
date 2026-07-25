@@ -17,7 +17,9 @@ SWIFT_FILES = [
 ]
 OTHER_FILES = [
     ROOT / "RASSAR App/Base.lproj/Main.storyboard",
-    ROOT / "backend/static/index.html",
+    ROOT / "frontend/index.html",
+    ROOT / "frontend/src/content.ts",
+    ROOT / "frontend/src/App.tsx",
 ]
 BANNED = [
     "GPT", "Gemini", "Qwen", "豆包", "YOLO", "API", "JSON", "bbox", "置信度",

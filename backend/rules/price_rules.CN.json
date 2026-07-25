@@ -1,0 +1,26 @@
+{
+  "version":"cn_price_v1",
+  "region":"CN_DEFAULT",
+  "updated_at":"2026-07",
+  "disclaimer":"费用为常见材料与人工的参考区间，实际价格会因地区、尺寸、墙体条件和施工方而变化；施工前请以现场报价为准。",
+  "prices":[
+    {"price_rule_id":"PRICE_BAR_A","currency":"CNY","unit":"fen","material_min":3000,"material_max":15000,"labor_min":0,"labor_max":0,"other_min":0,"other_max":0,"total_min":3000,"total_max":15000,"includes":["防滑垫或防滑贴"],"excludes":["固定扶手"]},
+    {"price_rule_id":"PRICE_BAR_B","currency":"CNY","unit":"fen","material_min":15000,"material_max":70000,"labor_min":15000,"labor_max":50000,"other_min":0,"other_max":0,"total_min":30000,"total_max":120000,"includes":["扶手材料","安装人工","基础墙体处理"],"excludes":["特殊墙体加固"]},
+    {"price_rule_id":"PRICE_BAR_C","currency":"CNY","unit":"fen","material_min":150000,"material_max":500000,"labor_min":150000,"labor_max":700000,"other_min":0,"other_max":0,"total_min":300000,"total_max":1200000,"includes":["连续扶手","坐浴设施","施工人工"],"excludes":["隐藏结构修复"]},
+    {"price_rule_id":"PRICE_WET_A","currency":"CNY","unit":"fen","material_min":1000,"material_max":8000,"labor_min":0,"labor_max":0,"other_min":0,"other_max":0,"total_min":1000,"total_max":8000,"includes":["清洁工具与提示"],"excludes":["地面施工"]},
+    {"price_rule_id":"PRICE_WET_B","currency":"CNY","unit":"fen","material_min":12000,"material_max":50000,"labor_min":10000,"labor_max":40000,"other_min":0,"other_max":0,"total_min":22000,"total_max":90000,"includes":["防滑材料","基础人工"],"excludes":["防水重做"]},
+    {"price_rule_id":"PRICE_WET_C","currency":"CNY","unit":"fen","material_min":120000,"material_max":500000,"labor_min":180000,"labor_max":700000,"other_min":0,"other_max":0,"total_min":300000,"total_max":1200000,"includes":["排水坡度","防水","防滑面层"],"excludes":["结构加固"]},
+    {"price_rule_id":"PRICE_GLASS_A","currency":"CNY","unit":"fen","material_min":0,"material_max":3000,"labor_min":0,"labor_max":0,"other_min":0,"other_max":0,"total_min":0,"total_max":3000,"includes":["提示标识"],"excludes":["扶手"]},
+    {"price_rule_id":"PRICE_GLASS_B","currency":"CNY","unit":"fen","material_min":10000,"material_max":50000,"labor_min":10000,"labor_max":40000,"other_min":0,"other_max":0,"total_min":20000,"total_max":90000,"includes":["固定扶手","安装"],"excludes":["隔断更换"]},
+    {"price_rule_id":"PRICE_GLASS_C","currency":"CNY","unit":"fen","material_min":100000,"material_max":400000,"labor_min":100000,"labor_max":400000,"other_min":0,"other_max":0,"total_min":200000,"total_max":800000,"includes":["入口与支撑系统"],"excludes":["大面积防水"]},
+    {"price_rule_id":"PRICE_THRESHOLD_A","currency":"CNY","unit":"fen","material_min":1000,"material_max":5000,"labor_min":0,"labor_max":0,"other_min":0,"other_max":0,"total_min":1000,"total_max":5000,"includes":["提示条"],"excludes":["高差改造"]},
+    {"price_rule_id":"PRICE_THRESHOLD_B","currency":"CNY","unit":"fen","material_min":8000,"material_max":30000,"labor_min":5000,"labor_max":20000,"other_min":0,"other_max":0,"total_min":13000,"total_max":50000,"includes":["缓坡条","安装"],"excludes":["防水重做"]},
+    {"price_rule_id":"PRICE_THRESHOLD_C","currency":"CNY","unit":"fen","material_min":80000,"material_max":300000,"labor_min":120000,"labor_max":400000,"other_min":0,"other_max":0,"total_min":200000,"total_max":700000,"includes":["入口降差","防水收口"],"excludes":["门体更换"]},
+    {"price_rule_id":"PRICE_MAT_A","currency":"CNY","unit":"fen","material_min":0,"material_max":8000,"labor_min":0,"labor_max":0,"other_min":0,"other_max":0,"total_min":0,"total_max":8000,"includes":["防滑背衬"],"excludes":["地面施工"]},
+    {"price_rule_id":"PRICE_MAT_B","currency":"CNY","unit":"fen","material_min":6000,"material_max":30000,"labor_min":3000,"labor_max":15000,"other_min":0,"other_max":0,"total_min":9000,"total_max":45000,"includes":["固定防滑贴","施工"],"excludes":["旧面层拆除"]},
+    {"price_rule_id":"PRICE_MAT_C","currency":"CNY","unit":"fen","material_min":80000,"material_max":300000,"labor_min":120000,"labor_max":400000,"other_min":0,"other_max":0,"total_min":200000,"total_max":700000,"includes":["连续防滑面层","施工"],"excludes":["防水修复"]},
+    {"price_rule_id":"PRICE_LIGHT_A","currency":"CNY","unit":"fen","material_min":3000,"material_max":15000,"labor_min":0,"labor_max":0,"other_min":0,"other_max":0,"total_min":3000,"total_max":15000,"includes":["感应夜灯"],"excludes":["线路改造"]},
+    {"price_rule_id":"PRICE_LIGHT_B","currency":"CNY","unit":"fen","material_min":15000,"material_max":60000,"labor_min":10000,"labor_max":40000,"other_min":0,"other_max":0,"total_min":25000,"total_max":100000,"includes":["防潮灯具","感应控制","安装"],"excludes":["主线路更换"]},
+    {"price_rule_id":"PRICE_LIGHT_C","currency":"CNY","unit":"fen","material_min":60000,"material_max":250000,"labor_min":80000,"labor_max":250000,"other_min":0,"other_max":0,"total_min":140000,"total_max":500000,"includes":["分区照明","线路与人工"],"excludes":["配电箱升级"]}
+  ]
+}
