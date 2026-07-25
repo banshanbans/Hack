@@ -1,0 +1,14 @@
+.DS_Store
+.build/
+DerivedData/
+*.xcresult
+xcuserdata/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+captures/
+user-photos/

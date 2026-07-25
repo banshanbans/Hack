@@ -8,8 +8,10 @@
 import AVFoundation
 import Vision
 import CoreImage
+import OSLog
 
 class ObjectDetection{
+    private let logger = Logger(subsystem: "com.anjuguard.app", category: "vision")
     var detectionRequest:VNCoreMLRequest!
     var ready = false
     var names=[" ","Door Handle", "Electric Socket", "Grab Bar","Knife", "Medication","Rug", "Scissors", "Smoke Alarm","Switch"]
@@ -20,13 +22,13 @@ class ObjectDetection{
     func initDetection(){
         do {
             let model = try VNCoreMLModel(for: yolov5_Medium(configuration: MLModelConfiguration()).model)
-            print("YOLOV5 loaded!")
             self.detectionRequest = VNCoreMLRequest(model: model)
             
             self.ready = true
             
         } catch let error {
-            fatalError("failed to setup model: \(error)")
+            self.ready = false
+            logger.error("Local vision model unavailable; spatial scan will continue: \(error.localizedDescription, privacy: .public)")
         }
     }
     
@@ -48,15 +50,13 @@ class ObjectDetection{
             if self.detectionRequest != nil
             {
                 try handler.perform([self.detectionRequest])
-                let observations = self.detectionRequest.results!
-                
-                return observations
+                return self.detectionRequest.results ?? []
             }
             else{
                 return []
             }
             
-        }catch let error{
+        } catch {
             //fatalError("failed to detect: \(error)")
             return []
         }
@@ -82,7 +82,7 @@ class ObjectDetection{
             
             let flippedBox = CGRect(x: objectBounds.minX, y: viewSize.height - objectBounds.maxY, width: objectBounds.maxX - objectBounds.minX, height: objectBounds.maxY - objectBounds.minY)
             
-            let label = objectObservation.labels.first!.identifier
+            guard let label = objectObservation.labels.first?.identifier else { continue }
             
             let processedOD = ProcessedObservation(label: label, confidence: objectObservation.confidence, boundingBox: flippedBox)
             
@@ -114,4 +114,3 @@ struct ProcessedObservation{
         self.rect = rect
     }
 }
-

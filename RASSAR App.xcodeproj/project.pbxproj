@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 56;
+	objectVersion = 60;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -45,10 +45,24 @@
 		5EC420282974BD45004F4E88 /* MiniMapLayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EC420272974BD45004F4E88 /* MiniMapLayer.swift */; };
 		5EC4203829860004004F4E88 /* ObjectDetection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EC4203729860004004F4E88 /* ObjectDetection.swift */; };
 		5EC420452988628A004F4E88 /* NodeTechnique.plist in Resources */ = {isa = PBXBuildFile; fileRef = 5EC420432988628A004F4E88 /* NodeTechnique.plist */; };
-		5EC420462988628A004F4E88 /* NodeRender.metal in Sources */ = {isa = PBXBuildFile; fileRef = 5EC420442988628A004F4E88 /* NodeRender.metal */; };
-		5ECAEEAB29B7FF0D00631F8D /* LaunchScreen.png in Resources */ = {isa = PBXBuildFile; fileRef = 5ECAEEAA29B7FF0D00631F8D /* LaunchScreen.png */; };
 		5ECAEEAD29B9B4EA00631F8D /* export.png in Resources */ = {isa = PBXBuildFile; fileRef = 5ECAEEAC29B9B4EA00631F8D /* export.png */; };
 		5ECEE2DF29DCAE5E00DE46F8 /* IssueExtendedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ECEE2DE29DCAE5E00DE46F8 /* IssueExtendedView.swift */; };
+		A10000000000000000000001 /* ProductCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000001 /* ProductCopy.swift */; };
+		A10000000000000000000002 /* AppContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000002 /* AppContext.swift */; };
+		A10000000000000000000003 /* RemoteAnalysisClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003 /* RemoteAnalysisClient.swift */; };
+		A10000000000000000000004 /* FrameContextStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000004 /* FrameContextStore.swift */; };
+		A10000000000000000000005 /* LocalVisionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000005 /* LocalVisionService.swift */; };
+		A10000000000000000000006 /* IssueDetailViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000006 /* IssueDetailViewController.swift */; };
+		A10000000000000000000007 /* ReportViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000007 /* ReportViewController.swift */; };
+		A10000000000000000000008 /* RoomCaptureCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000008 /* RoomCaptureCoordinator.swift */; };
+		A10000000000000000000009 /* ARFrameContextBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000009 /* ARFrameContextBuilder.swift */; };
+		A1000000000000000000000A /* IssueAnchorStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000A /* IssueAnchorStore.swift */; };
+		A1000000000000000000000B /* IssueOverlayCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000B /* IssueOverlayCoordinator.swift */; };
+		A1000000000000000000000C /* LegacyIssueAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000C /* LegacyIssueAdapter.swift */; };
+		A1000000000000000000000D /* SafetyRules.zh-CN.json in Resources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000D /* SafetyRules.zh-CN.json */; };
+		A1000000000000000000000E /* AnjuCore in Frameworks */ = {isa = PBXBuildFile; productRef = E10000000000000000000001 /* AnjuCore */; };
+		A1000000000000000000000F /* IssueMiniMapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000F /* IssueMiniMapView.swift */; };
+		A10000000000000000000010 /* FrameQualityService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000010 /* FrameQualityService.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -111,9 +125,23 @@
 		5EC4203729860004004F4E88 /* ObjectDetection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObjectDetection.swift; sourceTree = "<group>"; };
 		5EC420432988628A004F4E88 /* NodeTechnique.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = NodeTechnique.plist; sourceTree = "<group>"; };
 		5EC420442988628A004F4E88 /* NodeRender.metal */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.metal; path = NodeRender.metal; sourceTree = "<group>"; };
-		5ECAEEAA29B7FF0D00631F8D /* LaunchScreen.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = LaunchScreen.png; sourceTree = "<group>"; };
 		5ECAEEAC29B9B4EA00631F8D /* export.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = export.png; sourceTree = "<group>"; };
 		5ECEE2DE29DCAE5E00DE46F8 /* IssueExtendedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IssueExtendedView.swift; sourceTree = "<group>"; };
+		B10000000000000000000001 /* ProductCopy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProductCopy.swift; sourceTree = "<group>"; };
+		B10000000000000000000002 /* AppContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppContext.swift; sourceTree = "<group>"; };
+		B10000000000000000000003 /* RemoteAnalysisClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteAnalysisClient.swift; sourceTree = "<group>"; };
+		B10000000000000000000004 /* FrameContextStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameContextStore.swift; sourceTree = "<group>"; };
+		B10000000000000000000005 /* LocalVisionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalVisionService.swift; sourceTree = "<group>"; };
+		B10000000000000000000006 /* IssueDetailViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IssueDetailViewController.swift; sourceTree = "<group>"; };
+		B10000000000000000000007 /* ReportViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportViewController.swift; sourceTree = "<group>"; };
+		B10000000000000000000008 /* RoomCaptureCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomCaptureCoordinator.swift; sourceTree = "<group>"; };
+		B10000000000000000000009 /* ARFrameContextBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ARFrameContextBuilder.swift; sourceTree = "<group>"; };
+		B1000000000000000000000A /* IssueAnchorStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IssueAnchorStore.swift; sourceTree = "<group>"; };
+		B1000000000000000000000B /* IssueOverlayCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IssueOverlayCoordinator.swift; sourceTree = "<group>"; };
+		B1000000000000000000000C /* LegacyIssueAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacyIssueAdapter.swift; sourceTree = "<group>"; };
+		B1000000000000000000000D /* SafetyRules.zh-CN.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "SafetyRules.zh-CN.json"; sourceTree = "<group>"; };
+		B1000000000000000000000F /* IssueMiniMapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IssueMiniMapView.swift; sourceTree = "<group>"; };
+		B10000000000000000000010 /* FrameQualityService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameQualityService.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -121,6 +149,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A1000000000000000000000E /* AnjuCore in Frameworks */,
 				5E3FB27D28EEC34500281359 /* RoomPlan.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -164,6 +193,8 @@
 		5E1656A1287CD8A2002577D3 /* RASSAR App */ = {
 			isa = PBXGroup;
 			children = (
+				C10000000000000000000001 /* AnjuGuard */,
+				C10000000000000000000002 /* Resources */,
 				5EC420332985FFB6004F4E88 /* YOLOv5 */,
 				5E3FB26A28ED58CF00281359 /* ARObjects */,
 				5E8502F128DFA3EB00FA3F01 /* UI */,
@@ -205,7 +236,6 @@
 			children = (
 				5E960A2A29E608BC004D66B2 /* logo.png */,
 				5ECAEEAC29B9B4EA00631F8D /* export.png */,
-				5ECAEEAA29B7FF0D00631F8D /* LaunchScreen.png */,
 				5EC420442988628A004F4E88 /* NodeRender.metal */,
 				5EC420432988628A004F4E88 /* NodeTechnique.plist */,
 				5E3FB26828ED0A4600281359 /* Wheelchair.png */,
@@ -265,6 +295,35 @@
 			path = YOLOv5;
 			sourceTree = "<group>";
 		};
+		C10000000000000000000001 /* AnjuGuard */ = {
+			isa = PBXGroup;
+			children = (
+				B10000000000000000000001 /* ProductCopy.swift */,
+				B10000000000000000000002 /* AppContext.swift */,
+				B10000000000000000000003 /* RemoteAnalysisClient.swift */,
+				B10000000000000000000004 /* FrameContextStore.swift */,
+				B10000000000000000000005 /* LocalVisionService.swift */,
+				B10000000000000000000006 /* IssueDetailViewController.swift */,
+				B10000000000000000000007 /* ReportViewController.swift */,
+				B10000000000000000000008 /* RoomCaptureCoordinator.swift */,
+				B10000000000000000000009 /* ARFrameContextBuilder.swift */,
+				B1000000000000000000000A /* IssueAnchorStore.swift */,
+				B1000000000000000000000B /* IssueOverlayCoordinator.swift */,
+				B1000000000000000000000C /* LegacyIssueAdapter.swift */,
+				B1000000000000000000000F /* IssueMiniMapView.swift */,
+				B10000000000000000000010 /* FrameQualityService.swift */,
+			);
+			path = AnjuGuard;
+			sourceTree = "<group>";
+		};
+		C10000000000000000000002 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				B1000000000000000000000D /* SafetyRules.zh-CN.json */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -281,6 +340,9 @@
 			dependencies = (
 			);
 			name = "RetroAccess App";
+			packageProductDependencies = (
+				E10000000000000000000001 /* AnjuCore */,
+			);
 			productName = "RetroAccess App";
 			productReference = 5E16569F287CD8A2002577D3 /* RetroAccess App.app */;
 			productType = "com.apple.product-type.application";
@@ -350,9 +412,13 @@
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,
+				"zh-Hans",
 				Base,
 			);
 			mainGroup = 5E165696287CD8A2002577D3;
+			packageReferences = (
+				D10000000000000000000001 /* XCLocalSwiftPackageReference "Packages/AnjuCore" */,
+			);
 			productRefGroup = 5E1656A0287CD8A2002577D3 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -369,6 +435,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A1000000000000000000000D /* SafetyRules.zh-CN.json in Resources */,
 				5EC420452988628A004F4E88 /* NodeTechnique.plist in Resources */,
 				5E3FB27628EE418800281359 /* Wireframe_3D_Globe.scn in Resources */,
 				5E960A2B29E608BC004D66B2 /* logo.png in Resources */,
@@ -385,7 +452,6 @@
 				5E1656AA287CD8A2002577D3 /* Main.storyboard in Resources */,
 				5ECAEEAD29B9B4EA00631F8D /* export.png in Resources */,
 				5E3FB26928ED0A4600281359 /* Wheelchair.png in Resources */,
-				5ECAEEAB29B7FF0D00631F8D /* LaunchScreen.png in Resources */,
 				5E3FB27828EE433F00281359 /* Wireframe_3D_Globe.usdz in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -411,6 +477,20 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A10000000000000000000001 /* ProductCopy.swift in Sources */,
+				A10000000000000000000002 /* AppContext.swift in Sources */,
+				A10000000000000000000003 /* RemoteAnalysisClient.swift in Sources */,
+				A10000000000000000000004 /* FrameContextStore.swift in Sources */,
+				A10000000000000000000005 /* LocalVisionService.swift in Sources */,
+				A10000000000000000000006 /* IssueDetailViewController.swift in Sources */,
+				A10000000000000000000007 /* ReportViewController.swift in Sources */,
+				A10000000000000000000008 /* RoomCaptureCoordinator.swift in Sources */,
+				A10000000000000000000009 /* ARFrameContextBuilder.swift in Sources */,
+				A1000000000000000000000A /* IssueAnchorStore.swift in Sources */,
+				A1000000000000000000000B /* IssueOverlayCoordinator.swift in Sources */,
+				A1000000000000000000000C /* LegacyIssueAdapter.swift in Sources */,
+				A1000000000000000000000F /* IssueMiniMapView.swift in Sources */,
+				A10000000000000000000010 /* FrameQualityService.swift in Sources */,
 				5E1656EA289B8E13002577D3 /* NotifyingEntity.swift in Sources */,
 				5E3929C42B08A5EE003A24E6 /* yolov5-Medium.mlmodel in Sources */,
 				5E16572928AC62CE002577D3 /* RoomObjectClasses.swift in Sources */,
@@ -426,7 +506,6 @@
 				5EC42018294D4420004F4E88 /* PostHocViewController.swift in Sources */,
 				5E2B2C312B166F31001A11F1 /* AudioFeedback.swift in Sources */,
 				5E1656D3287CE6AA002577D3 /* RoomObjectReplicator.swift in Sources */,
-				5EC420462988628A004F4E88 /* NodeRender.metal in Sources */,
 				5EB3993F2B70BACA0023BB6A /* BoundingBox.swift in Sources */,
 				5E1656D4287CE6AA002577D3 /* RoomObjectSystem.swift in Sources */,
 				5EB399412B70BADF0023BB6A /* YOLOResizer.swift in Sources */,
@@ -608,11 +687,11 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = T4GVUZVTFD;
+				DEVELOPMENT_TEAM = SVRNMKJ8X4;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = RASSAR;
+				INFOPLIST_KEY_CFBundleDisplayName = "安居守护";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
-				INFOPLIST_KEY_NSCameraUsageDescription = "";
+				INFOPLIST_KEY_NSCameraUsageDescription = "打开相机，才能一起看看这个房间。";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UIMainStoryboardFile = Main;
@@ -624,7 +703,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.2;
-				PRODUCT_BUNDLE_IDENTIFIER = com.MakeabilityLab.RASSAR;
+				PRODUCT_BUNDLE_IDENTIFIER = com.MakeabilityLab.AnjuGuard;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -644,11 +723,11 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = T4GVUZVTFD;
+				DEVELOPMENT_TEAM = SVRNMKJ8X4;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = RASSAR;
+				INFOPLIST_KEY_CFBundleDisplayName = "安居守护";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
-				INFOPLIST_KEY_NSCameraUsageDescription = "";
+				INFOPLIST_KEY_NSCameraUsageDescription = "打开相机，才能一起看看这个房间。";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UIMainStoryboardFile = Main;
@@ -660,7 +739,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.2;
-				PRODUCT_BUNDLE_IDENTIFIER = com.MakeabilityLab.RASSAR;
+				PRODUCT_BUNDLE_IDENTIFIER = com.MakeabilityLab.AnjuGuard;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -788,6 +867,21 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		D10000000000000000000001 /* XCLocalSwiftPackageReference "Packages/AnjuCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/AnjuCore;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		E10000000000000000000001 /* AnjuCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D10000000000000000000001 /* XCLocalSwiftPackageReference "Packages/AnjuCore" */;
+			productName = AnjuCore;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 5E165697287CD8A2002577D3 /* Project object */;
 }

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>安居守护 · 照片体验</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, sans-serif; color: #193033; background: #f4f0e4; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; }
+    main { width: min(560px, calc(100% - 40px)); background: white; border-radius: 24px; padding: 28px; box-shadow: 0 16px 50px #19303318; }
+    h1 { font-size: clamp(30px, 8vw, 48px); margin: 0 0 12px; }
+    p { line-height: 1.65; }
+    label { display: block; margin: 24px 0 8px; font-weight: 650; }
+    input { width: 100%; min-height: 48px; }
+    button { width: 100%; min-height: 54px; border: 0; border-radius: 16px; background: #14736b; color: white; font-size: 18px; font-weight: 700; margin-top: 20px; }
+    button:disabled { opacity: .5; }
+    #result { margin-top: 22px; padding: 16px; border-radius: 14px; background: #f3f6f4; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>让家里住得更安心</h1>
+    <p>选择一张房间照片，看看值得优先处理的地方。照片只用于本次分析，本地开发服务不会保存原图。</p>
+    <label for="photo">房间照片</label>
+    <input id="photo" type="file" accept="image/*">
+    <button id="analyze" disabled>看看这张照片</button>
+    <div id="result" role="status" aria-live="polite">请选择一张照片</div>
+  </main>
+  <script>
+    const photo = document.querySelector('#photo');
+    const button = document.querySelector('#analyze');
+    const result = document.querySelector('#result');
+    photo.addEventListener('change', () => { button.disabled = !photo.files.length; });
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      result.textContent = '正在看看这个房间…';
+      try {
+        const sessionResponse = await fetch('/api/v1/sessions', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({room_type: 'unknown', profiles: ['older_adult'], app_version: 'web-local'})
+        });
+        const session = await sessionResponse.json();
+        const frameID = crypto.randomUUID();
+        const response = await fetch(`/api/v1/sessions/${session.session_id}/frames:analyze`, {
+          method: 'POST', headers: {'Content-Type': photo.files[0].type || 'image/jpeg', 'X-Frame-ID': frameID},
+          body: photo.files[0]
+        });
+        const data = await response.json();
+        result.textContent = data.issues?.length
+          ? data.issues.map(item => `${item.title}\n${item.recommendation}`).join('\n\n')
+          : '暂时没有发现明显问题';
+      } catch (_) {
+        result.textContent = '这次没有看清，稍后再试也可以';
+      } finally {
+        button.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

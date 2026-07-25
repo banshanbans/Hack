@@ -1,0 +1,172 @@
+[
+  {
+    "id": "RUG-001",
+    "type": "loose_rug",
+    "room_types": ["bedroom", "living_room", "corridor"],
+    "profiles": ["older_adult", "night_walking", "limited_mobility", "mobility_aid"],
+    "title": "地毯边缘需要确认",
+    "evidence_required": ["rug_visible", "walking_path_visible"],
+    "severity": "high",
+    "reason": "画面中看到地毯，但是否挡住通道、边缘是否松动仍需现场确认。",
+    "primary_action": "先固定四角，或把地毯移出通道。",
+    "manual_checks": ["边缘是否翘起", "底部是否有防滑垫"],
+    "needs_manual_check": true,
+    "source": {
+      "name": "CDC STEADI 居家防跌倒检查资料",
+      "url": "https://www.cdc.gov/steadi/media/pdfs/steadi-brochure-checkforsafety-508.pdf"
+    }
+  },
+  {
+    "id": "PATH-001",
+    "type": "floor_clutter",
+    "room_types": ["bedroom", "living_room", "corridor", "bathroom"],
+    "profiles": ["older_adult", "night_walking", "limited_mobility", "mobility_aid"],
+    "title": "通道上有杂物",
+    "evidence_required": ["clutter_visible", "walking_path_visible"],
+    "severity": "high",
+    "reason": "常走的通道被物品占用，转身或夜间经过时更难避开。",
+    "primary_action": "先清出一条连续、无遮挡的通道。",
+    "manual_checks": ["是否挡住起身路线"],
+    "needs_manual_check": false,
+    "source": {
+      "name": "CDC STEADI 居家防跌倒检查资料",
+      "url": "https://www.cdc.gov/steadi/media/pdfs/steadi-brochure-checkforsafety-508.pdf"
+    }
+  },
+  {
+    "id": "CABLE-001",
+    "type": "cable_crossing",
+    "room_types": ["bedroom", "living_room", "corridor"],
+    "profiles": ["older_adult", "night_walking", "limited_mobility", "mobility_aid"],
+    "title": "电线横跨通道",
+    "evidence_required": ["cable_visible", "walking_path_visible"],
+    "severity": "high",
+    "reason": "横跨地面的电线不容易察觉，也可能缠住脚或助行器。",
+    "primary_action": "把电线沿墙固定，避免横跨通道。",
+    "manual_checks": ["电线是否还能移动"],
+    "needs_manual_check": false,
+    "source": {
+      "name": "CDC STEADI 居家防跌倒检查资料",
+      "url": "https://www.cdc.gov/steadi/media/pdfs/steadi-brochure-checkforsafety-508.pdf"
+    }
+  },
+  {
+    "id": "PATH-002",
+    "type": "narrow_path",
+    "room_types": ["bedroom", "living_room", "corridor"],
+    "profiles": ["older_adult", "limited_mobility", "mobility_aid"],
+    "title": "通道可能有些窄",
+    "evidence_required": ["room_geometry", "obstruction_visible"],
+    "severity": "check",
+    "reason": "家具可能压缩了常走空间，需要结合实际通行感受再确认。",
+    "primary_action": "调整附近物品，并实际走一遍确认。",
+    "manual_checks": ["助行器能否顺利通过", "转身是否受阻"],
+    "needs_manual_check": true,
+    "source": {
+      "name": "CDC STEADI 居家防跌倒检查资料",
+      "url": "https://www.cdc.gov/steadi/media/pdfs/steadi-brochure-checkforsafety-508.pdf"
+    }
+  },
+  {
+    "id": "BATH-001",
+    "type": "missing_grab_bar",
+    "room_types": ["bathroom"],
+    "profiles": ["older_adult", "limited_mobility", "mobility_aid"],
+    "title": "这里可能需要扶手",
+    "evidence_required": ["bath_fixture_visible", "wall_area_visible"],
+    "severity": "check",
+    "reason": "洗浴和起身位置较湿滑，固定支撑通常比临时借力更可靠。",
+    "primary_action": "请专业人员评估合适的安装位置。",
+    "manual_checks": ["墙体是否适合固定", "日常借力位置"],
+    "needs_manual_check": true,
+    "source": {
+      "name": "CDC STEADI 居家防跌倒检查资料",
+      "url": "https://www.cdc.gov/steadi/media/pdfs/steadi-brochure-checkforsafety-508.pdf"
+    }
+  },
+  {
+    "id": "CORNER-001",
+    "type": "sharp_corner",
+    "room_types": ["bedroom", "living_room", "corridor"],
+    "profiles": ["older_adult", "night_walking", "limited_mobility"],
+    "title": "尖角靠近通道",
+    "evidence_required": ["corner_visible", "walking_path_visible"],
+    "severity": "medium",
+    "reason": "突出的尖角靠近常走位置，碰撞时可能造成伤害。",
+    "primary_action": "加装防撞角，或把尖角移出通道。",
+    "manual_checks": ["是否处于腰腿高度"],
+    "needs_manual_check": true,
+    "source": {
+      "name": "安居守护适老化辅助筛查规则",
+      "url": null
+    }
+  },
+  {
+    "id": "LIGHT-001",
+    "type": "low_lighting",
+    "room_types": ["bedroom", "living_room", "corridor", "bathroom"],
+    "profiles": ["older_adult", "night_walking", "limited_mobility"],
+    "title": "这里光线有点暗",
+    "evidence_required": ["image_brightness"],
+    "severity": "medium",
+    "reason": "画面中的通道较暗，夜间更难看清地面变化和障碍物。",
+    "primary_action": "先增加夜灯，照亮起身和通行路线。",
+    "manual_checks": ["夜间是否能看清地面"],
+    "needs_manual_check": true,
+    "source": {
+      "name": "CDC STEADI 居家防跌倒检查资料",
+      "url": "https://www.cdc.gov/steadi/media/pdfs/steadi-brochure-checkforsafety-508.pdf"
+    }
+  },
+  {
+    "id": "SUPPORT-001",
+    "type": "unstable_support",
+    "room_types": ["bedroom", "living_room", "bathroom"],
+    "profiles": ["older_adult", "limited_mobility", "mobility_aid"],
+    "title": "借力物需要确认",
+    "evidence_required": ["support_object_visible"],
+    "severity": "check",
+    "reason": "从画面无法确认这个物品能否承受借力，需要用手检查稳定性。",
+    "primary_action": "不要先用它借力，改用固定支撑。",
+    "manual_checks": ["是否会移动或倾倒", "是否牢固固定"],
+    "needs_manual_check": true,
+    "source": {
+      "name": "安居守护适老化辅助筛查规则",
+      "url": null
+    }
+  },
+  {
+    "id": "REACH-001",
+    "type": "high_reach_item",
+    "room_types": ["bedroom", "living_room", "kitchen", "bathroom"],
+    "profiles": ["older_adult", "limited_mobility", "mobility_aid"],
+    "title": "常用物品放得较高",
+    "evidence_required": ["item_visible", "storage_context_visible"],
+    "severity": "medium",
+    "reason": "经常踮脚或借助凳子取物会增加失去平衡的机会。",
+    "primary_action": "把常用物品移到腰肩之间的位置。",
+    "manual_checks": ["是否为常用物品"],
+    "needs_manual_check": true,
+    "source": {
+      "name": "CDC STEADI 居家防跌倒检查资料",
+      "url": "https://www.cdc.gov/steadi/media/pdfs/steadi-brochure-checkforsafety-508.pdf"
+    }
+  },
+  {
+    "id": "BED-001",
+    "type": "bedside_obstruction",
+    "room_types": ["bedroom"],
+    "profiles": ["older_adult", "night_walking", "limited_mobility", "mobility_aid"],
+    "title": "床边起身区域受阻",
+    "evidence_required": ["bed_visible", "obstruction_visible"],
+    "severity": "high",
+    "reason": "床边有物品占用起身和夜间通行位置，容易在刚起身时碰到。",
+    "primary_action": "先清理床边，留出连续的起身空间。",
+    "manual_checks": ["夜间路线是否连续"],
+    "needs_manual_check": false,
+    "source": {
+      "name": "CDC STEADI 居家防跌倒检查资料",
+      "url": "https://www.cdc.gov/steadi/media/pdfs/steadi-brochure-checkforsafety-508.pdf"
+    }
+  }
+]

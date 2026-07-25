@@ -1,0 +1,8 @@
+安居守护包含对 RASSAR 的修改。
+
+RASSAR
+Copyright (c) 2024 UW Makeability Lab
+https://github.com/makeabilitylab/RASSAR
+
+RASSAR 代码根据本仓库 LICENSE 中的 MIT License 使用。
+新增的产品代码继续保留上述版权与许可声明。发布前仍需单独核对模型权重、数据集、图像和其他素材的许可。

@@ -1,23 +1,118 @@
-# RASSAR #
+# 安居守护
 
-This repo contains source code for the RASSAR app.
+安居守护是一款基于 RASSAR 二次开发的 iOS 居家安全辅助筛查产品。用户可以选择关注重点，使用支持空间扫描的 iPhone 查看一个房间，在相机画面中查看有证据的问题标记，确认或忽略问题，并生成按优先级整理的房间报告。
 
-## Introduction ##
-RASSAR is an iOS app that scans indoor spaces and detect accessibility and safety issues in real time. The app is built upon ARKit and RoomPlan API, and relies on a YOLOV5 model to detect smaller indoor items that's related to accessibility and safety.
-[[Website](https://makeabilitylab.cs.washington.edu/project/rassar/)] 
-## How to use RASSAR ##
-To build RASSAR, simply clone this repo and open it with XCode ( >= 14.0). Then update the signing and build the app with destination selected as your iPhone.
+本产品不是医疗诊断、建筑验收、无障碍认证或施工鉴定工具。所有建议都需要结合现场情况判断。
 
-The app can run on iphones with iOS version >=16.0. Please notify that the RASSAR app requires LiDAR scanners on phone thus only iPhone Pro/ProMax lineup from 12 on can successfully run this app.
+## 当前可运行范围
 
-## YOLOV5 model and dataset ##
-To detect smaller indoor items related to accessibility and safety, we trained an object detection model based on the architecture of YOLOV4. The model weights, in the format of Apple's coreml model, can be found in RASSAR App/YOLOv5/yolov5-Medium.mlmodel
+- 首页 → 关注重点 → 扫描准备 → 房间扫描 → 问题详情 → 报告；
+- 10 类适老化安全规则，规则等级由本地知识库决定；
+- 世界锚点、屏幕短标签、空间去重、稳定观测和 dismiss 抑制；
+- 本地 Core ML 通路；模型加载失败时仍可继续空间扫描；
+- 本地暗光筛查；
+- HTTPS 关键帧分析接口、结构化响应校验、白名单和最多 5 项限制；
+- 历史帧位姿、内参和深度反投影；无可靠深度时只生成证据卡；
+- 多来源候选融合、问题位置图、可选中文语音提示；
+- 确认、忽略、标记已处理、优先级报告和系统分享；
+- 零第三方 Python 依赖的本地开发服务与照片 H5；
+- 默认空分析实现和显式隔离的演示 fixture。
 
-The dataset used for training this model can be downloaded from here: [[Dataset](https://drive.google.com/file/d/1IMEa5GH5M82UBWOR-2Q8ihsYvRx2itmY/view?usp=sharing)].
+## iOS 构建
 
-Please cite this dataset as:
+要求：
 
-> Xia Su, Kaiming Cheng, Han Zhang, Jaewook Lee, Wyatt Olson, and Jon E. Froehlich. 2023. A Demonstration of RASSAR: Room Accessibility and Safety Scanning in Augmented Reality. In Proceedings of the 25th International ACM SIGACCESS Conference on Computers and Accessibility (ASSETS '23). Association for Computing Machinery, New York, NY, USA, Article 90, 1–4. https://doi.org/10.1145/3597638.3614504
+- Xcode 14 或更高版本；
+- iOS 16.1 或更高版本；
+- 真正的房间扫描需要支持空间扫描的 iPhone；
+- 真机安装前请在 Xcode 中选择自己的签名团队。
 
-## Related Work ##
-- [RASSAR](https://makeabilitylab.cs.washington.edu/project/rassar/): RASSAR: Room Accessibility and Safety Scanning in Augmented Reality 
+打开 `RASSAR App.xcodeproj`，选择 scheme `RetroAccess App`。命令行无签名编译：
+
+```bash
+xcodebuild \
+  -project "RASSAR App.xcodeproj" \
+  -scheme "RetroAccess App" \
+  -configuration Debug \
+  -destination 'generic/platform=iOS' \
+  -derivedDataPath /tmp/anjuguard-build \
+  CODE_SIGNING_ALLOWED=NO \
+  build
+```
+
+离线演示问题只在添加启动参数 `-AnjuDemoIssues` 后启用。若要在模拟器直接验收报告页面，可在 Debug scheme 添加 `-AnjuOpenDemoReport`。这两个入口均由显式启动参数控制，正式运行不会硬编码检测结果。
+
+远端分析默认关闭。要启用，请在 scheme 环境变量中设置 HTTPS 地址：
+
+```text
+ANJU_ANALYSIS_BASE_URL=https://your-service.example
+```
+
+App 不接受 HTTP 地址，也不携带模型厂商永久密钥。
+
+## 本地领域测试
+
+```bash
+cd Packages/AnjuCore
+swift test
+```
+
+覆盖规则解析、类型白名单、等级规则、证据要求、空间去重、稳定升级、状态转换、报告排序、bbox 校验、深度离群值过滤、历史帧反投影、远端 schema 和多来源融合。
+
+## 本地开发服务与 H5
+
+无需安装依赖：
+
+```bash
+python3 -m backend.app.server
+```
+
+然后打开 `http://127.0.0.1:8080`。默认分析返回空数组。只有显式设置下面的环境变量才会返回固定演示结果：
+
+```bash
+ANJU_MOCK_ANALYSIS=1 python3 -m backend.app.server
+```
+
+后端测试：
+
+```bash
+python3 -m unittest discover -s backend/tests -v
+```
+
+本地服务不保存上传图片。面向真机或外部网络部署时，必须放在 HTTPS 入口后，并将任何模型密钥放在服务端环境变量或密钥管理服务中。
+
+## 关键数据流
+
+```text
+本地检测 / 房间对象 / 远端候选
+  → 白名单与证据校验
+  → 本地规则决定风险等级
+  → 历史帧深度反投影或 Raycast
+  → 空间去重与稳定观测
+  → 世界锚点；无世界点则证据卡
+  → 用户确认 / 忽略 / 已处理
+  → 按优先级报告
+```
+
+## 验证状态
+
+当前已完成：
+
+- Swift 领域测试通过；
+- Python 后端测试通过；
+- 规则 JSON、产品文案和工程文件校验通过；
+- generic iOS Debug 无签名编译通过；
+- iPhone 17 Pro（iOS 26.3）模拟器 Debug 编译、安装和首页启动通过；
+- 本地后端健康检查、H5 页面和创建 Session 请求通过。
+
+当前未完成的外部验证：
+
+- 尚未在 LiDAR 真机验证锚点稳定性、扫描 3 分钟内存、弱网、VoiceOver 和 Dynamic Type；
+- 尚未接入真实云端视觉模型，默认返回空结果；
+- 演示的 5 类固定问题仅属于显式 Mock，不代表真实模型效果。
+
+详见 [实现状态](docs/IMPLEMENTATION_STATUS.md) 和 [真机测试记录](docs/DEVICE_TEST_RECORD.md)。
+
+## 上游与许可
+
+本项目基于 [UW Makeability Lab 的 RASSAR](https://github.com/makeabilitylab/RASSAR) 修改，保留原始 MIT `LICENSE` 和版权声明。第三方模型及数据集状态见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

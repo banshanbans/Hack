@@ -6,7 +6,7 @@
 //
 
 import Foundation
-import RealityFoundation
+import RealityKit
 import RoomPlan
 import ARKit
 

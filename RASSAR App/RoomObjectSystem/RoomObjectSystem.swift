@@ -1,5 +1,5 @@
 import ARKit
-import RealityFoundation
+import RealityKit
 import RoomPlan
 
 public struct RoomObjectComponent: Component {
