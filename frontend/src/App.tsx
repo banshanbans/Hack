@@ -524,6 +524,7 @@ function RoomsPage() {
   const savedPlan = assessment?.planned_rooms || assessment?.planned_rooms_json || [];
   const taskRooms = localTasks || savedPlan.map(roomType => assessment?.rooms.find(room => room.room_type === roomType)).filter(Boolean) as RoomAssessment[];
   const showTasks = !editingPlan && taskRooms.length > 0 && (savedPlan.length > 0 || Boolean(localTasks));
+  const hasRoomSelection = multiMode ? selectedRooms.size > 0 : singleRoom !== null;
   const taskStatus = (room: RoomAssessment) => {
     if (room.status === 'result_ready' || room.status === 'completed') return {label: `${room.score ?? '—'} 分 · 已完成`, action: '查看结果'};
     if (room.status === 'analyzing') return {label: 'AI 正在分析', action: '查看进度'};
@@ -551,8 +552,9 @@ function RoomsPage() {
     <div className="room-grid">{Object.entries(ROOM_COPY).map(([key, room]) => {
       const existing = assessment?.rooms.find(item => item.room_type === key);
       const selected = multiMode ? selectedRooms.has(key as keyof typeof ROOM_COPY) : singleRoom === key;
-      return <button key={key} className={`room-card ${room.priority && !selected ? 'recommended' : ''} ${selected ? 'plan-selected' : ''}`} aria-pressed={selected} disabled={busy} onClick={() => choose(key as keyof typeof ROOM_COPY)}>
-        <span className="room-icon"><Icon name={room.icon} filled={room.priority} /></span>
+      const recommended = Boolean(room.priority && !hasRoomSelection);
+      return <button key={key} className={`room-card ${recommended ? 'recommended' : ''} ${selected ? 'plan-selected' : ''}`} aria-pressed={selected} disabled={busy} onClick={() => choose(key as keyof typeof ROOM_COPY)}>
+        <span className="room-icon"><Icon name={room.icon} filled={recommended} /></span>
         <b>{room.name}</b><p>{room.hint}</p>
         {selected && <span className="plan-check"><Icon name="check_circle" filled />已选择</span>}
         {existing?.status === 'result_ready' && <span className="completion"><Icon name="check_circle" filled />{existing.score} 分</span>}

@@ -54,8 +54,11 @@ describe('recoverable product states', () => {
       return json({code: 'not_found', message: 'not found'}, 404);
     });
     render(<App />);
+    const bathroom = await screen.findByRole('button', {name: /卫生间 湿滑/});
     const bedroom = await screen.findByRole('button', {name: /卧室 起夜照明/});
+    expect(bathroom).toHaveClass('recommended');
     fireEvent.click(bedroom);
+    expect(bathroom).not.toHaveClass('recommended');
     expect(screen.getByRole('button', {name: '开始检查卧室'})).toBeEnabled();
     expect(fetchMock.mock.calls.some(([input, init]) => String(input).endsWith('/rooms') && init?.method === 'POST')).toBe(false);
     fireEvent.click(screen.getByRole('button', {name: '开始检查卧室'}));
