@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from backend.app.assessment_service import AssessmentService
-from backend.app.providers import MockVisionProvider, ProviderError
+from backend.app.providers import MockVisionProvider
 from backend.app.repositories import SQLiteRepository
 
 
@@ -25,9 +25,24 @@ class CrossFrameProvider(MockVisionProvider):
         return {"room_type": room_type, "scene_elements": ["floor", "shower"], "risk_candidates": candidates}, self._usage()
 
 
-class FailingReviewProvider(MockVisionProvider):
-    def fair_review(self, scan_id, zone_id, media, candidates, allowed_risks):
-        raise ProviderError("provider_timeout")
+class FairRiskProvider(MockVisionProvider):
+    def __init__(self, risk_code: str) -> None:
+        self.risk_code = risk_code
+
+    def fair_analyze(self, scan_id, zone_id, media, camera_rules):
+        rule = next(item for item in camera_rules if item["risk_code"] == self.risk_code)
+        usage = self._usage()
+        usage["prompt_version"] = "anju_ios_fair_pro_direct_v2"
+        return {
+            "frame_id": media["media_id"], "zone_id": zone_id,
+            "candidates": [{
+                "risk_code": self.risk_code,
+                "evidence_codes": list(rule["required_evidence_codes"]),
+                "evidence": "现场画面有清晰、可定位的受控证据",
+                "confidence": .92, "needs_manual_check": False,
+                "bbox": [.1, .2, .7, .8],
+            }],
+        }, usage
 
 
 class AssessmentServiceTests(unittest.TestCase):
@@ -175,15 +190,130 @@ class AssessmentServiceTests(unittest.TestCase):
         self.assertEqual(len(risks[0]["evidence_media_ids"]), 2)
 
     @patch.dict("os.environ", {"ANJU_ENABLE_IOS_FAIR_AR": "1"})
-    def test_failed_fair_pro_review_preserves_manual_candidates_without_score(self) -> None:
-        service = AssessmentService(SQLiteRepository(self.db), self.media, provider=FailingReviewProvider())
+    def test_direct_pro_findings_are_finalized_without_a_second_model_call(self) -> None:
+        service = AssessmentService(SQLiteRepository(self.db), self.media, provider=FairRiskProvider("floor_clutter"))
         scan = service.create_fair_scan()
-        service.analyze_fair_frame(scan["scan_id"], "entrance", "frame-fallback", JPEG, "image/jpeg", 1280, 720, "right")
-        reviewed = service.review_fair_zone(scan["scan_id"], "entrance")
-        self.assertEqual(reviewed["status"], "review_failed")
-        self.assertIsNone(reviewed["score"])
+        service.analyze_fair_frame(scan["scan_id"], "entrance", "frame-direct", JPEG, "image/jpeg", 1280, 720, "right")
+        reviewed = service.finalize_fair_zone(scan["scan_id"], "entrance")
+        self.assertEqual(reviewed["status"], "reviewed")
+        self.assertEqual(reviewed["prompt_version"], "anju_ios_fair_pro_direct_v2")
+        self.assertLess(reviewed["score"], 100)
+        self.assertEqual(reviewed["risks"][0]["status"], "confirmed")
+        self.assertTrue(reviewed["risks"][0]["score_eligible"])
+        report = service.fair_report(scan["scan_id"])
+        self.assertEqual(report["status"], "reviewed")
+        self.assertEqual(report["prompt_version"], "anju_ios_fair_pro_direct_v2")
+
+    def test_venue_fair_rules_are_versioned_and_identical_for_all_zones(self) -> None:
+        expected = set(self.service.rules.fair_risk_rules)
+        self.assertEqual(len(expected), 12)
+        self.assertEqual({"crowded_path", "marked_exit_obstruction", "low_hanging_obstruction"} - expected, set())
+        for zone in ("entrance", "main_aisle", "booth", "rest_area"):
+            self.assertEqual({item["risk_code"] for item in self.service.rules.fair_rules_for(zone)}, expected)
+        for code in expected:
+            solutions = self.service.rules.fair_solutions_for(code)
+            self.assertEqual([item["tier"] for item in solutions], ["A", "B", "C"])
+            self.assertEqual([(item["total_min"], item["total_max"]) for item in solutions], [(0, 80), (80, 500), (500, 3000)])
+
+    def test_venue_fair_fixture_targets_require_visible_path_relationships(self) -> None:
+        rules = self.service.rules.fair_risk_rules
+        clutter = rules["floor_clutter"]
+        self.assertEqual(
+            set(clutter["required_evidence_codes"]),
+            {"localized_obstruction_visible", "path_intrusion_visible"},
+        )
+        self.assertIn("豆包", clutter["visual_cue"])
+        self.assertIn("椅子", clutter["visual_cue"])
+
+        cable = rules["cable_crossing"]
+        self.assertEqual(
+            set(cable["required_evidence_codes"]),
+            {"exposed_cable_or_power_strip_visible", "path_intrusion_visible"},
+        )
+        self.assertIn("插排", cable["visual_cue"])
+        self.assertIn("完全封闭的线槽", cable["visual_cue"])
+
+        level = rules["level_change"]
+        self.assertEqual(
+            set(level["required_evidence_codes"]),
+            {"level_change_visible", "path_intrusion_visible"},
+        )
+        self.assertIn("舞台", level["visual_cue"])
+        self.assertIn("电缆保护槽", level["visual_cue"])
+
+    def test_h5_live_camera_rules_cover_fixture_targets_without_venue_scoring(self) -> None:
+        rules = {item["risk_code"]: item for item in self.service.rules.live_camera_rules_for("h5_home")}
+        self.assertEqual(self.service.rules.live_camera_rule_version, "live-camera-rules-2026-07-26-v3")
+        self.assertIn("豆包", rules["floor_clutter"]["visual_cue"])
+        self.assertIn("椅子", rules["floor_clutter"]["visual_cue"])
+        self.assertIn("插排", rules["cable_crossing"]["visual_cue"])
+        self.assertIn("完全封闭的线槽", rules["cable_crossing"]["visual_cue"])
+        self.assertIn("舞台", rules["level_change"]["visual_cue"])
+        self.assertIn("电缆保护槽", rules["level_change"]["visual_cue"])
+        self.assertNotIn("deduction", rules["level_change"])
+
+    def test_marked_exit_candidate_with_incomplete_evidence_is_pending_and_does_not_score(self) -> None:
+        rule = self.service.rules.fair_risk_rules["marked_exit_obstruction"]
+        value = {
+            "frame_id": "exit-frame", "zone_id": "entrance",
+            "candidates": [{
+                "risk_code": "marked_exit_obstruction", "evidence_codes": ["marked_exit_visible"],
+                "evidence": "仅看到出口标识", "confidence": .9,
+                "needs_manual_check": False, "bbox": [.1, .2, .5, .8],
+            }],
+        }
+        candidates = self.service._validate_fair_candidates(value, "exit-frame", "entrance", {"marked_exit_obstruction": rule})
+        self.assertEqual(len(candidates), 1)
+        self.assertTrue(candidates[0]["needs_manual_check"])
+        self.assertFalse(candidates[0]["evidence_complete"])
+        reviews = [{
+            "candidate_id": candidates[0]["candidate_id"], "status": "confirmed",
+            "risk_code": "marked_exit_obstruction", "evidence": "仅看到出口标识",
+            "bbox": candidates[0]["bbox"], "merged_into_candidate_id": None,
+        }]
+        risks = self.service._fair_formal_risks(reviews, candidates)
+        self.assertEqual(risks[0]["status"], "manual_check")
+        self.assertFalse(risks[0]["score_eligible"])
+
+    def test_unknown_evidence_codes_are_removed_and_candidate_is_pending(self) -> None:
+        rule = self.service.rules.fair_risk_rules["floor_clutter"]
+        value = {
+            "frame_id": "clutter-frame", "zone_id": "booth",
+            "candidates": [{
+                "risk_code": "floor_clutter", "evidence_codes": ["invented_code"],
+                "evidence": "地面有可定位物品", "confidence": .8,
+                "needs_manual_check": False, "bbox": [.1, .2, .5, .8],
+            }],
+        }
+        candidates = self.service._validate_fair_candidates(value, "clutter-frame", "booth", {"floor_clutter": rule})
+        self.assertEqual(candidates[0]["evidence_codes"], [])
+        self.assertTrue(candidates[0]["needs_manual_check"])
+        self.assertFalse(candidates[0]["evidence_complete"])
+
+    @patch.dict("os.environ", {"ANJU_ENABLE_IOS_FAIR_AR": "1"})
+    def test_single_frame_crowding_is_manual_and_does_not_score(self) -> None:
+        service = AssessmentService(SQLiteRepository(self.db), self.media, provider=FairRiskProvider("crowded_path"))
+        scan = service.create_fair_scan()
+        service.analyze_fair_frame(scan["scan_id"], "main_aisle", "crowd-one", JPEG, "image/jpeg", 1280, 720, "right")
+        reviewed = service.finalize_fair_zone(scan["scan_id"], "main_aisle")
+        self.assertEqual(reviewed["score"], 100)
+        self.assertEqual(len(reviewed["risks"]), 1)
         self.assertEqual(reviewed["risks"][0]["status"], "manual_check")
-        self.assertIsNone(service.fair_report(scan["scan_id"])["assessed_area_score"])
+        self.assertFalse(reviewed["risks"][0]["score_eligible"])
+
+    @patch.dict("os.environ", {"ANJU_ENABLE_IOS_FAIR_AR": "1"})
+    def test_sustained_crowding_across_frames_scores_once(self) -> None:
+        service = AssessmentService(SQLiteRepository(self.db), self.media, provider=FairRiskProvider("crowded_path"))
+        scan = service.create_fair_scan()
+        for frame_id in ("crowd-early", "crowd-late"):
+            service.analyze_fair_frame(scan["scan_id"], "main_aisle", frame_id, JPEG, "image/jpeg", 1280, 720, "right")
+        service.repository.execute("UPDATE fair_frames SET created_at=? WHERE id=?", ("2026-07-26T00:00:00+00:00", "crowd-early"))
+        service.repository.execute("UPDATE fair_frames SET created_at=? WHERE id=?", ("2026-07-26T00:00:04+00:00", "crowd-late"))
+        reviewed = service.finalize_fair_zone(scan["scan_id"], "main_aisle")
+        self.assertEqual(reviewed["score"], 92)
+        self.assertEqual(len(reviewed["risks"]), 1)
+        self.assertTrue(reviewed["risks"][0]["score_eligible"])
+        self.assertEqual(set(reviewed["risks"][0]["evidence_frame_ids"]), {"crowd-early", "crowd-late"})
 
 
 if __name__ == "__main__":

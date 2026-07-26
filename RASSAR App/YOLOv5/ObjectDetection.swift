@@ -12,8 +12,10 @@ import OSLog
 
 class ObjectDetection{
     private let logger = Logger(subsystem: "com.anjuguard.app", category: "vision")
-    var detectionRequest:VNCoreMLRequest!
-    var ready = false
+    private let stateLock = NSLock()
+    private var resourcesReleased = false
+    private var detectionRequest: VNCoreMLRequest?
+    private(set) var ready = false
     var names=[" ","Door Handle", "Electric Socket", "Grab Bar","Knife", "Medication","Rug", "Scissors", "Smoke Alarm","Switch"]
     init(){
         Task { self.initDetection() }
@@ -22,12 +24,17 @@ class ObjectDetection{
     func initDetection(){
         do {
             let model = try VNCoreMLModel(for: yolov5_Medium(configuration: MLModelConfiguration()).model)
-            self.detectionRequest = VNCoreMLRequest(model: model)
-            
-            self.ready = true
+            let request = VNCoreMLRequest(model: model)
+            stateLock.lock()
+            defer { stateLock.unlock() }
+            guard !resourcesReleased else { return }
+            detectionRequest = request
+            ready = true
             
         } catch let error {
-            self.ready = false
+            stateLock.lock()
+            ready = false
+            stateLock.unlock()
             logger.error("Local vision model unavailable; spatial scan will continue: \(error.localizedDescription, privacy: .public)")
         }
     }
@@ -40,21 +47,26 @@ class ObjectDetection{
         //print("Detect results contains\(processedObservations.count)")
         return processedObservations
     }
+
+    func releaseResources() {
+        stateLock.lock()
+        resourcesReleased = true
+        detectionRequest = nil
+        ready = false
+        stateLock.unlock()
+    }
     
     
     func detect(image:CIImage) -> [VNObservation]{
-        
+        stateLock.lock()
+        let request = detectionRequest
+        stateLock.unlock()
+        guard let request else { return [] }
         let handler = VNImageRequestHandler(ciImage: image)
         
         do{
-            if self.detectionRequest != nil
-            {
-                try handler.perform([self.detectionRequest])
-                return self.detectionRequest.results ?? []
-            }
-            else{
-                return []
-            }
+            try handler.perform([request])
+            return request.results ?? []
             
         } catch {
             //fatalError("failed to detect: \(error)")

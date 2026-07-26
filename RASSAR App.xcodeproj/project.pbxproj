@@ -25,7 +25,6 @@
 		5E16572928AC62CE002577D3 /* RoomObjectClasses.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E16572828AC62CE002577D3 /* RoomObjectClasses.swift */; };
 		5E16572B28ACBDD8002577D3 /* IssueLayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E16572A28ACBDD8002577D3 /* IssueLayer.swift */; };
 		5E2B2C312B166F31001A11F1 /* AudioFeedback.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E2B2C302B166F31001A11F1 /* AudioFeedback.swift */; };
-		5E3929C42B08A5EE003A24E6 /* yolov5-Medium.mlmodel in Sources */ = {isa = PBXBuildFile; fileRef = 5E3929C32B08A5EE003A24E6 /* yolov5-Medium.mlmodel */; };
 		5E3FB25F28ECEA8100281359 /* CheckBox.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E3FB25E28ECEA8100281359 /* CheckBox.swift */; };
 		5E3FB26128ECF03C00281359 /* Living Room.jpg in Resources */ = {isa = PBXBuildFile; fileRef = 5E3FB26028ECF03C00281359 /* Living Room.jpg */; };
 		5E3FB26328ED0A1900281359 /* Children.png in Resources */ = {isa = PBXBuildFile; fileRef = 5E3FB26228ED0A1900281359 /* Children.png */; };
@@ -38,12 +37,9 @@
 		5E3FB27828EE433F00281359 /* Wireframe_3D_Globe.usdz in Resources */ = {isa = PBXBuildFile; fileRef = 5E3FB27728EE433F00281359 /* Wireframe_3D_Globe.usdz */; };
 		5E3FB27D28EEC34500281359 /* RoomPlan.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5E3FB27C28EEC34500281359 /* RoomPlan.framework */; settings = {ATTRIBUTES = (Weak, ); }; };
 		5E960A2B29E608BC004D66B2 /* logo.png in Resources */ = {isa = PBXBuildFile; fileRef = 5E960A2A29E608BC004D66B2 /* logo.png */; };
-		5EB3993F2B70BACA0023BB6A /* BoundingBox.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EB3993E2B70BACA0023BB6A /* BoundingBox.swift */; };
-		5EB399412B70BADF0023BB6A /* YOLOResizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EB399402B70BADF0023BB6A /* YOLOResizer.swift */; };
 		5EB83FB828C3FB3500263575 /* Rubrics_mini.json in Resources */ = {isa = PBXBuildFile; fileRef = 5EB83FB728C3FB3500263575 /* Rubrics_mini.json */; };
 		5EC42018294D4420004F4E88 /* PostHocViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EC42017294D4420004F4E88 /* PostHocViewController.swift */; };
 		5EC420282974BD45004F4E88 /* MiniMapLayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EC420272974BD45004F4E88 /* MiniMapLayer.swift */; };
-		5EC4203829860004004F4E88 /* ObjectDetection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EC4203729860004004F4E88 /* ObjectDetection.swift */; };
 		5EC420452988628A004F4E88 /* NodeTechnique.plist in Resources */ = {isa = PBXBuildFile; fileRef = 5EC420432988628A004F4E88 /* NodeTechnique.plist */; };
 		5ECAEEAD29B9B4EA00631F8D /* export.png in Resources */ = {isa = PBXBuildFile; fileRef = 5ECAEEAC29B9B4EA00631F8D /* export.png */; };
 		5ECEE2DF29DCAE5E00DE46F8 /* IssueExtendedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ECEE2DE29DCAE5E00DE46F8 /* IssueExtendedView.swift */; };
@@ -51,7 +47,6 @@
 		A10000000000000000000002 /* AppContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000002 /* AppContext.swift */; };
 		A10000000000000000000003 /* RemoteAnalysisClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003 /* RemoteAnalysisClient.swift */; };
 		A10000000000000000000004 /* FrameContextStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000004 /* FrameContextStore.swift */; };
-		A10000000000000000000005 /* LocalVisionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000005 /* LocalVisionService.swift */; };
 		A10000000000000000000006 /* IssueDetailViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000006 /* IssueDetailViewController.swift */; };
 		A10000000000000000000007 /* ReportViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000007 /* ReportViewController.swift */; };
 		A10000000000000000000008 /* RoomCaptureCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000008 /* RoomCaptureCoordinator.swift */; };
@@ -104,7 +99,6 @@
 		5E16572828AC62CE002577D3 /* RoomObjectClasses.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomObjectClasses.swift; sourceTree = "<group>"; };
 		5E16572A28ACBDD8002577D3 /* IssueLayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IssueLayer.swift; sourceTree = "<group>"; };
 		5E2B2C302B166F31001A11F1 /* AudioFeedback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioFeedback.swift; sourceTree = "<group>"; };
-		5E3929C32B08A5EE003A24E6 /* yolov5-Medium.mlmodel */ = {isa = PBXFileReference; lastKnownFileType = file.mlmodel; path = "yolov5-Medium.mlmodel"; sourceTree = "<group>"; };
 		5E3FB25E28ECEA8100281359 /* CheckBox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckBox.swift; sourceTree = "<group>"; };
 		5E3FB26028ECF03C00281359 /* Living Room.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = "Living Room.jpg"; sourceTree = "<group>"; };
 		5E3FB26228ED0A1900281359 /* Children.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = Children.png; sourceTree = "<group>"; };
@@ -117,12 +111,9 @@
 		5E3FB27728EE433F00281359 /* Wireframe_3D_Globe.usdz */ = {isa = PBXFileReference; lastKnownFileType = file.usdz; path = Wireframe_3D_Globe.usdz; sourceTree = "<group>"; };
 		5E3FB27C28EEC34500281359 /* RoomPlan.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = RoomPlan.framework; path = System/Library/Frameworks/RoomPlan.framework; sourceTree = SDKROOT; };
 		5E960A2A29E608BC004D66B2 /* logo.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = logo.png; sourceTree = "<group>"; };
-		5EB3993E2B70BACA0023BB6A /* BoundingBox.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; name = BoundingBox.swift; path = "RASSAR App/YOLOv4/BoundingBox.swift"; sourceTree = SOURCE_ROOT; };
-		5EB399402B70BADF0023BB6A /* YOLOResizer.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; name = YOLOResizer.swift; path = "RASSAR App/YOLOv4/YOLOResizer.swift"; sourceTree = SOURCE_ROOT; };
 		5EB83FB728C3FB3500263575 /* Rubrics_mini.json */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.json; path = Rubrics_mini.json; sourceTree = "<group>"; };
 		5EC42017294D4420004F4E88 /* PostHocViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PostHocViewController.swift; sourceTree = "<group>"; };
 		5EC420272974BD45004F4E88 /* MiniMapLayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiniMapLayer.swift; sourceTree = "<group>"; };
-		5EC4203729860004004F4E88 /* ObjectDetection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObjectDetection.swift; sourceTree = "<group>"; };
 		5EC420432988628A004F4E88 /* NodeTechnique.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = NodeTechnique.plist; sourceTree = "<group>"; };
 		5EC420442988628A004F4E88 /* NodeRender.metal */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.metal; path = NodeRender.metal; sourceTree = "<group>"; };
 		5ECAEEAC29B9B4EA00631F8D /* export.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = export.png; sourceTree = "<group>"; };
@@ -131,7 +122,6 @@
 		B10000000000000000000002 /* AppContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppContext.swift; sourceTree = "<group>"; };
 		B10000000000000000000003 /* RemoteAnalysisClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteAnalysisClient.swift; sourceTree = "<group>"; };
 		B10000000000000000000004 /* FrameContextStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameContextStore.swift; sourceTree = "<group>"; };
-		B10000000000000000000005 /* LocalVisionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalVisionService.swift; sourceTree = "<group>"; };
 		B10000000000000000000006 /* IssueDetailViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IssueDetailViewController.swift; sourceTree = "<group>"; };
 		B10000000000000000000007 /* ReportViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportViewController.swift; sourceTree = "<group>"; };
 		B10000000000000000000008 /* RoomCaptureCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomCaptureCoordinator.swift; sourceTree = "<group>"; };
@@ -195,7 +185,6 @@
 			children = (
 				C10000000000000000000001 /* AnjuGuard */,
 				C10000000000000000000002 /* Resources */,
-				5EC420332985FFB6004F4E88 /* YOLOv5 */,
 				5E3FB26A28ED58CF00281359 /* ARObjects */,
 				5E8502F128DFA3EB00FA3F01 /* UI */,
 				5EB83FBB28C3FBE600263575 /* AccessibilityIssue */,
@@ -284,17 +273,6 @@
 			path = AccessibilityIssue;
 			sourceTree = "<group>";
 		};
-		5EC420332985FFB6004F4E88 /* YOLOv5 */ = {
-			isa = PBXGroup;
-			children = (
-				5EB399402B70BADF0023BB6A /* YOLOResizer.swift */,
-				5E3929C32B08A5EE003A24E6 /* yolov5-Medium.mlmodel */,
-				5EB3993E2B70BACA0023BB6A /* BoundingBox.swift */,
-				5EC4203729860004004F4E88 /* ObjectDetection.swift */,
-			);
-			path = YOLOv5;
-			sourceTree = "<group>";
-		};
 		C10000000000000000000001 /* AnjuGuard */ = {
 			isa = PBXGroup;
 			children = (
@@ -302,7 +280,6 @@
 				B10000000000000000000002 /* AppContext.swift */,
 				B10000000000000000000003 /* RemoteAnalysisClient.swift */,
 				B10000000000000000000004 /* FrameContextStore.swift */,
-				B10000000000000000000005 /* LocalVisionService.swift */,
 				B10000000000000000000006 /* IssueDetailViewController.swift */,
 				B10000000000000000000007 /* ReportViewController.swift */,
 				B10000000000000000000008 /* RoomCaptureCoordinator.swift */,
@@ -481,7 +458,6 @@
 				A10000000000000000000002 /* AppContext.swift in Sources */,
 				A10000000000000000000003 /* RemoteAnalysisClient.swift in Sources */,
 				A10000000000000000000004 /* FrameContextStore.swift in Sources */,
-				A10000000000000000000005 /* LocalVisionService.swift in Sources */,
 				A10000000000000000000006 /* IssueDetailViewController.swift in Sources */,
 				A10000000000000000000007 /* ReportViewController.swift in Sources */,
 				A10000000000000000000008 /* RoomCaptureCoordinator.swift in Sources */,
@@ -492,10 +468,8 @@
 				A1000000000000000000000F /* IssueMiniMapView.swift in Sources */,
 				A10000000000000000000010 /* FrameQualityService.swift in Sources */,
 				5E1656EA289B8E13002577D3 /* NotifyingEntity.swift in Sources */,
-				5E3929C42B08A5EE003A24E6 /* yolov5-Medium.mlmodel in Sources */,
 				5E16572928AC62CE002577D3 /* RoomObjectClasses.swift in Sources */,
 				5EC420282974BD45004F4E88 /* MiniMapLayer.swift in Sources */,
-				5EC4203829860004004F4E88 /* ObjectDetection.swift in Sources */,
 				5E1656E52890A306002577D3 /* OnboardViewController.swift in Sources */,
 				5ECEE2DF29DCAE5E00DE46F8 /* IssueExtendedView.swift in Sources */,
 				5E1656D6287CE901002577D3 /* Filter.swift in Sources */,
@@ -506,9 +480,7 @@
 				5EC42018294D4420004F4E88 /* PostHocViewController.swift in Sources */,
 				5E2B2C312B166F31001A11F1 /* AudioFeedback.swift in Sources */,
 				5E1656D3287CE6AA002577D3 /* RoomObjectReplicator.swift in Sources */,
-				5EB3993F2B70BACA0023BB6A /* BoundingBox.swift in Sources */,
 				5E1656D4287CE6AA002577D3 /* RoomObjectSystem.swift in Sources */,
-				5EB399412B70BADF0023BB6A /* YOLOResizer.swift in Sources */,
 				5E1656D8287CE916002577D3 /* AccessibilityIssue.swift in Sources */,
 				5E1656E72891F8E8002577D3 /* Settings.swift in Sources */,
 				5E1656A7287CD8A2002577D3 /* Experience.rcproject in Sources */,
@@ -686,7 +658,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = SVRNMKJ8X4;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "长者友好家";
@@ -723,7 +695,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = SVRNMKJ8X4;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "长者友好家";

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import json
 import os
@@ -20,15 +21,6 @@ ALLOWED_INPUT_MODES = {"photo", "video_frame"}
 ALLOWED_MEDIA_SOURCES = {"photo", "video_frame", "h5_camera_frame", "ios_ar_frame"}
 ALLOWED_ORIENTATIONS = {"up", "right", "down", "left"}
 FAIR_ZONES = {"entrance", "main_aisle", "booth", "rest_area"}
-FAIR_RISK_RULES = {
-    "floor_clutter": {"severity": "high", "deduction": 16, "title": "通行区域有杂物"},
-    "cable_crossing": {"severity": "high", "deduction": 14, "title": "线缆横跨通道"},
-    "narrow_path": {"severity": "high", "deduction": 12, "title": "主要通道偏窄"},
-    "loose_rug": {"severity": "medium", "deduction": 10, "title": "临时铺设物可能绊脚"},
-    "unstable_support": {"severity": "medium", "deduction": 8, "title": "现场物体稳定性待确认"},
-    "low_lighting": {"severity": "medium", "deduction": 6, "title": "通行区域照明不足"},
-    "sharp_corner": {"severity": "low", "deduction": 5, "title": "人员动线附近有突出尖角"},
-}
 ALLOWED_ROOMS = {"bathroom", "bedroom", "living_room", "kitchen", "corridor", "balcony"}
 SUPPORTED_ROOMS = set(ALLOWED_ROOMS)
 ALLOWED_FEEDBACK = {"not_a_risk", "location_inaccurate", "photo_unclear", "already_resolved", "other", "confirmed"}
@@ -55,8 +47,13 @@ class AssessmentService:
         self._provider = provider
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="anju-assessment")
         self._camera_lock = threading.Lock()
+        self._provider_lock = threading.Lock()
         self._camera_inflight: set[str] = set()
         self._fair_inflight: set[str] = set()
+        self.turbo_max_concurrency = self._positive_int_env("ANJU_TURBO_MAX_CONCURRENCY", 2)
+        self.pro_max_concurrency = self._positive_int_env("ANJU_PRO_MAX_CONCURRENCY", 1)
+        self._turbo_slots = threading.BoundedSemaphore(self.turbo_max_concurrency)
+        self._pro_slots = threading.BoundedSemaphore(self.pro_max_concurrency)
         now = utc_now()
         self.repository.execute("UPDATE jobs SET status='failed', stage='interrupted', error='analysis_interrupted', updated_at=? WHERE status IN ('queued','running')", (now,))
 
@@ -168,7 +165,8 @@ class AssessmentService:
         path.write_bytes(body)
         media_input = {"media_id": media_id, "path": str(path), "mime_type": mime_type, "room_type": room["room_type"]}
         try:
-            quality, usage = self.provider().quality(assessment_id, media_input)
+            with self._model_slot("pro", assessment_id, room_id, "media_quality"):
+                quality, usage = self.provider().quality(assessment_id, media_input)
             quality = self._validate_quality(quality, room["room_type"])
             self.event(assessment_id, room_id, "ai_call_completed", {"skill_name": "media_quality", **usage})
         except ProviderError as error:
@@ -344,9 +342,44 @@ class AssessmentService:
         self.repository.insert("analytics_events", {"id": str(uuid.uuid4()), "assessment_id": assessment_id, "room_id": room_id, "event_name": name, "payload_json": json.dumps(safe_payload, ensure_ascii=False), "created_at": utc_now()})
 
     def provider(self) -> VisionProvider:
-        if self._provider is None:
-            self._provider = provider_from_environment()
+        with self._provider_lock:
+            if self._provider is None:
+                self._provider = provider_from_environment()
         return self._provider
+
+    @staticmethod
+    def _positive_int_env(name: str, default: int) -> int:
+        try:
+            value = int(os.environ.get(name, str(default)))
+        except ValueError:
+            return default
+        return value if value > 0 else default
+
+    @contextmanager
+    def _model_slot(self, lane: str, assessment_id: str, room_id: str | None, skill_name: str):
+        semaphore = self._turbo_slots if lane == "turbo" else self._pro_slots
+        limit = self.turbo_max_concurrency if lane == "turbo" else self.pro_max_concurrency
+        if lane == "turbo":
+            acquired = semaphore.acquire(blocking=False)
+            if not acquired:
+                self.event(assessment_id, room_id, "ai_call_rejected", {
+                    "skill_name": skill_name, "error_type": "provider_capacity_busy",
+                    "capacity_lane": lane, "capacity_limit": limit,
+                })
+                raise ProviderError("provider_capacity_busy", True)
+        else:
+            acquired = semaphore.acquire(blocking=False)
+            if not acquired:
+                self.event(assessment_id, room_id, "ai_call_queued", {
+                    "skill_name": skill_name, "capacity_lane": lane, "capacity_limit": limit,
+                })
+                semaphore.acquire()
+                acquired = True
+        try:
+            yield
+        finally:
+            if acquired:
+                semaphore.release()
 
     def inspect_camera_frame(self, assessment_id: str, body: bytes, mime_type: str, width: int, height: int, payload: dict) -> dict:
         if os.environ.get("ANJU_ENABLE_H5_CAMERA", "0") != "1":
@@ -372,15 +405,34 @@ class AssessmentService:
         try:
             assessment = self.repository.fetchone("SELECT profile_json FROM assessments WHERE id=?", (assessment_id,))
             profile = json.loads(assessment["profile_json"] or "{}") if assessment else {}
-            allowed = [code for code, rule in self.rules.risk_rules.items() if room_type in rule["room_types"]]
+            camera_rules = self.rules.live_camera_rules_for("h5_home")
+            rule_catalog = {item["risk_code"]: item for item in camera_rules}
             media = {"media_id": frame_id, "path": str(temporary), "mime_type": mime_type, "room_type": room_type}
-            response, usage = self.provider().inspect_camera(
-                assessment_id, room_type, media, allowed,
-                {key: profile.get(key) for key in ("mobility", "fall_history", "living_status") if profile.get(key)},
-                [str(item)[:80] for item in payload.get("previous_summary", []) if isinstance(item, str)][:5],
-            )
-            suggestions = self._validate_camera_response(response, frame_id, set(allowed))
-            self.event(assessment_id, None, "ai_call_completed", {"skill_name": "camera_inspection", **usage})
+            with self._model_slot("turbo", assessment_id, None, "camera_inspection"):
+                response, usage = self.provider().inspect_camera(
+                    assessment_id, room_type, media, camera_rules,
+                    {key: profile.get(key) for key in ("mobility", "fall_history", "living_status") if profile.get(key)},
+                    [str(item)[:80] for item in payload.get("previous_summary", []) if isinstance(item, str)][:5],
+                )
+            suggestions = self._validate_camera_response(response, frame_id, rule_catalog)
+            raw_suggestions = response.get("suggestions", []) if isinstance(response, dict) else []
+            raw_count = len(raw_suggestions) if isinstance(raw_suggestions, list) else 0
+            raw_region_count = sum(
+                1 for item in raw_suggestions[:5]
+                if isinstance(item, dict) and item.get("region") is not None
+            ) if isinstance(raw_suggestions, list) else 0
+            validated_region_count = sum(1 for item in suggestions if item.get("region") is not None)
+            self.event(assessment_id, None, "ai_call_completed", {
+                "skill_name": "camera_inspection", **usage,
+                "quality_usable": bool(response.get("quality_usable")),
+                "candidate_count_raw": raw_count,
+                "candidate_count_validated": len(suggestions),
+                "candidate_count_rejected": max(0, raw_count - len(suggestions)),
+                "candidate_count_region_raw": raw_region_count,
+                "candidate_count_region_validated": validated_region_count,
+                "candidate_count_region_rejected": max(0, raw_region_count - validated_region_count),
+                "camera_rule_version": self.rules.live_camera_rule_version,
+            })
             return {
                 "frame_id": frame_id, "temporary": True, "quality_usable": bool(response.get("quality_usable")),
                 "scene_elements": [
@@ -388,7 +440,8 @@ class AssessmentService:
                     if item in {element["id"] for element in self.rules.coverage_document["rooms"][room_type]["elements"]}
                 ],
                 "suggestions": suggestions, "save_as_evidence_recommended": bool(response.get("save_as_evidence_recommended") and suggestions),
-                "prompt_version": usage.get("prompt_version", "anju_h5_camera_adaptive_v1"),
+                "prompt_version": usage.get("prompt_version", "anju_h5_camera_discovery_v3"),
+                "rule_version": self.rules.live_camera_rule_version,
             }
         except ProviderError as error:
             self.event(assessment_id, None, "ai_call_failed", {"skill_name": "camera_inspection", "error_type": error.code})
@@ -429,15 +482,37 @@ class AssessmentService:
         path.write_bytes(body)
         try:
             media = {"media_id": frame_id, "path": str(path), "mime_type": mime_type, "zone_id": zone_id}
-            response, usage = self.provider().fair_turbo(scan_id, zone_id, media, list(FAIR_RISK_RULES))
-            candidates = self._validate_fair_turbo(response, frame_id, zone_id)
+            camera_rules = self.rules.fair_rules_for(zone_id)
+            rule_catalog = {item["risk_code"]: item for item in camera_rules}
+            with self._model_slot("pro", scan_id, None, "fair_pro_analysis"):
+                response, usage = self.provider().fair_analyze(scan_id, zone_id, media, camera_rules)
+            candidates = self._validate_fair_candidates(response, frame_id, zone_id, rule_catalog)
+            raw_candidates = response.get("candidates", []) if isinstance(response, dict) else []
+            raw_count = len(raw_candidates) if isinstance(raw_candidates, list) else 0
             self.repository.insert("fair_frames", {
                 "id": frame_id, "scan_id": scan_id, "zone_id": zone_id, "path": str(path), "mime_type": mime_type,
                 "width": width, "height": height, "orientation": orientation, "candidates_json": json.dumps(candidates, ensure_ascii=False), "created_at": utc_now(),
             })
             self._prune_fair_frames(scan_id, zone_id)
-            self.event(scan_id, None, "ai_call_completed", {"skill_name": "fair_turbo", "zone_id": zone_id, **usage})
-            return {"frame_id": frame_id, "zone_id": zone_id, "candidates": candidates, "temporary": True, "prompt_version": usage.get("prompt_version", "anju_ios_fair_turbo_v1")}
+            self.event(scan_id, None, "ai_call_completed", {
+                "skill_name": "fair_pro_analysis", "zone_id": zone_id, **usage,
+                "candidate_count_raw": raw_count,
+                "candidate_count_validated": len(candidates),
+                "candidate_count_rejected": max(0, raw_count - len(candidates)),
+                "camera_rule_version": self.rules.fair_rule_version,
+            })
+            return {
+                "frame_id": frame_id, "zone_id": zone_id, "candidates": candidates, "temporary": True,
+                "prompt_version": usage.get("prompt_version", "anju_ios_fair_pro_direct_v2"),
+                "rule_version": self.rules.fair_rule_version,
+            }
+        except ProviderError as error:
+            self.event(scan_id, None, "ai_call_failed", {
+                "skill_name": "fair_pro_analysis", "zone_id": zone_id, "error_type": error.code,
+            })
+            if not self.repository.fetchone("SELECT id FROM fair_frames WHERE id=?", (frame_id,)):
+                path.unlink(missing_ok=True)
+            raise
         except Exception:
             if not self.repository.fetchone("SELECT id FROM fair_frames WHERE id=?", (frame_id,)):
                 path.unlink(missing_ok=True)
@@ -446,123 +521,174 @@ class AssessmentService:
             with self._camera_lock:
                 self._fair_inflight.discard(scan_id)
 
-    def review_fair_zone(self, scan_id: str, zone_id: str) -> dict:
+    def finalize_fair_zone(self, scan_id: str, zone_id: str) -> dict:
         if zone_id not in FAIR_ZONES:
             raise AssessmentError("invalid_fair_zone")
         rows = self.repository.fetchall("SELECT * FROM fair_frames WHERE scan_id=? AND zone_id=? ORDER BY created_at", (scan_id, zone_id))
-        media = [{"media_id": row["id"], "path": row["path"], "mime_type": row["mime_type"]} for row in rows if Path(row["path"]).is_file()]
-        candidates = [item for row in rows for item in json.loads(row["candidates_json"])]
-        if not candidates or not media:
-            result = {"zone_id": zone_id, "score": 100, "coverage_limited": True, "risks": [], "prompt_version": "anju_ios_fair_review_pro_v1"}
+        candidates = [
+            {**item, "captured_at": row["created_at"]}
+            for row in rows for item in json.loads(row["candidates_json"])
+        ]
+        if not candidates:
+            result = {
+                "zone_id": zone_id, "status": "reviewed", "score": 100,
+                "coverage_limited": len(rows) < 2, "risks": [],
+                "prompt_version": "anju_ios_fair_pro_direct_v2",
+                "rule_version": self.rules.fair_rule_version,
+            }
         else:
-            try:
-                response, usage = self.provider().fair_review(scan_id, zone_id, media, candidates, list(FAIR_RISK_RULES))
-                reviews = self._validate_fair_reviews(response, zone_id, candidates)
-                review_status = "reviewed"
-                prompt_version = usage.get("prompt_version", "anju_ios_fair_review_pro_v1")
-                self.event(scan_id, None, "ai_call_completed", {"skill_name": "fair_pro_review", "zone_id": zone_id, **usage})
-            except ProviderError as error:
-                reviews = [{
-                    "candidate_id": item["candidate_id"], "status": "manual_check", "risk_code": item["risk_code"],
-                    "evidence": item["evidence"], "bbox": item["bbox"], "merged_into_candidate_id": None,
-                } for item in candidates]
-                review_status = "review_failed"
-                prompt_version = "anju_ios_fair_review_pro_v1"
-                self.event(scan_id, None, "ai_call_failed", {"skill_name": "fair_pro_review", "zone_id": zone_id, "error_type": error.code})
+            reviews = self._direct_fair_reviews(candidates)
             risks = self._fair_formal_risks(reviews, candidates)
             deductions: dict[str, int] = {}
             for risk in risks:
-                deductions[risk["risk_code"]] = min(FAIR_RISK_RULES[risk["risk_code"]]["deduction"] * 2, deductions.get(risk["risk_code"], 0) + FAIR_RISK_RULES[risk["risk_code"]]["deduction"])
-            result = {"zone_id": zone_id, "status": review_status, "score": max(0, 100 - sum(deductions.values())) if review_status == "reviewed" else None, "coverage_limited": len(media) < 2 or review_status != "reviewed", "risks": risks, "prompt_version": prompt_version}
+                if not risk["score_eligible"]:
+                    continue
+                rule = self.rules.fair_risk_rules[risk["risk_code"]]
+                cap = rule["deduction"] if risk["risk_code"] == "crowded_path" else rule["deduction"] * 2
+                deductions[risk["risk_code"]] = min(cap, deductions.get(risk["risk_code"], 0) + rule["deduction"])
+            result = {
+                "zone_id": zone_id, "status": "reviewed",
+                "score": max(0, 100 - sum(deductions.values())),
+                "coverage_limited": len(rows) < 2, "risks": risks,
+                "prompt_version": "anju_ios_fair_pro_direct_v2", "rule_version": self.rules.fair_rule_version,
+            }
         now = utc_now()
         self.repository.execute("DELETE FROM fair_zones WHERE scan_id=? AND zone_id=?", (scan_id, zone_id))
         self.repository.insert("fair_zones", {"id": str(uuid.uuid4()), "scan_id": scan_id, "zone_id": zone_id, "status": "reviewed", "result_json": json.dumps(result, ensure_ascii=False), "updated_at": now})
         self.repository.execute("UPDATE fair_scans SET updated_at=? WHERE id=?", (now, scan_id))
         return result
 
+    def review_fair_zone(self, scan_id: str, zone_id: str) -> dict:
+        """Compatibility alias for clients released before direct Pro analysis."""
+        return self.finalize_fair_zone(scan_id, zone_id)
+
     def fair_report(self, scan_id: str) -> dict:
         rows = self.repository.fetchall("SELECT * FROM fair_zones WHERE scan_id=? AND status='reviewed' ORDER BY zone_id", (scan_id,))
         zones = [json.loads(row["result_json"]) for row in rows]
         scores = [item["score"] for item in zones if isinstance(item.get("score"), int)]
-        selected_prices = [risk["solutions"][1] for zone in zones for risk in zone["risks"] if len(risk["solutions"]) > 1]
+        selected_prices = [
+            risk["solutions"][1] for zone in zones for risk in zone["risks"]
+            if risk.get("score_eligible") and len(risk["solutions"]) > 1
+        ]
+        review_failed = any(item.get("status") == "review_failed" for item in zones)
         report = {
-            "scan_id": scan_id, "status": "reviewed" if zones else "scanning",
-            "assessed_area_score": round(sum(scores) / len(scores)) if scores else None,
+            "scan_id": scan_id, "status": "partial_review_failed" if review_failed else ("reviewed" if zones else "scanning"),
+            "assessed_area_score": None if review_failed else (round(sum(scores) / len(scores)) if scores else None),
             "coverage_percent": round(len({item["zone_id"] for item in zones}) / len(FAIR_ZONES) * 100),
             "zones": zones,
             "budget": {"currency": "CNY", "total_min": sum(item["total_min"] for item in selected_prices), "total_max": sum(item["total_max"] for item in selected_prices)},
-            "prompt_version": "anju_ios_fair_review_pro_v1",
+            "prompt_version": "anju_ios_fair_pro_direct_v2",
+            "rule_version": self.rules.fair_rule_version,
             "disclaimer": "仅为游园会现场辅助筛查参考，不代表场馆验收或施工报价。",
         }
         self.repository.execute("UPDATE fair_scans SET status=?,result_json=?,updated_at=? WHERE id=?", (report["status"], json.dumps(report, ensure_ascii=False), utc_now(), scan_id))
         return report
 
-    def _validate_fair_turbo(self, value: dict, frame_id: str, zone_id: str) -> list[dict]:
+    def _validate_fair_candidates(self, value: dict, frame_id: str, zone_id: str, rule_catalog: dict[str, dict]) -> list[dict]:
         if not isinstance(value, dict) or value.get("frame_id") != frame_id or value.get("zone_id") != zone_id or not isinstance(value.get("candidates"), list):
             raise ProviderError("provider_invalid_response")
         accepted = []
         for item in value["candidates"][:5]:
-            if not isinstance(item, dict) or item.get("risk_code") not in FAIR_RISK_RULES or not str(item.get("evidence", "")).strip():
+            if not isinstance(item, dict) or item.get("risk_code") not in rule_catalog or not str(item.get("evidence", "")).strip():
                 continue
             confidence, bbox = item.get("confidence"), item.get("bbox")
             if not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1 or not self._valid_xyxy(bbox):
                 continue
-            accepted.append({"candidate_id": str(uuid.uuid4()), "frame_id": frame_id, "zone_id": zone_id, "risk_code": item["risk_code"], "bbox": [float(number) for number in bbox], "evidence": str(item["evidence"])[:240], "confidence": float(confidence), "needs_manual_check": bool(item.get("needs_manual_check"))})
+            rule = rule_catalog[item["risk_code"]]
+            evidence_codes = item.get("evidence_codes")
+            allowed_evidence = set(rule["evidence_codes"])
+            normalized_evidence_codes = list(dict.fromkeys(
+                code for code in evidence_codes
+                if isinstance(evidence_codes, list) and isinstance(code, str) and code in allowed_evidence
+            )) if isinstance(evidence_codes, list) else []
+            evidence_complete = set(rule["required_evidence_codes"]).issubset(normalized_evidence_codes)
+            accepted.append({
+                "candidate_id": str(uuid.uuid4()), "frame_id": frame_id, "zone_id": zone_id,
+                "risk_code": item["risk_code"], "title": rule["title"], "short_advice": rule["short_advice"],
+                "bbox": [float(number) for number in bbox], "evidence": str(item["evidence"])[:240],
+                "evidence_codes": normalized_evidence_codes,
+                "evidence_complete": evidence_complete,
+                "confidence": float(confidence),
+                "needs_manual_check": bool(item.get("needs_manual_check")) or not evidence_complete,
+            })
         return accepted
 
-    def _validate_fair_reviews(self, value: dict, zone_id: str, candidates: list[dict]) -> list[dict]:
-        if not isinstance(value, dict) or value.get("zone_id") != zone_id or not isinstance(value.get("reviews"), list):
-            raise ProviderError("provider_invalid_response")
-        by_id = {item["candidate_id"]: item for item in candidates}
-        accepted = []
-        for item in value["reviews"]:
-            if not isinstance(item, dict) or item.get("candidate_id") not in by_id or item.get("risk_code") not in FAIR_RISK_RULES or item.get("status") not in {"confirmed", "rejected", "merged", "region_corrected", "manual_check"}:
-                continue
-            bbox = item.get("bbox")
-            if bbox is not None and not self._valid_xyxy(bbox):
-                continue
-            accepted.append({**item, "bbox": [float(number) for number in bbox] if bbox else None, "evidence": str(item.get("evidence") or by_id[item["candidate_id"]]["evidence"])[:240]})
-        reviewed_ids = {item["candidate_id"] for item in accepted}
+    def _direct_fair_reviews(self, candidates: list[dict]) -> list[dict]:
+        """Deterministically canonicalize direct Pro findings without another model call."""
+        grouped: dict[str, list[dict]] = {}
         for candidate in candidates:
-            if candidate["candidate_id"] not in reviewed_ids:
-                accepted.append({
-                    "candidate_id": candidate["candidate_id"], "status": "manual_check", "risk_code": candidate["risk_code"],
-                    "evidence": candidate["evidence"], "bbox": candidate["bbox"], "merged_into_candidate_id": None,
+            grouped.setdefault(candidate["risk_code"], []).append(candidate)
+        reviews: list[dict] = []
+        for group in grouped.values():
+            canonical = next((item for item in group if item.get("evidence_complete") and not item.get("needs_manual_check")), group[0])
+            canonical_status = "confirmed" if canonical.get("evidence_complete") and not canonical.get("needs_manual_check") else "manual_check"
+            for candidate in group:
+                reviews.append({
+                    "candidate_id": candidate["candidate_id"],
+                    "status": canonical_status if candidate is canonical else "merged",
+                    "risk_code": candidate["risk_code"],
+                    "evidence": candidate["evidence"], "bbox": candidate["bbox"],
+                    "merged_into_candidate_id": None if candidate is canonical else canonical["candidate_id"],
                 })
-        return accepted
+        return reviews
 
     def _fair_formal_risks(self, reviews: list[dict], candidates: list[dict]) -> list[dict]:
         source = {item["candidate_id"]: item for item in candidates}
-        risks = []
+        merged_evidence: dict[str, list[str]] = {}
+        for review in reviews:
+            if review["status"] == "merged" and review.get("merged_into_candidate_id") in source:
+                merged_evidence.setdefault(review["merged_into_candidate_id"], []).append(source[review["candidate_id"]]["frame_id"])
+        risks: list[dict] = []
         for review in reviews:
             if review["status"] in {"rejected", "merged"}:
                 continue
             candidate = source[review["candidate_id"]]
-            rule = FAIR_RISK_RULES[review["risk_code"]]
+            rule = self.rules.fair_risk_rules[review["risk_code"]]
+            frame_ids = list(dict.fromkeys([candidate["frame_id"], *merged_evidence.get(review["candidate_id"], [])]))
+            evidence_complete = bool(candidate.get("evidence_complete", True))
+            score_eligible = review["status"] in {"confirmed", "region_corrected"} and evidence_complete
+            status = review["status"] if evidence_complete else "manual_check"
             risks.append({
                 "candidate_id": review["candidate_id"], "frame_id": candidate["frame_id"], "risk_code": review["risk_code"],
-                "status": review["status"], "severity": rule["severity"], "title": rule["title"], "evidence": review["evidence"],
-                "bbox": review.get("bbox") or candidate["bbox"], "solutions": self._fair_solutions(review["risk_code"]),
+                "status": status, "severity": rule["severity"], "title": rule["title"], "evidence": review["evidence"],
+                "short_advice": rule["short_advice"], "bbox": review.get("bbox") or candidate["bbox"],
+                "solutions": self.rules.fair_solutions_for(review["risk_code"]),
+                "evidence_frame_ids": frame_ids, "rule_version": self.rules.fair_rule_version,
+                "score_eligible": score_eligible,
             })
-        return risks
+        return self._normalize_crowded_path(risks, source)
+
+    def _normalize_crowded_path(self, risks: list[dict], candidates: dict[str, dict]) -> list[dict]:
+        crowded = [item for item in risks if item["risk_code"] == "crowded_path"]
+        if not crowded:
+            return risks
+        others = [item for item in risks if item["risk_code"] != "crowded_path"]
+        confirmed = [item for item in crowded if item["score_eligible"]]
+        captured: list[tuple[datetime, str]] = []
+        eligible_frame_ids = {
+            frame_id for item in confirmed for frame_id in item.get("evidence_frame_ids", [item["frame_id"]])
+        }
+        for candidate in candidates.values():
+            if candidate.get("risk_code") != "crowded_path" or candidate.get("frame_id") not in eligible_frame_ids:
+                continue
+            raw = candidate.get("captured_at")
+            try:
+                captured.append((datetime.fromisoformat(str(raw).replace("Z", "+00:00")), candidate["frame_id"]))
+            except (TypeError, ValueError):
+                continue
+        captured.sort(key=lambda item: item[0])
+        sustained = any((later[0] - earlier[0]).total_seconds() >= 3 for index, earlier in enumerate(captured) for later in captured[index + 1:])
+        canonical = confirmed[0] if confirmed else crowded[0]
+        canonical["evidence_frame_ids"] = list(dict.fromkeys(frame_id for _, frame_id in captured)) or canonical["evidence_frame_ids"]
+        canonical["score_eligible"] = sustained
+        if not sustained:
+            canonical["status"] = "manual_check"
+            canonical["severity"] = self.rules.fair_risk_rules["crowded_path"]["severity"]
+        return [*others, canonical]
 
     @staticmethod
     def _valid_xyxy(value: object) -> bool:
         return isinstance(value, list) and len(value) == 4 and all(isinstance(item, (int, float)) and 0 <= item <= 1 for item in value) and value[0] < value[2] and value[1] < value[3]
-
-    @staticmethod
-    def _fair_solutions(risk_code: str) -> list[dict]:
-        titles = {
-            "floor_clutter": ("立即移出通道", "设置现场收纳边界", "调整展位与通道布局"),
-            "cable_crossing": ("临时固定并醒目标识", "加装过线板", "重新规划供电走线"),
-            "narrow_path": ("立即移开占道物", "调整桌椅和排队线", "重新划分主通道"),
-            "loose_rug": ("移除或固定四角", "更换防滑临时地垫", "专业处理地面衔接"),
-            "unstable_support": ("暂停使用并隔离", "加固现场物体", "由专业人员复核安装"),
-            "low_lighting": ("增加临时照明", "补充连续引导灯", "重新设计区域照明"),
-            "sharp_corner": ("加装软质防撞条", "调整物体避开动线", "更换或改造突出构件"),
-        }[risk_code]
-        prices = ((0, 80), (80, 500), (500, 3000))
-        return [{"tier": tier, "title": title, "total_min": price[0], "total_max": price[1]} for tier, title, price in zip(("A", "B", "C"), titles, prices)]
 
     def _prune_fair_frames(self, scan_id: str, zone_id: str) -> None:
         rows = self.repository.fetchall("SELECT id,path FROM fair_frames WHERE scan_id=? AND zone_id=? ORDER BY created_at DESC", (scan_id, zone_id))
@@ -570,12 +696,12 @@ class AssessmentService:
             Path(row["path"]).unlink(missing_ok=True)
             self.repository.execute("DELETE FROM fair_frames WHERE id=?", (row["id"],))
 
-    def _validate_camera_response(self, value: dict, frame_id: str, allowed_risks: set[str]) -> list[dict]:
+    def _validate_camera_response(self, value: dict, frame_id: str, rule_catalog: dict[str, dict]) -> list[dict]:
         if not isinstance(value, dict) or value.get("media_id") != frame_id or not isinstance(value.get("suggestions"), list):
             raise ProviderError("provider_invalid_response")
         accepted: list[dict] = []
         for item in value["suggestions"][:5]:
-            if not isinstance(item, dict) or item.get("risk_code") not in allowed_risks or not str(item.get("evidence", "")).strip():
+            if not isinstance(item, dict) or item.get("risk_code") not in rule_catalog or not str(item.get("evidence", "")).strip():
                 continue
             confidence = item.get("confidence")
             if not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1:
@@ -585,8 +711,10 @@ class AssessmentService:
                 region = self._validate_region(region) if region else None
             except AssessmentError:
                 region = None
+            rule = rule_catalog[item["risk_code"]]
             accepted.append({
-                "suggestion_id": str(uuid.uuid4()), "risk_code": item["risk_code"], "title": str(item.get("title") or "待确认提示")[:40],
+                "suggestion_id": str(uuid.uuid4()), "risk_code": item["risk_code"], "title": rule["title"],
+                "short_advice": rule["short_advice"],
                 "evidence": str(item["evidence"])[:240], "confidence": float(confidence), "needs_manual_check": bool(item.get("needs_manual_check")),
                 "possible_repeat": bool(item.get("possible_repeat")), "region": region, "temporary": True,
                 "save_as_evidence_recommended": True,
@@ -600,7 +728,8 @@ class AssessmentService:
             media = [item for item in self._media(room_id) if item["quality"].get("usable")]
             allowed = [code for code, rule in self.rules.risk_rules.items() if room["room_type"] in rule["room_types"]]
             self._job(job_id, "running", "risks_detecting")
-            response, usage = self.provider().analyze(assessment_id, room["room_type"], media, allowed)
+            with self._model_slot("pro", assessment_id, room_id, "risk_analysis"):
+                response, usage = self.provider().analyze(assessment_id, room["room_type"], media, allowed)
             self._job(job_id, "running", "regions_grounded")
             candidates = self._validate_analysis(response, {item["media_id"] for item in media}, set(allowed))
             now = utc_now()

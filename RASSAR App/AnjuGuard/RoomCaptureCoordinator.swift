@@ -10,7 +10,7 @@ protocol RoomCaptureCoordinatorDelegate: AnyObject {
 
 final class RoomCaptureCoordinator: NSObject {
     weak var delegate: RoomCaptureCoordinatorDelegate?
-    let session = RoomCaptureSession()
+    private(set) var session = RoomCaptureSession()
     private(set) var isRunning = false
     private var hasStarted = false
     private var isFinishing = false
@@ -43,37 +43,71 @@ final class RoomCaptureCoordinator: NSObject {
         isRunning = false
         session.arSession.pause()
     }
+
+    /// A completed scan never resumes. Detach RoomPlan and ARKit delegates and
+    /// replace the capture session so the captured-room graph can be released
+    /// while the server deterministically finalizes the direct Pro findings.
+    func releaseResourcesAfterScan() {
+        session.arSession.pause()
+        session.arSession.delegate = nil
+        session.delegate = nil
+        session = RoomCaptureSession()
+        isRunning = false
+        hasStarted = false
+        isFinishing = false
+    }
 }
 
 extension RoomCaptureCoordinator: RoomCaptureSessionDelegate {
     func captureSession(_ session: RoomCaptureSession, didAdd room: CapturedRoom) {
-        delegate?.roomCaptureCoordinator(self, didUpdate: room)
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.delegate?.roomCaptureCoordinator(self, didUpdate: room)
+        }
     }
 
     func captureSession(_ session: RoomCaptureSession, didChange room: CapturedRoom) {
-        delegate?.roomCaptureCoordinator(self, didUpdate: room)
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.delegate?.roomCaptureCoordinator(self, didUpdate: room)
+        }
     }
 
     func captureSession(_ session: RoomCaptureSession, didUpdate room: CapturedRoom) {
-        delegate?.roomCaptureCoordinator(self, didUpdate: room)
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.delegate?.roomCaptureCoordinator(self, didUpdate: room)
+        }
     }
 
     func captureSession(_ session: RoomCaptureSession, didRemove room: CapturedRoom) {
-        delegate?.roomCaptureCoordinator(self, didUpdate: room)
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.delegate?.roomCaptureCoordinator(self, didUpdate: room)
+        }
     }
 
     func captureSession(_ session: RoomCaptureSession, didStartWith configuration: RoomCaptureSession.Configuration) {
-        delegate?.roomCaptureCoordinatorDidStart(self)
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.delegate?.roomCaptureCoordinatorDidStart(self)
+        }
     }
 
     func captureSession(_ session: RoomCaptureSession, didEndWith data: CapturedRoomData, error: Error?) {
         isRunning = false
         hasStarted = false
         isFinishing = false
-        delegate?.roomCaptureCoordinator(self, didFinish: data, error: error)
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.delegate?.roomCaptureCoordinator(self, didFinish: data, error: error)
+        }
     }
 
     func captureSession(_ session: RoomCaptureSession, didProvide instruction: RoomCaptureSession.Instruction) {
-        delegate?.roomCaptureCoordinator(self, didProvide: instruction)
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.delegate?.roomCaptureCoordinator(self, didProvide: instruction)
+        }
     }
 }

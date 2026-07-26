@@ -39,6 +39,23 @@ public class RoomObjectReplicator{
     public func setView(view:ARView){
         arView=view
     }
+
+    /// The report is backed by AnjuCore issues, not these live RoomPlan/AR
+    /// objects. Clear the scan-only graph before waiting for remote review.
+    public func releaseResourcesAfterScan() {
+        trackedObjects.forEach { $0.notifier.removeFromParent() }
+        arView = nil
+        trackedObjectAnchors.removeAll(keepingCapacity: false)
+        trackedObjectAnchorsByIdentifier.removeAll(keepingCapacity: false)
+        inflightObjectAnchors.removeAll(keepingCapacity: false)
+        trackedSurfaceAnchors.removeAll(keepingCapacity: false)
+        trackedSurfaceAnchorsByIdentifier.removeAll(keepingCapacity: false)
+        inflightSurfaceAnchors.removeAll(keepingCapacity: false)
+        trackedObjects.removeAll(keepingCapacity: false)
+        trackedObjectsByIdentifier.removeAll(keepingCapacity: false)
+        detectedIssues.removeAll(keepingCapacity: false)
+        filter = nil
+    }
     public func anchor(objects: [CapturedRoom.Object],surfaces:[CapturedRoom.Surface] ,in session: RoomCaptureSession) {
         //TODO: still need to add OD objects in this flow. Also, remember to call this function when getting OD results.
         for object in objects {
@@ -425,4 +442,3 @@ extension RoomObjectReplicator:Encodable{
         try container.encode(detectedIssues,forKey: .accessibilityIssues)
     }
 }
-

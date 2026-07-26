@@ -246,6 +246,7 @@ export interface CameraSuggestion {
   suggestion_id: string;
   risk_code: string;
   title: string;
+  short_advice: string;
   evidence: string;
   confidence: number;
   needs_manual_check: boolean;
@@ -262,5 +263,6 @@ export interface CameraInspectionResult {
   scene_elements: string[];
   suggestions: CameraSuggestion[];
   save_as_evidence_recommended: boolean;
-  prompt_version: 'anju_h5_camera_adaptive_v1' | string;
+  prompt_version: 'anju_h5_camera_discovery_v3' | string;
+  rule_version?: string;
 }

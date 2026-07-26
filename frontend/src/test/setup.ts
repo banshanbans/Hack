@@ -13,6 +13,9 @@ class MemoryStorage implements Storage {
 Object.defineProperty(globalThis, 'localStorage', {configurable: true, value: new MemoryStorage()});
 Object.defineProperty(window, 'localStorage', {configurable: true, value: globalThis.localStorage});
 Object.defineProperty(window, 'scrollTo', {configurable: true, value: () => undefined});
+let objectUrlIndex = 0;
+Object.defineProperty(URL, 'createObjectURL', {configurable: true, value: () => `blob:anju-test-${++objectUrlIndex}`});
+Object.defineProperty(URL, 'revokeObjectURL', {configurable: true, value: () => undefined});
 Object.defineProperty(globalThis, 'ResizeObserver', {configurable: true, value: class {
   observe() {}
   unobserve() {}

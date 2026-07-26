@@ -47,6 +47,11 @@ public enum SafetyIssueType: String, Codable, CaseIterable, Sendable {
     case unstableSupport = "unstable_support"
     case highReachItem = "high_reach_item"
     case bedsideObstruction = "bedside_obstruction"
+    case wetFloor = "wet_floor"
+    case levelChange = "level_change"
+    case crowdedPath = "crowded_path"
+    case markedExitObstruction = "marked_exit_obstruction"
+    case lowHangingObstruction = "low_hanging_obstruction"
 }
 
 public struct NormalizedBoundingBox: Codable, Equatable, Sendable {

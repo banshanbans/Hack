@@ -12,20 +12,42 @@ import RealityKit
 import RoomPlan
 import PDFKit
 //import Speech
+
+private final class SingleRemoteRequestGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isInFlight = false
+
+    func begin() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !isInFlight else { return false }
+        isInFlight = true
+        return true
+    }
+
+    func end() {
+        lock.lock()
+        isInFlight = false
+        lock.unlock()
+    }
+}
+
 public class ViewController: UIViewController {
+    enum NoAIAction { case rescan, exit }
     
     @IBOutlet var arView: ARView!
     var appContext: AnjuAppContext!
+    var onNoAIAction: ((NoAIAction) -> Void)?
     private let captureCoordinator = RoomCaptureCoordinator()
     private let frameContextStore = FrameContextStore(capacity: 4)
     private var issueAnchorStore: IssueAnchorStore!
     private var issueOverlayCoordinator: IssueOverlayCoordinator!
     private let issueMiniMapView = IssueMiniMapView()
     private var remoteAnalysisTask: Task<Void, Never>?
+    private let remoteRequestGate = SingleRemoteRequestGate()
     private var lastRemoteAnalysisTime: TimeInterval = 0
     private var lastRemoteCameraTransform: Matrix4x4Codable?
     private let remoteMotionGate = CameraMotionGate()
-    private var lastQualityAnalysisTime: TimeInterval = 0
     private let frameQualityService = FrameQualityService()
     private let analysisQueue = DispatchQueue(label: "com.anjuguard.frame-analysis", qos: .utility)
     private let logger = Logger(subsystem: "com.anjuguard.app", category: "scan")
@@ -37,30 +59,12 @@ public class ViewController: UIViewController {
     private var isPaused = false
     private var wasScanningBeforeBackground = false
     private var finishFallbackWorkItem: DispatchWorkItem?
-    private var announcedIssueIDs: Set<UUID> = []
-    private var finalResults: CapturedRoom?
     var replicator = RoomObjectReplicator()
-    private var visionTimer: Timer?
     private var ruleTimer: Timer?
-    private var AnchorList=[ARAnchor]()
-    var ODResults: [VNObservation]=[VNObservation]();
-    private var requests = [VNRequest]()
-    private var detectionOverlay: CALayer! = nil
-    var bufferSize: CGSize = .zero
-    var rootLayer: CALayer! = nil
-    
-    var detector:ObjectDetection=ObjectDetection()
-    var boundingBoxes = [BoundingBox]()
-    var colors: [UIColor] = []
-    let maxBoundingBoxes = 10
     let ciContext = CIContext()
-    var resizedPixelBuffer: CVPixelBuffer?
-    var showBbox:Bool=false
     var minimap:MiniMapLayer?
-    var resizers:[YOLOResizer]=[YOLOResizer]()
     let roombuilder=RoomBuilder(options: [.beautifyObjects])
     var manager = FileManager.default
-    let screenSize: CGRect = UIScreen.main.bounds
     var extendedViewIsOut:Bool=false{
         didSet{
             if extendedViewIsOut{
@@ -71,8 +75,6 @@ public class ViewController: UIViewController {
             }
         }
     }
-    private var bboxOverlay: CALayer! = nil
-    
     var voiceSynthesizer:AVSpeechSynthesizer?
     var assistiveVoice:AVSpeechSynthesisVoice?
     //let speechRecognizer = SFSpeechRecognizer()
@@ -83,40 +85,32 @@ public class ViewController: UIViewController {
     var audioQueue = [AudioFeedback]()
     private let guidanceLabel = UILabel()
     private let zoneControl = UISegmentedControl(items: ["入口", "主通道", "展位", "休息"])
+    private let temporarySuggestionPanel = UIVisualEffectView(effect: UIBlurEffect(style: .systemChromeMaterialDark))
+    private let temporarySuggestionHeader = UILabel()
+    private let temporarySuggestionScrollView = UIScrollView()
+    private let temporarySuggestionStack = UIStackView()
+    private var temporarySuggestionCount = 0
     private var currentFairZone: VenueZone = .entrance
     
     public override func viewDidLoad() {
         super.viewDidLoad()
         if appContext == nil {
-            appContext = AnjuAppContext.makeDefault(profiles: ["older_adult"], roomType: "entrance")
+            appContext = AnjuAppContext.makeDefault(profiles: [], roomType: "entrance")
         }
         currentFairZone = VenueZone(rawValue: appContext.session.roomType ?? "") ?? .entrance
         Task { await appContext.remoteAnalysis.selectFairZone(currentFairZone) }
         Settings.instance.viewcontroller=self
-        Settings.instance.community = legacyCommunities(for: appContext.session.profiles)
         UIApplication.shared.isIdleTimerDisabled=true
         replicator.setView(view:arView)
         Settings.instance.setReplicator(rep: replicator)
-        showBbox=false
         captureCoordinator.delegate = self
         setupRoomCapture()
-        setupLayers()
         configureProductOverlay()
         issueAnchorStore = IssueAnchorStore(arView: arView)
         issueOverlayCoordinator = IssueOverlayCoordinator(containerView: arView)
         issueOverlayCoordinator.onIssueSelected = { [weak self] issue in
             self?.presentIssueDetail(issue)
         }
-        
-        setUpBoundingBoxes()
-        setUpCoreImage()
-        setUpYOLOResizers()
-        visionTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true, block: { [weak self] _ in
-            guard let self, self.isScanning else { return }
-            for resizer in self.resizers {
-                self.updateOD(resizer: resizer)
-            }
-        })
         
         //Add button for ending scanning process and export pdf report
         // STOP BUTTON
@@ -145,7 +139,7 @@ public class ViewController: UIViewController {
 //        self.arView.addSubview(stopButton)
         self.arView.isAccessibilityElement=true
         minimap=MiniMapLayer(replicator: replicator, session: captureCoordinator.session, radius: 82, center: CGPoint(x:view.bounds.midX,y:view.bounds.height-150))
-        rootLayer.addSublayer(minimap!)
+        view.layer.addSublayer(minimap!)
         if Settings.instance.BLVAssistance{
             voiceSynthesizer=AVSpeechSynthesizer()
             assistiveVoice=AVSpeechSynthesisVoice(language: "zh-CN")
@@ -200,13 +194,8 @@ public class ViewController: UIViewController {
         captureCoordinator.start()
     }
     private func setupRoomCapture() {
-        rootLayer=view.layer
-        bufferSize=CGSize(width: rootLayer.bounds.width, height: rootLayer.bounds.height)
-        
         ruleTimer = Timer.scheduledTimer(withTimeInterval: 0.75, repeats: true, block: { [weak self] _ in
             guard let self, self.isScanning else { return }
-            self.replicator.updateAccessibilityIssue(in:self.captureCoordinator.session)
-            self.synchronizeLegacyIssues()
             self.minimap?.update()
         })
     }
@@ -237,8 +226,8 @@ public class ViewController: UIViewController {
     }
 
     private func stopAnalysisWork(cancelRemote: Bool = true) {
-        visionTimer?.invalidate()
         ruleTimer?.invalidate()
+        ruleTimer = nil
         remoteAnalysisTask?.cancel()
         Task {
             if cancelRemote { await appContext.remoteAnalysis.cancelPending() }
@@ -246,240 +235,35 @@ public class ViewController: UIViewController {
         }
     }
 
-    private func legacyCommunities(for profiles: Set<String>) -> [Community] {
-        var result: [Community] = []
-        if !profiles.isDisjoint(with: ["older_adult", "night_walking"]) {
-            result.append(.elder)
+    @MainActor
+    private func releaseScanResourcesForReview() {
+        issueOverlayCoordinator?.removeAll()
+        issueAnchorStore?.removeAll()
+
+        arView.session.pause()
+        arView.session.delegate = nil
+        arView.scene.anchors.removeAll()
+        arView.session = ARSession()
+        ciContext.clearCaches()
+
+        minimap?.removeFromSuperlayer()
+        minimap = nil
+        audioQueue.removeAll(keepingCapacity: false)
+        voiceSynthesizer?.stopSpeaking(at: .immediate)
+        voiceSynthesizer = nil
+        assistiveVoice = nil
+
+        replicator.releaseResourcesAfterScan()
+        captureCoordinator.releaseResourcesAfterScan()
+        if Settings.instance.viewcontroller === self {
+            Settings.instance.viewcontroller = nil
         }
-        if !profiles.isDisjoint(with: ["limited_mobility", "mobility_aid"]) {
-            result.append(.wheelchair)
+        if Settings.instance.replicator === replicator {
+            Settings.instance.replicator = nil
         }
-        return result.isEmpty ? [.elder] : result
-    }
-    func setUpBoundingBoxes() {
-        for _ in 0 ..< maxBoundingBoxes {
-            boundingBoxes.append(BoundingBox())
-        }
-        
-        // Make colors for the bounding boxes. There is one color for each class,
-        // 20 classes in total.
-        for r: CGFloat in [0.1,0.2, 0.3,0.4,0.5, 0.6,0.7, 0.8,0.9, 1.0] {
-            for g: CGFloat in [0.3,0.5, 0.7,0.9] {
-                for b: CGFloat in [0.4,0.6 ,0.8] {
-                    let color = UIColor(red: r, green: g, blue: b, alpha: 1)
-                    colors.append(color)
-                }
-            }
-        }
-        DispatchQueue.main.async {
-            let boxes = self.boundingBoxes
-            guard let videoLayer  = self.bboxOverlay else {return}
-            for box in boxes {
-                box.addToLayer(videoLayer)
-            }
-        }
-    }
-    
-    func setUpCoreImage() {
-        let status = CVPixelBufferCreate(nil, Settings.instance.yoloInputWidth, Settings.instance.yoloInputHeight,
-                                         kCVPixelFormatType_32BGRA, nil,
-                                         &resizedPixelBuffer)
-        if status != kCVReturnSuccess {
-            print("Error: could not create resized pixel buffer", status)
-        }
-    }
-    func setupLayers() {
-        detectionOverlay = CALayer() // container layer that has all the renderings of the observations
-        detectionOverlay.name = "DetectionOverlay"
-        detectionOverlay.bounds = CGRect(x: 0.0,
-                                         y: 0.0,
-                                         width: 0,
-                                         height: 0)
-        detectionOverlay.position = CGPoint(x: 0, y: 0)
-        rootLayer.addSublayer(detectionOverlay)
-        
-        bboxOverlay = CALayer() // container layer that has all the renderings of the observations
-        bboxOverlay.name = "BoundingBoxOverlay"
-        bboxOverlay.bounds = CGRect(x: 0.0,
-                                         y: 0.0,
-                                         width: 0,
-                                         height: 0)
-        bboxOverlay.position = CGPoint(x: 0, y: 0)
-        rootLayer.addSublayer(bboxOverlay)
-    }
-    func setUpYOLOResizers(){
-        //Firstly, we have a null resizer that does nothing.
-        //TODO: First test the resized one, then update the showing func to show both results
-        //resizers.append(YOLOResizer(fullBufferSize: CGSize(width:1440,height:1920), fullScreenSize: CGSize(width:428,height:926), croppingPosition: .middle, croppingRatio: 1))
-        
-        //Then add a middle part resizer
-        let middleResizer=YOLOResizer(fullBufferSize: CGSize(width:1440,height:1920), fullScreenSize: CGSize(width:screenSize.width,height:screenSize.height), croppedBufferSize: CGSize(width: 700, height: 700), croppingPosition: .middle, rotate: .up)
-        resizers.append(middleResizer)
-        rootLayer.addSublayer(middleResizer.getNotifyingFrame())
-    }
-    func updateOD(resizer:YOLOResizer){
-        //try to add od here
-        guard let currentFrame = captureCoordinator.currentFrame else {
-            return
-        }
-        let buffer = currentFrame.capturedImage
-        //visionRequest(buffer)
-        predict(pixelBuffer: buffer,resizer: resizer)
-    }
-    func predict(pixelBuffer: CVPixelBuffer,resizer:YOLOResizer) {
-        
-        // Measure how long it takes to predict a single video frame.
-        let startTime = CACurrentMediaTime()
-        let observations = detector.detectAndProcess(image: resizer.resizeImage(buffer: pixelBuffer))
-        let elapsed = CACurrentMediaTime() - startTime
-        let resizedBbox=resizer.resizeResults(initialResults:observations)
-        showOnMainThread(resizedBbox, elapsed)
-    }
-    
-    func showOnMainThread(_ boundingBoxes: [Prediction], _ elapsed: CFTimeInterval) {
-        DispatchQueue.main.async { [weak self] in
-            // For debugging, to make sure the resized CVPixelBuffer is correct.
-            //var debugImage: CGImage?
-            //VTCreateCGImageFromCVPixelBuffer(resizedPixelBuffer, nil, &debugImage)
-            //self.debugImageView.image = UIImage(cgImage: debugImage!)
-            
-            self?.show(predictions: boundingBoxes)
-        }
-    }
-    
-    func show(predictions: [Prediction]){
-        //var centers:[CGPoint]=[CGPoint]()
-        
-        var ODAnchors=[DetectedObjectAnchor]()
-        for i in 0..<boundingBoxes.count {
-            if i < predictions.count {
-                let prediction = predictions[i]
-                
-                let rect = prediction.rect
-                // Show the bounding box.
-                let label = String(format: "%@ %.1f", detector.names[prediction.classIndex], prediction.score)
-                let color = colors[prediction.classIndex]
-                if showBbox && !extendedViewIsOut{
-                    //print("showing result")
-                    //print(label)
-                    //print(rect.origin)
-                    //print(rect.size)
-                    boundingBoxes[i].show(frame: rect, label: label, color: color)
-                }
-                //Conduct raycast to find 3D pos of item
-                if Settings.instance.raycastEnabled == false{
-                    return
-                }
-                //let center=CGPoint(x: rect.origin.x/view.bounds.width, y: rect.origin.y/view.bounds.height)
-                let name = detector.names[prediction.classIndex]
-                let normalizedName = name.lowercased()
-                let sampleY = normalizedName.contains("rug") || normalizedName.contains("carpet")
-                    ? rect.maxY - rect.height * 0.12
-                    : rect.midY
-                let center = CGPoint(x: rect.midX, y: sampleY)
-                //let session=roomCaptureSession!.arSession
-//                let cameraTransform=roomCaptureView.captureSession.arSession.currentFrame?.camera.transform
-//                let cameraPosition = SIMD3(x: cameraTransform!.columns.3.x, y: cameraTransform!.columns.3.y, z: cameraTransform!.columns.3.z)
-//                let query=session.currentFrame?.raycastQuery(from: center, allowing: .estimatedPlane, alignment:.any)
-//                print(query?.origin)
-//                print(cameraPosition)
-                //Only cast for centered points
-                if view.bounds.insetBy(dx: 24, dy: 24).contains(center) {
-                    if let cast = preferredRaycast(from: center) {
-                        //print("A successful cast")
-                        let resultAnchor = ARAnchor(transform:  cast.worldTransform)
-                        let odAnchor=DetectedObjectAnchor(anchor: resultAnchor, rect:rect,cat: name, identifier: UUID.init())
-                        if odAnchor.category != nil{
-                            ODAnchors.append(odAnchor)
-                        }
-                        if normalizedName.contains("rug") || normalizedName.contains("carpet") {
-                            observeLocalRug(at: cast.worldTransform, confidence: prediction.score)
-                        }
-                        //replicator.addODAnchor(anchor:odAnchor)
-    //                    session.add(anchor: odAnchor)
-                        //let resultAnchor = AnchorEntity(world: cast.worldTransform)
-                        //resultAnchor.addChild(sphere(radius: 0.05, color: .lightGray))
-                        //arView.scene.addAnchor(resultAnchor)
-                    }
-                }
-                //centers.append(CGPoint(x: rect.origin.x, y: rect.origin.y))
-                
-            } else {
-                boundingBoxes[i].hide()
-            }
-        }
-        replicator.addODAnchor(anchors: ODAnchors)
+        Settings.instance.miniMap = nil
     }
 
-    private func preferredRaycast(from point: CGPoint) -> ARRaycastResult? {
-        if let result = arView.raycast(from: point, allowing: .existingPlaneGeometry, alignment: .any).first {
-            return result
-        }
-        if let result = arView.raycast(from: point, allowing: .existingPlaneInfinite, alignment: .any).first {
-            return result
-        }
-        return arView.raycast(from: point, allowing: .estimatedPlane, alignment: .any).first
-    }
-
-    private func observeLocalRug(at transform: simd_float4x4, confidence: Float) {
-        let point = WorldPoint(
-            x: transform.columns.3.x,
-            y: transform.columns.3.y,
-            z: transform.columns.3.z
-        )
-        let candidate = IssueCandidate(
-            type: .looseRug,
-            observation: ProductCopy.rugNeedsCheckObservation,
-            needsManualCheck: true,
-            confidence: confidence,
-            source: .localVision,
-            evidence: .init(worldPoint: point),
-            worldTransform: LegacyIssueAdapter.translationMatrix(for: point)
-        )
-        guard let issue = appContext.detectionEngine.makeIssue(
-            from: candidate,
-            sessionID: appContext.session.id,
-            roomType: appContext.session.roomType,
-            profiles: appContext.session.profiles
-        ) else { return }
-        appContext.repository.observe(issue)
-    }
-    public override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?)
-    {
-        super.touchesBegan(touches, with: event)
-        if !extendedViewIsOut{
-            if let touch = touches.first{
-                let view = self.view!
-                let touchLocation = touch.location(in: view)
-                let locationInView = view.convert(touchLocation, to: nil)
-                //print(locationInView)
-                let transformedLocation=CGPoint(x: locationInView.x+35, y: locationInView.y+35)
-                if let sublayers = detectionOverlay.sublayers{
-                    for layer in sublayers{
-                        if layer.contains(transformedLocation){
-                            if layer is IssueLayer{
-                                let issueLayer = layer as! IssueLayer
-                                //This is where we used to add popping up layer. Now cancel this to use as cancel issue
-                                //rootLayer.addSublayer(issueLayer.getExtendedLayer())
-                                //let issueView=PopupView(issue: issueLayer.issue,controller:self)
-                                //self.view.addSubview(issueView)
-                                self.arView.addSubview(issueLayer.getExtendedView(parent: self))
-                                extendedViewIsOut=true
-                                //issueLayer.issue.cancel()
-                                //print("Trying to add another layer")
-                            }
-                        }
-                        else{
-                            //print("Layer doesn't contain click")
-                        }
-                    }
-                }
-            }
-        }
-        
-    }
-    
-    
 }
 
 private extension ViewController {
@@ -500,7 +284,7 @@ private extension ViewController {
         zoneControl.selectedSegmentTintColor = AnjuTheme.teal
         zoneControl.setTitleTextAttributes([.foregroundColor: UIColor.white], for: .selected)
         zoneControl.backgroundColor = UIColor.black.withAlphaComponent(0.58)
-        zoneControl.accessibilityLabel = "游园会扫描区域"
+        zoneControl.accessibilityLabel = "扫描区域"
         zoneControl.translatesAutoresizingMaskIntoConstraints = false
         zoneControl.addAction(UIAction { [weak self] action in
             guard let self, let control = action.sender as? UISegmentedControl,
@@ -534,6 +318,28 @@ private extension ViewController {
         issueMiniMapView.translatesAutoresizingMaskIntoConstraints = false
         arView.addSubview(issueMiniMapView)
 
+        temporarySuggestionPanel.layer.cornerRadius = 16
+        temporarySuggestionPanel.layer.masksToBounds = true
+        temporarySuggestionPanel.translatesAutoresizingMaskIntoConstraints = false
+        temporarySuggestionPanel.accessibilityLabel = "本次扫描的临时建议记录"
+        arView.addSubview(temporarySuggestionPanel)
+
+        temporarySuggestionHeader.text = "本次发现记录 · 0 条"
+        temporarySuggestionHeader.textColor = .white
+        temporarySuggestionHeader.font = .preferredFont(forTextStyle: .headline)
+        temporarySuggestionHeader.adjustsFontForContentSizeCategory = true
+        temporarySuggestionHeader.translatesAutoresizingMaskIntoConstraints = false
+        temporarySuggestionPanel.contentView.addSubview(temporarySuggestionHeader)
+
+        temporarySuggestionScrollView.translatesAutoresizingMaskIntoConstraints = false
+        temporarySuggestionScrollView.alwaysBounceVertical = true
+        temporarySuggestionPanel.contentView.addSubview(temporarySuggestionScrollView)
+
+        temporarySuggestionStack.axis = .vertical
+        temporarySuggestionStack.spacing = 8
+        temporarySuggestionStack.translatesAutoresizingMaskIntoConstraints = false
+        temporarySuggestionScrollView.addSubview(temporarySuggestionStack)
+
         NSLayoutConstraint.activate([
             guidanceLabel.topAnchor.constraint(equalTo: arView.safeAreaLayoutGuide.topAnchor, constant: 12),
             guidanceLabel.centerXAnchor.constraint(equalTo: arView.centerXAnchor),
@@ -550,11 +356,68 @@ private extension ViewController {
             finishButton.centerXAnchor.constraint(equalTo: arView.centerXAnchor),
             finishButton.bottomAnchor.constraint(equalTo: arView.safeAreaLayoutGuide.bottomAnchor, constant: -18),
             finishButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 180),
+            temporarySuggestionPanel.leadingAnchor.constraint(equalTo: arView.safeAreaLayoutGuide.leadingAnchor, constant: 14),
+            temporarySuggestionPanel.trailingAnchor.constraint(equalTo: arView.safeAreaLayoutGuide.trailingAnchor, constant: -14),
+            temporarySuggestionPanel.bottomAnchor.constraint(equalTo: finishButton.topAnchor, constant: -12),
+            temporarySuggestionPanel.heightAnchor.constraint(equalToConstant: 166),
+            temporarySuggestionHeader.topAnchor.constraint(equalTo: temporarySuggestionPanel.contentView.topAnchor, constant: 12),
+            temporarySuggestionHeader.leadingAnchor.constraint(equalTo: temporarySuggestionPanel.contentView.leadingAnchor, constant: 14),
+            temporarySuggestionHeader.trailingAnchor.constraint(equalTo: temporarySuggestionPanel.contentView.trailingAnchor, constant: -14),
+            temporarySuggestionScrollView.topAnchor.constraint(equalTo: temporarySuggestionHeader.bottomAnchor, constant: 8),
+            temporarySuggestionScrollView.leadingAnchor.constraint(equalTo: temporarySuggestionPanel.contentView.leadingAnchor),
+            temporarySuggestionScrollView.trailingAnchor.constraint(equalTo: temporarySuggestionPanel.contentView.trailingAnchor),
+            temporarySuggestionScrollView.bottomAnchor.constraint(equalTo: temporarySuggestionPanel.contentView.bottomAnchor, constant: -8),
+            temporarySuggestionStack.topAnchor.constraint(equalTo: temporarySuggestionScrollView.contentLayoutGuide.topAnchor),
+            temporarySuggestionStack.leadingAnchor.constraint(equalTo: temporarySuggestionScrollView.contentLayoutGuide.leadingAnchor, constant: 14),
+            temporarySuggestionStack.trailingAnchor.constraint(equalTo: temporarySuggestionScrollView.contentLayoutGuide.trailingAnchor, constant: -14),
+            temporarySuggestionStack.bottomAnchor.constraint(equalTo: temporarySuggestionScrollView.contentLayoutGuide.bottomAnchor),
+            temporarySuggestionStack.widthAnchor.constraint(equalTo: temporarySuggestionScrollView.frameLayoutGuide.widthAnchor, constant: -28),
             issueMiniMapView.leadingAnchor.constraint(equalTo: arView.safeAreaLayoutGuide.leadingAnchor, constant: 14),
-            issueMiniMapView.bottomAnchor.constraint(equalTo: finishButton.topAnchor, constant: -14),
+            issueMiniMapView.bottomAnchor.constraint(equalTo: temporarySuggestionPanel.topAnchor, constant: -12),
             issueMiniMapView.widthAnchor.constraint(equalToConstant: 132),
             issueMiniMapView.heightAnchor.constraint(equalToConstant: 132)
         ])
+    }
+
+    func recordTemporarySuggestion(_ candidate: IssueCandidate, zone: VenueZone) {
+        temporarySuggestionCount += 1
+        temporarySuggestionHeader.text = "本次发现记录 · \(temporarySuggestionCount) 条"
+
+        let title = UILabel()
+        title.text = "\(temporarySuggestionCount). \(candidate.title ?? ProductCopy.shortLabel(for: candidate.type))"
+        title.textColor = .white
+        title.font = .preferredFont(forTextStyle: .subheadline)
+        title.adjustsFontForContentSizeCategory = true
+        title.numberOfLines = 0
+
+        let advice = UILabel()
+        advice.text = candidate.recommendation ?? candidate.observation ?? "请现场确认"
+        advice.textColor = UIColor.white.withAlphaComponent(0.78)
+        advice.font = .preferredFont(forTextStyle: .caption1)
+        advice.adjustsFontForContentSizeCategory = true
+        advice.numberOfLines = 2
+
+        let row = UIStackView(arrangedSubviews: [title, advice])
+        row.axis = .vertical
+        row.spacing = 2
+        row.isLayoutMarginsRelativeArrangement = true
+        row.layoutMargins = .init(top: 7, left: 10, bottom: 7, right: 10)
+        row.backgroundColor = UIColor.black.withAlphaComponent(0.22)
+        row.layer.cornerRadius = 10
+        row.isAccessibilityElement = true
+        row.accessibilityLabel = "\(zoneDisplayName(zone))，\(title.text ?? "临时建议")，\(advice.text ?? "")"
+        temporarySuggestionStack.insertArrangedSubview(row, at: 0)
+        temporarySuggestionScrollView.setContentOffset(.zero, animated: true)
+        UIAccessibility.post(notification: .announcement, argument: candidate.recommendation ?? candidate.title)
+    }
+
+    func zoneDisplayName(_ zone: VenueZone) -> String {
+        switch zone {
+        case .entrance: "入口"
+        case .mainAisle: "主通道"
+        case .booth: "展位"
+        case .restArea: "休息区"
+        }
     }
 
     func requestFinishScan() {
@@ -595,21 +458,38 @@ private extension ViewController {
         isScanning = false
         finishFallbackWorkItem?.cancel()
         finishFallbackWorkItem = nil
-        synchronizeLegacyIssues()
-
         if let error {
             logger.error("Room capture ended with recoverable error: \(error.localizedDescription, privacy: .public)")
         }
-        let context = appContext!
+        guard let context = appContext else {
+            logger.fault("Scan completed without an application context")
+            guidanceLabel.text = ProductCopy.partialReport
+            guidanceLabel.accessibilityLabel = ProductCopy.partialReport
+            finishButton.configuration?.showsActivityIndicator = false
+            finishButton.configuration?.title = ProductCopy.partialReport
+            UIAccessibility.post(notification: .announcement, argument: ProductCopy.partialReport)
+            return
+        }
         let pendingAnalysis = remoteAnalysisTask
+        releaseScanResourcesForReview()
         Task { [weak self] in
             await pendingAnalysis?.value
             do {
-                if let reviewed = try await context.remoteAnalysis.completeFairScan() {
-                    await MainActor.run { context.applyFairReport(reviewed) }
+                switch try await context.remoteAnalysis.completeFairScan() {
+                case let .report(reviewed):
+                    do {
+                        try await MainActor.run { try context.applyFairReport(reviewed) }
+                    } catch {
+                        self?.logger.error("Fair report validation failed; keeping direct analysis candidates as manual checks")
+                        await MainActor.run { context.markFairReviewIncomplete() }
+                    }
+                case .noSuccessfulAnalysis:
+                    await MainActor.run { [weak self] in self?.presentNoAIResultActions() }
+                    return
                 }
             } catch {
-                self?.logger.notice("Pro review unavailable; report remains clearly partial")
+                self?.logger.notice("Report finalization unavailable; report remains clearly partial")
+                await MainActor.run { context.markFairReviewIncomplete() }
             }
             await MainActor.run { [weak self] in
                 guard let self else { return }
@@ -638,23 +518,19 @@ private extension ViewController {
         }
     }
 
-    func synchronizeLegacyIssues() {
-        for legacy in replicator.getAllIssuesToBePresented() where !legacy.cancelled {
-            guard let candidate = LegacyIssueAdapter.candidate(from: legacy),
-                  let issue = appContext.detectionEngine.makeIssue(
-                    from: candidate,
-                    sessionID: appContext.session.id,
-                    roomType: appContext.session.roomType,
-                    profiles: appContext.session.profiles
-                  ) else { continue }
-            if let stored = appContext.repository.observe(issue),
-               stored.severity == .high,
-               announcedIssueIDs.insert(stored.id).inserted,
-               Settings.instance.BLVAssistance {
-                speak(content: ProductCopy.shortLabel(for: stored.type))
-            }
-        }
-        issueAnchorStore?.synchronize(appContext.repository.issues)
+    private func presentNoAIResultActions() {
+        let alert = UIAlertController(
+            title: ProductCopy.fairAIIncompleteTitle,
+            message: ProductCopy.fairAIIncompleteMessage,
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: ProductCopy.rescan, style: .default) { [weak self] _ in
+            self?.onNoAIAction?(.rescan)
+        })
+        alert.addAction(UIAlertAction(title: ProductCopy.exitToHome, style: .cancel) { [weak self] _ in
+            self?.onNoAIAction?(.exit)
+        })
+        present(alert, animated: true)
     }
 
     func presentIssueDetail(_ issue: SafetyIssue) {
@@ -670,8 +546,7 @@ private extension ViewController {
     }
 
     func scheduleRemoteAnalysisIfNeeded(_ frame: ARFrame) {
-        guard case .normal = frame.camera.trackingState,
-              (frame.lightEstimate?.ambientIntensity ?? 1_000) >= 80 else { return }
+        guard case .normal = frame.camera.trackingState else { return }
         let transform = frame.camera.transform
         guard let currentTransform = Matrix4x4Codable(values: [
             transform.columns.0.x, transform.columns.0.y, transform.columns.0.z, transform.columns.0.w,
@@ -679,95 +554,94 @@ private extension ViewController {
             transform.columns.2.x, transform.columns.2.y, transform.columns.2.z, transform.columns.2.w,
             transform.columns.3.x, transform.columns.3.y, transform.columns.3.z, transform.columns.3.w
         ]), remoteMotionGate.hasMeaningfulChange(previous: lastRemoteCameraTransform, current: currentTransform) else { return }
-        guard appContext.remoteAnalysis.isEnabled,
+        guard let context = appContext,
+              context.remoteAnalysis.isEnabled,
               frame.timestamp - lastRemoteAnalysisTime >= 5,
-              remoteAnalysisTask == nil else { return }
+              remoteRequestGate.begin() else { return }
         lastRemoteAnalysisTime = frame.timestamp
         lastRemoteCameraTransform = currentTransform
         let frameID = UUID()
-        let remote = appContext.remoteAnalysis
+        let remote = context.remoteAnalysis
         let roomType = currentFairZone.rawValue
-        let profiles = appContext.session.profiles
-        let sessionID = appContext.session.id
-        let detectionEngine = appContext.detectionEngine
-        let repository = appContext.repository
         let store = frameContextStore
+        let requestGate = remoteRequestGate
         let sourceFrame = frame
 
-        analysisQueue.async { [weak self] in
-            guard let self,
-                  let stored = ARFrameContextBuilder.makeStoredContext(frame: sourceFrame, frameID: frameID),
-                  let jpeg = self.makeJPEG(from: sourceFrame.capturedImage) else {
-                DispatchQueue.main.async { [weak self] in self?.remoteAnalysisTask = nil }
+        let task = Task { @MainActor [weak self] in
+            guard let self else {
+                requestGate.end()
                 return
             }
-            let task = Task { [weak self] in
-                await store.insert(stored)
-                defer {
-                    Task { await store.remove(frameID: frameID) }
-                    Task { @MainActor [weak self] in self?.remoteAnalysisTask = nil }
+            defer {
+                requestGate.end()
+                self.remoteAnalysisTask = nil
+            }
+            let prepared: (StoredFrameContext, Data)? = await withCheckedContinuation { continuation in
+                self.analysisQueue.async { [weak self] in
+                    guard let self,
+                          self.frameQualityService.evaluate(pixelBuffer: sourceFrame.capturedImage).map(\.isUsable) == true,
+                          let stored = ARFrameContextBuilder.makeStoredContext(frame: sourceFrame, frameID: frameID),
+                          let jpeg = self.makeJPEG(from: sourceFrame.capturedImage) else {
+                        continuation.resume(returning: nil)
+                        return
+                    }
+                    continuation.resume(returning: (stored, jpeg))
                 }
-                do {
-                    let candidates = try await remote.analyze(frameID: frameID, jpegData: jpeg, roomType: roomType)
-                    let resolver = WorldPointResolver()
-                    for candidate in candidates {
-                        var evidence = candidate.evidence
-                        if let box = evidence.boundingBox,
-                           let depth = stored.depth,
+            }
+            guard !Task.isCancelled else { return }
+            guard let (stored, jpeg) = prepared else {
+                self.guidanceLabel.text = ProductCopy.cameraFrameUnusable
+                self.guidanceLabel.accessibilityLabel = ProductCopy.cameraFrameUnusable
+                return
+            }
+            await store.insert(stored)
+            defer { Task { await store.remove(frameID: frameID) } }
+            do {
+                let candidates = try await remote.analyze(frameID: frameID, jpegData: jpeg, roomType: roomType)
+                self.guidanceLabel.text = candidates.isEmpty
+                    ? ProductCopy.directAnalysisNoCandidate
+                    : ProductCopy.directAnalysisCandidatesFound(candidates.count)
+                let resolver = WorldPointResolver()
+                for candidate in candidates {
+                    let candidateZone = candidate.evidence.zoneID.flatMap(VenueZone.init(rawValue:)) ?? self.currentFairZone
+                    self.recordTemporarySuggestion(candidate, zone: candidateZone)
+                    var evidence = candidate.evidence
+                    if let box = evidence.boundingBox {
+                        if let depth = stored.depth,
                            let point = resolver.resolve(boundingBox: box, frame: stored.context, depth: depth) {
                             evidence.worldPoint = point
-                        }
-                        let enriched = IssueCandidate(
-                            type: candidate.type,
-                            title: candidate.title,
-                            observation: candidate.observation,
-                            recommendation: candidate.recommendation,
-                            needsManualCheck: candidate.needsManualCheck,
-                            confidence: candidate.confidence,
-                            source: candidate.source,
-                            evidence: evidence,
-                            worldTransform: evidence.worldPoint.flatMap(LegacyIssueAdapter.translationMatrix)
-                        )
-                        await MainActor.run {
-                            if let issue = detectionEngine.makeIssue(
-                                from: enriched,
-                                sessionID: sessionID,
-                                roomType: roomType,
-                                profiles: profiles
-                            ) {
-                                repository.observe(issue)
-                            }
+                        } else if let point = self.raycastWorldPoint(
+                            boundingBox: box,
+                            frameContext: stored.context,
+                            sourceFrame: sourceFrame
+                        ) {
+                            evidence.worldPoint = point
                         }
                     }
-                } catch is CancellationError {
-                    return
-                } catch {
-                    self?.logger.notice("Remote analysis unavailable; local scan continues")
+                    let enriched = IssueCandidate(
+                        type: candidate.type,
+                        title: candidate.title,
+                        observation: candidate.observation,
+                        recommendation: candidate.recommendation,
+                        needsManualCheck: candidate.needsManualCheck,
+                        confidence: candidate.confidence,
+                        source: candidate.source,
+                        evidence: evidence,
+                        worldTransform: evidence.worldPoint.flatMap(LegacyIssueAdapter.translationMatrix)
+                    )
+                    if context.observeFairDirectCandidate(enriched) != nil {
+                        self.issueAnchorStore.synchronize(context.repository.issues)
+                    }
                 }
-            }
-            DispatchQueue.main.async { [weak self] in self?.remoteAnalysisTask = task }
-        }
-    }
-
-    func scheduleQualityAnalysisIfNeeded(_ frame: ARFrame) {
-        guard frame.timestamp - lastQualityAnalysisTime >= 2 else { return }
-        lastQualityAnalysisTime = frame.timestamp
-        let frameID = UUID()
-        let pixelBuffer = frame.capturedImage
-        let quality = frameQualityService
-        guard let context = appContext else { return }
-        analysisQueue.async {
-            guard let candidate = quality.lowLightCandidate(pixelBuffer: pixelBuffer, frameID: frameID) else { return }
-            DispatchQueue.main.async {
-                guard let issue = context.detectionEngine.makeIssue(
-                        from: candidate,
-                        sessionID: context.session.id,
-                        roomType: context.session.roomType,
-                        profiles: context.session.profiles
-                      ) else { return }
-                context.repository.observe(issue)
+            } catch is CancellationError {
+                return
+            } catch {
+                self.logger.notice("Remote Pro frame analysis unavailable; frame was not accepted")
+                self.guidanceLabel.text = ProductCopy.remoteUnavailable
+                UIAccessibility.post(notification: .announcement, argument: ProductCopy.remoteUnavailable)
             }
         }
+        remoteAnalysisTask = task
     }
 
     func makeJPEG(from pixelBuffer: CVPixelBuffer) -> Data? {
@@ -776,6 +650,30 @@ private extension ViewController {
         let resized = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         guard let cgImage = ciContext.createCGImage(resized, from: resized.extent) else { return nil }
         return UIImage(cgImage: cgImage).jpegData(compressionQuality: 0.72)
+    }
+
+    func raycastWorldPoint(
+        boundingBox: NormalizedBoundingBox,
+        frameContext: CapturedFrameContext,
+        sourceFrame: ARFrame
+    ) -> WorldPoint? {
+        guard let capturedBox = frameContext.modelImageOrientation.capturedImageBox(from: boundingBox) else { return nil }
+        let normalizedPoint = CGPoint(
+            x: (capturedBox.xMin + capturedBox.xMax) * 0.5,
+            y: capturedBox.yMax
+        ).applying(sourceFrame.displayTransform(for: .portrait, viewportSize: arView.bounds.size))
+        let screenPoint = CGPoint(
+            x: normalizedPoint.x * arView.bounds.width,
+            y: normalizedPoint.y * arView.bounds.height
+        )
+        for target in [ARRaycastQuery.Target.existingPlaneGeometry, .estimatedPlane] {
+            if let result = arView.raycast(from: screenPoint, allowing: target, alignment: .any).first {
+                let position = result.worldTransform.columns.3
+                guard position.x.isFinite, position.y.isFinite, position.z.isFinite else { continue }
+                return WorldPoint(x: position.x, y: position.y, z: position.z)
+            }
+        }
+        return nil
     }
 }
 
@@ -849,7 +747,6 @@ extension ViewController: ARSessionDelegate {
         let camera = frame.camera
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            self.detectionOverlay.sublayers = nil
             let issues = self.appContext.repository.issues
             self.issueAnchorStore.synchronize(issues)
             self.issueOverlayCoordinator.update(
@@ -860,7 +757,6 @@ extension ViewController: ARSessionDelegate {
             self.issueMiniMapView.update(issues: issues, cameraTransform: camera.transform)
         }
         scheduleRemoteAnalysisIfNeeded(frame)
-        scheduleQualityAnalysisIfNeeded(frame)
 
         //Rotate the minimap with the real-time camera orientation
         let cameraTrans=session.currentFrame?.camera.eulerAngles

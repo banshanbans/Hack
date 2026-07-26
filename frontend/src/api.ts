@@ -1,4 +1,4 @@
-import {readSession, writeSession} from './store';
+import {readSession, SESSION_INVALIDATED_EVENT, writeSession} from './store';
 import type {
   AnalysisStatus,
   Assessment,
@@ -27,6 +27,10 @@ async function request<T>(path: string, options: RequestInit = {}, authenticated
     const error = new Error(data?.message || '网络请求没有完成') as Error & {code?: string; status?: number};
     error.code = data?.code || `http_${response.status}`;
     error.status = response.status;
+    if (authenticated && error.code === 'assessment_access_denied') {
+      writeSession(null);
+      window.dispatchEvent(new Event(SESSION_INVALIDATED_EVENT));
+    }
     throw error;
   }
   return data as T;
@@ -97,6 +101,9 @@ export function friendlyError(error: unknown): string {
     provider_timeout: '分析时间较长，请稍后重试',
     provider_invalid_response: '这次没有看清，请重新分析',
     provider_refusal: '这张照片暂时无法完成分析',
+    provider_http_429: '当前检查人数较多，请稍后重试',
+    provider_capacity_busy: '当前实时检查较多，正在等待下一次画面',
+    camera_request_in_progress: '上一张画面仍在检查，请稍候',
     room_rules_not_ready: '这个房间的完整规则仍在完善中',
     no_usable_media: '至少需要一张可以看清的照片',
     analysis_interrupted: '服务重启中断了分析，请重新开始',

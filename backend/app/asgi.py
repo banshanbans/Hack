@@ -7,16 +7,18 @@ import logging
 import mimetypes
 import os
 from typing import Any, AsyncIterator, Optional, TypeVar
+import uuid
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from starlette.concurrency import run_in_threadpool
 
 from .assessment_service import AssessmentError, AssessmentService
 from .environment import load_environment
-from .providers import VisionProvider
+from .providers import ProviderError, VisionProvider
 from .repositories import SQLiteRepository
 from .service import SessionService, demo_analysis, empty_analysis
 
@@ -54,6 +56,9 @@ ERROR_MESSAGES = {
     "provider_timeout": "分析时间较长，请稍后重试",
     "provider_invalid_response": "这次没有看清，请重新分析",
     "provider_refusal": "这张照片暂时无法完成分析",
+    "provider_http_429": "分析请求较多，请稍后重试",
+    "provider_capacity_busy": "当前实时分析较多，请稍后再试",
+    "provider_invalid_request": "分析请求配置不完整",
     "result_not_ready": "检查结果还没有准备好",
     "share_expired": "分享链接已失效",
     "invalid_region": "请重新圈选风险位置",
@@ -241,7 +246,9 @@ def create_app(
 
     @application.middleware("http")
     async def security_headers(request: Request, call_next):
+        request.state.request_id = uuid.uuid4().hex
         response = await call_next(request)
+        response.headers["X-Request-ID"] = request.state.request_id
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Content-Security-Policy"] = STRICT_CSP
@@ -250,15 +257,33 @@ def create_app(
         return response
 
     @application.exception_handler(AssessmentError)
-    async def assessment_error_handler(_request: Request, error: AssessmentError) -> JSONResponse:
+    async def assessment_error_handler(request: Request, error: AssessmentError) -> JSONResponse:
         message = ERROR_MESSAGES.get(error.code, "这次操作没有完成，请稍后重试")
         if error.code == "request_too_large":
             message = "照片太大，请压缩后重试"
-        return JSONResponse({"code": error.code, "message": message}, status_code=error.status)
+        return JSONResponse({"code": error.code, "message": message, "request_id": request.state.request_id}, status_code=error.status)
+
+    @application.exception_handler(ProviderError)
+    async def provider_error_handler(request: Request, error: ProviderError) -> JSONResponse:
+        status = 502
+        if error.code == "provider_timeout":
+            status = 504
+        elif error.code in {"provider_not_configured", "provider_http_429"} or error.code.startswith("provider_http_5"):
+            status = 503
+        elif error.code == "provider_capacity_busy":
+            status = 429
+        elif error.code in {"provider_refusal", "provider_invalid_request"}:
+            status = 422
+        LOGGER.warning("provider_call_failed code=%s request_id=%s", error.code, request.state.request_id)
+        return JSONResponse({
+            "code": error.code,
+            "message": ERROR_MESSAGES.get(error.code, "分析服务暂时不可用，请稍后重试"),
+            "request_id": request.state.request_id,
+        }, status_code=status)
 
     @application.exception_handler(RequestValidationError)
-    async def request_validation_handler(_request: Request, _error: RequestValidationError) -> JSONResponse:
-        return JSONResponse({"code": "invalid_request", "message": ERROR_MESSAGES["invalid_request"]}, status_code=400)
+    async def request_validation_handler(request: Request, _error: RequestValidationError) -> JSONResponse:
+        return JSONResponse({"code": "invalid_request", "message": ERROR_MESSAGES["invalid_request"], "request_id": request.state.request_id}, status_code=400)
 
     @application.get("/health")
     def health() -> dict[str, Any]:
@@ -332,22 +357,29 @@ def create_app(
     def create_fair_scan(request: Request) -> dict[str, Any]:
         return _service(request).create_fair_scan()
 
-    @application.post("/api/v2/fair-scans/{scan_id}/zones/{zone_id}/frames:turbo")
+    @application.post("/api/v2/fair-scans/{scan_id}/zones/{zone_id}/frames%3Aanalyze", include_in_schema=False)
+    @application.post("/api/v2/fair-scans/{scan_id}/zones/{zone_id}/frames:analyze")
+    @application.post("/api/v2/fair-scans/{scan_id}/zones/{zone_id}/frames%3Aturbo", include_in_schema=False)
+    @application.post("/api/v2/fair-scans/{scan_id}/zones/{zone_id}/frames:turbo", include_in_schema=False)
     async def analyze_fair_frame(scan_id: str, zone_id: str, request: Request) -> dict[str, Any]:
         _authorize_fair(request, scan_id)
         mime_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
         frame_id = request.headers.get("x-frame-id", "")
         orientation = request.headers.get("x-model-image-orientation", "right")
         body = await _read_limited_body(request)
-        return _service(request).analyze_fair_frame(
+        return await run_in_threadpool(
+            _service(request).analyze_fair_frame,
             scan_id, zone_id, frame_id, body, mime_type,
             _integer_header(request, "x-image-width"), _integer_header(request, "x-image-height"), orientation,
         )
 
-    @application.post("/api/v2/fair-scans/{scan_id}/zones/{zone_id}:review")
-    def review_fair_zone(scan_id: str, zone_id: str, request: Request) -> dict[str, Any]:
+    @application.post("/api/v2/fair-scans/{scan_id}/zones/{zone_id}%3Afinalize", include_in_schema=False)
+    @application.post("/api/v2/fair-scans/{scan_id}/zones/{zone_id}:finalize")
+    @application.post("/api/v2/fair-scans/{scan_id}/zones/{zone_id}%3Areview", include_in_schema=False)
+    @application.post("/api/v2/fair-scans/{scan_id}/zones/{zone_id}:review", include_in_schema=False)
+    async def review_fair_zone(scan_id: str, zone_id: str, request: Request) -> dict[str, Any]:
         _authorize_fair(request, scan_id)
-        return _service(request).review_fair_zone(scan_id, zone_id)
+        return await run_in_threadpool(_service(request).finalize_fair_zone, scan_id, zone_id)
 
     @application.get("/api/v2/fair-scans/{scan_id}/report")
     def fair_report(scan_id: str, request: Request) -> dict[str, Any]:
@@ -399,7 +431,9 @@ def create_app(
             "zone_id": request.headers.get("x-media-zone-id") or None,
         }
         body = await _read_limited_body(request)
-        return _service(request).upload_media(assessment_id, room_id, body, mime_type, width, height, metadata)
+        return await run_in_threadpool(
+            _service(request).upload_media, assessment_id, room_id, body, mime_type, width, height, metadata,
+        )
 
     @application.delete("/api/v2/assessments/{assessment_id}/rooms/{room_id}/media/{media_id}", status_code=204)
     def delete_media(assessment_id: str, room_id: str, media_id: str, request: Request) -> Response:
@@ -425,7 +459,10 @@ def create_app(
         except (ValidationError, ValueError) as error:
             raise AssessmentError("invalid_camera_frame") from error
         body = await _read_limited_body(request)
-        return _service(request).inspect_camera_frame(assessment_id, body, mime_type, width, height, context.model_dump())
+        return await run_in_threadpool(
+            _service(request).inspect_camera_frame,
+            assessment_id, body, mime_type, width, height, context.model_dump(),
+        )
 
     @application.post("/api/v2/assessments/{assessment_id}/rooms/{room_id}:analyze", status_code=202)
     def start_analysis(assessment_id: str, room_id: str, request: Request) -> dict[str, Any]:

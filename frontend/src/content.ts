@@ -4,14 +4,26 @@ export const PRODUCT_NAME = '长者友好家';
 
 export const CAMERA_COPY = {
   invitationTitle: '来游园会现场，解锁 iPhone AR 体验',
-  invitationBody: '网页相机会提供实时的结构化安全提示；现场 iPhone 版本还可结合空间定位呈现风险位置。网页端不会显示虚假的三维锚点。',
+  invitationBody: '网页相机会提供实时的结构化建议；现场 iPhone 版本还可结合空间定位呈现风险位置。',
   enter: '进入网页相机',
   privacy: '只有通过本地质量与场景变化检查的候选画面才会发送；离开页面后摄像头会立即关闭。',
+  reportTip: '实时相机为了保证流畅体验，完善的报告仍然建议通过上传家中照片体验。',
+  regionOverlayLabel: '最近分析画面的临时建议位置',
+  regionOverlayDescription: '标注仅对应最近一张已分析画面，不会固定在现实物体上。',
+  positionLeft: '左侧',
+  positionCenter: '中央',
+  positionRight: '右侧',
+  positionTop: '上方',
+  positionMiddle: '中部',
+  positionBottom: '下方',
+  regionItemLabel: (number: number, title: string, position: string, confidence: number, needsManualCheck: boolean) =>
+    `临时建议 ${number}，${title}，位于画面${position}，模型把握度 ${Math.round(confidence * 100)}%${needsManualCheck ? '，需要人工确认' : ''}`,
 };
 
 export const HOME_HERO_COPY = {
   rugCallout: '留意地毯边缘',
   handrailCallout: '建议增设扶手',
+  cameraEntry: '从视频画面开始检查',
 };
 
 export const ROOM_COPY: Record<RoomType, {name: string; icon: string; hint: string; supported: boolean; priority?: boolean}> = {

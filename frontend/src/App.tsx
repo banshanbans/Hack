@@ -5,6 +5,7 @@ import {CAMERA_COPY, DIFFICULTY_COPY, HOME_HERO_COPY, PRODUCT_NAME, ROOM_COPY, R
 import {useProtectedImage} from './hooks';
 import {normalizeImage} from './image';
 import {extractVideoFrames, hammingDistance, inspectPixels, type ExtractedVideoFrame} from './video';
+import LiveCameraOverlay, {type NumberedCameraSuggestion} from './LiveCameraOverlay';
 import RiskOverlay from './RiskOverlay';
 import {AppProvider, formatRange, useApp} from './store';
 import type {AnalysisStatus, Assessment, AssessmentReport, CameraSuggestion, ElderProfile, MediaAsset, RoomAssessment, RoomResult, RoomType, SafetyRisk, SolutionPackage} from './types';
@@ -174,6 +175,15 @@ function AppShell() {
   </div>;
 }
 
+function CameraIntroModal({close, enter}: {close: () => void; enter: () => void}) {
+  return <Modal title={CAMERA_COPY.invitationTitle} close={close}>
+    <p>{CAMERA_COPY.invitationBody}</p>
+    <p className="fine-print"><Icon name="privacy_tip" />{CAMERA_COPY.privacy}</p>
+    <p className="fine-print">{CAMERA_COPY.reportTip}</p>
+    <div className="button-stack"><button className="button primary full" onClick={enter}><Icon name="photo_camera" />{CAMERA_COPY.enter}</button><button className="button quiet full" onClick={close}>暂不进入</button></div>
+  </Modal>;
+}
+
 function PersistentTabBar({pathname}: {pathname: string}) {
   const navigate = useNavigate();
   const {session, capabilities} = useApp();
@@ -185,7 +195,7 @@ function PersistentTabBar({pathname}: {pathname: string}) {
     <button className={!myActive && !cameraActive ? 'active' : ''} aria-current={!myActive && !cameraActive ? 'page' : undefined} onClick={() => navigate(checkPath)}><Icon name="fact_check" filled={!myActive && !cameraActive} /><span>检查</span></button>
     {capabilities?.h5_camera !== false ? <button className={`camera-tab ${cameraActive ? 'active' : ''}`} aria-label="相机" aria-current={cameraActive ? 'page' : undefined} onClick={() => cameraActive ? undefined : setCameraIntroOpen(true)}><span className="camera-tab-icon"><img src="/assets/camera-tab.svg" alt="" /></span></button> : <button className="camera-tab" disabled aria-label="相机暂未开放"><span className="camera-tab-icon"><img src="/assets/camera-tab.svg" alt="" /></span></button>}
     <button className={myActive ? 'active' : ''} aria-current={myActive ? 'page' : undefined} onClick={() => !myActive && navigate('/my')}><Icon name="person" filled={myActive} /><span>我的</span></button>
-  </nav>{cameraIntroOpen && <Modal title={CAMERA_COPY.invitationTitle} close={() => setCameraIntroOpen(false)}><p>{CAMERA_COPY.invitationBody}</p><p className="fine-print"><Icon name="privacy_tip" />{CAMERA_COPY.privacy}</p><div className="button-stack"><button className="button primary full" onClick={() => { setCameraIntroOpen(false); navigate('/camera'); }}><Icon name="photo_camera" />{CAMERA_COPY.enter}</button><button className="button quiet full" onClick={() => setCameraIntroOpen(false)}>暂不进入</button></div></Modal>}</>;
+  </nav>{cameraIntroOpen && <CameraIntroModal close={() => setCameraIntroOpen(false)} enter={() => { setCameraIntroOpen(false); navigate('/camera'); }} />}</>;
 }
 
 function CameraPage() {
@@ -195,22 +205,65 @@ function CameraPage() {
   const streamRef = useRef<MediaStream | null>(null);
   const acceptedRef = useRef<{blob: Blob; width: number; height: number; sourceId: string; hash: string} | null>(null);
   const suggestionsRef = useRef<CameraSuggestion[]>([]);
-  const [roomType, setRoomType] = useState<RoomType>('bathroom');
+  const overlayTimerRef = useRef<number | null>(null);
+  const overlayPreviewUrlRef = useRef<string | null>(null);
+  const requestSequenceRef = useRef(0);
+  const roomType: RoomType = 'living_room';
   const [active, setActive] = useState(false);
   const [status, setStatus] = useState('相机尚未开启');
   const [suggestions, setSuggestions] = useState<CameraSuggestion[]>([]);
+  const [overlaySuggestion, setOverlaySuggestion] = useState<CameraSuggestion | null>(null);
+  const [overlayFrame, setOverlayFrame] = useState<{frameId: string; imageUrl: string; width: number; height: number; suggestions: NumberedCameraSuggestion[]} | null>(null);
+  const [mirrored, setMirrored] = useState(false);
   const [saving, setSaving] = useState(false);
+  const clearOverlay = useCallback(() => {
+    if (overlayTimerRef.current !== null) window.clearTimeout(overlayTimerRef.current);
+    overlayTimerRef.current = null;
+    if (overlayPreviewUrlRef.current) URL.revokeObjectURL(overlayPreviewUrlRef.current);
+    overlayPreviewUrlRef.current = null;
+    setOverlaySuggestion(null);
+    setOverlayFrame(null);
+  }, []);
+  const showOverlay = useCallback((items: CameraSuggestion[], frameId: string, blob: Blob, width: number, height: number, firstNumber: number) => {
+    const suggestion = [...items].sort((left, right) => Number(left.possible_repeat) - Number(right.possible_repeat) || right.confidence - left.confidence)[0];
+    if (!suggestion) return;
+    if (overlayTimerRef.current !== null) window.clearTimeout(overlayTimerRef.current);
+    if (overlayPreviewUrlRef.current) URL.revokeObjectURL(overlayPreviewUrlRef.current);
+    overlayPreviewUrlRef.current = null;
+    setOverlaySuggestion(suggestion);
+    const located = items.flatMap((item, index) => item.region ? [{suggestion: item, number: firstNumber + index}] : []);
+    if (located.length) {
+      const imageUrl = URL.createObjectURL(blob);
+      overlayPreviewUrlRef.current = imageUrl;
+      setOverlayFrame({frameId, imageUrl, width, height, suggestions: located});
+    } else {
+      setOverlayFrame(null);
+    }
+    overlayTimerRef.current = window.setTimeout(() => {
+      if (overlayPreviewUrlRef.current) URL.revokeObjectURL(overlayPreviewUrlRef.current);
+      overlayPreviewUrlRef.current = null;
+      setOverlaySuggestion(null);
+      setOverlayFrame(null);
+      overlayTimerRef.current = null;
+    }, 3_000);
+  }, []);
   const stopCamera = useCallback(() => {
+    requestSequenceRef.current += 1;
     streamRef.current?.getTracks().forEach(track => track.stop());
     streamRef.current = null;
     if (videoRef.current) videoRef.current.srcObject = null;
+    clearOverlay();
+    setMirrored(false);
     setActive(false);
     setStatus('相机已关闭');
-  }, []);
+  }, [clearOverlay]);
   useEffect(() => {
     const visibility = () => { if (document.visibilityState !== 'visible') stopCamera(); };
     document.addEventListener('visibilitychange', visibility);
-    return () => { document.removeEventListener('visibilitychange', visibility); stopCamera(); };
+    return () => {
+      document.removeEventListener('visibilitychange', visibility);
+      stopCamera();
+    };
   }, [stopCamera]);
   const startCamera = async () => {
     if (!navigator.mediaDevices?.getUserMedia) { showToast('当前浏览器不支持网页相机，请改用照片或视频'); return; }
@@ -221,6 +274,8 @@ function CameraPage() {
       }
       const stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: {ideal: 'environment'}, width: {ideal: 1280}, height: {ideal: 720}}, audio: false});
       streamRef.current = stream;
+      const videoTrack = stream.getVideoTracks?.()[0];
+      setMirrored(videoTrack?.getSettings?.().facingMode === 'user');
       if (videoRef.current) { videoRef.current.srcObject = stream; await videoRef.current.play(); }
       setActive(true);
       setStatus('正在寻找清晰且有变化的画面…');
@@ -255,28 +310,69 @@ function CameraPage() {
       if (acceptedHash && hammingDistance(local.hash, acceptedHash) < 6) { setStatus('画面变化较小，继续缓慢移动相机'); return; }
       const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', .82));
       if (!blob || cancelled) return;
-      inflight = true; calls += 1; setStatus('正在生成临时建议…');
+      acceptedRef.current = null;
+      const requestSequence = ++requestSequenceRef.current;
+      inflight = true; calls += 1; setStatus('模型正在输出改进建议…');
       const frameId = globalThis.crypto?.randomUUID?.() || `camera-${Date.now()}`;
       try {
-        const result = await api.inspectCamera(blob, width, height, {frame_id: frameId, room_type: roomType, previous_summary: suggestionsRef.current.map(item => item.risk_code).slice(0, 5)}, controller.signal);
-        if (cancelled) return;
+        const previousSummary = [...new Set(suggestionsRef.current.map(item => item.risk_code))].slice(-5);
+        const result = await api.inspectCamera(blob, width, height, {frame_id: frameId, room_type: roomType, previous_summary: previousSummary}, controller.signal);
+        if (cancelled || requestSequence !== requestSequenceRef.current) return;
         acceptedHash = local.hash;
+        if (!result.quality_usable) {
+          acceptedRef.current = null;
+          clearOverlay();
+          setStatus('这张画面暂时不适合检查，请放慢移动并拍清地面和通道');
+          failures = 0;
+          return;
+        }
         acceptedRef.current = {blob, width, height, sourceId: `h5-camera-${session.assessment_id}`, hash: local.hash};
-        suggestionsRef.current = result.suggestions;
-        setSuggestions(result.suggestions);
-        setStatus(result.suggestions.length ? `发现 ${result.suggestions.length} 条临时建议` : '当前画面没有可靠候选，请继续检查其他角度');
+        if (result.suggestions.length) {
+          const firstNumber = suggestionsRef.current.length + 1;
+          suggestionsRef.current = [...suggestionsRef.current, ...result.suggestions];
+          setSuggestions(suggestionsRef.current);
+          showOverlay(result.suggestions, result.frame_id, blob, width, height, firstNumber);
+        } else clearOverlay();
+        setStatus(result.suggestions.length ? `发现 ${result.suggestions.length} 条建议` : '当前画面没有可靠候选，请继续检查其他角度');
         failures = 0;
       } catch (error) {
         if ((error as Error).name !== 'AbortError') {
+          const value = error as Error & {code?: string};
+          if (value.code === 'assessment_access_denied') {
+            try {
+              const recovered = await api.createAssessment('photo');
+              if (!cancelled) {
+                setSession({assessment_id: recovered.assessment_id, access_token: recovered.access_token, last_route: 'camera'});
+                setStatus('检查已恢复，正在重新连接相机分析…');
+                showToast('服务器已更新，已为你重新开始本次检查');
+              }
+              failures = 0;
+              return;
+            } catch (recoveryError) {
+              if (!cancelled) setStatus(friendlyError(recoveryError));
+            }
+          } else if (value.code === 'camera_request_in_progress') {
+            setStatus('上一张画面仍在检查，请稍候');
+            return;
+          } else if (value.code === 'provider_capacity_busy' || value.code === 'provider_http_429') {
+            setStatus('当前实时检查较多，会自动尝试下一张画面');
+          } else if (value.code === 'provider_timeout') {
+            setStatus('云端检查时间较长，将稍后重试');
+          } else if (value.code === 'provider_invalid_response' || value.code === 'provider_refusal') {
+            setStatus('这张画面暂时无法判断，请换一个角度');
+          } else if (!navigator.onLine) {
+            setStatus('网络已断开，恢复连接后会继续检查');
+          } else {
+            setStatus('本次画面检查没有完成，将稍后重试');
+          }
           failures += 1; nextAllowedAt = Date.now() + Math.min(16_000, 2_000 * 2 ** failures);
-          setStatus('本次画面检查没有完成，将稍后重试');
         }
       } finally { inflight = false; }
     };
     const timer = window.setInterval(inspect, 2_000);
     void inspect();
     return () => { cancelled = true; controller.abort(); window.clearInterval(timer); };
-  }, [active, roomType, session?.assessment_id]);
+  }, [active, clearOverlay, roomType, session?.assessment_id, showOverlay]);
   const saveEvidence = async () => {
     const frame = acceptedRef.current;
     if (!frame || !session) return;
@@ -293,13 +389,12 @@ function CameraPage() {
     finally { setSaving(false); }
   };
   return <section className="page camera-page">
-    <div className="page-intro"><h1>实时相机辅助检查</h1><p>每 2 秒检查候选画面，但只在清晰、场景有变化且上一请求完成后调用模型。</p></div>
-    <label className="camera-room-select">当前区域<select value={roomType} disabled={active} onChange={event => setRoomType(event.target.value as RoomType)}>{Object.entries(ROOM_COPY).map(([value, copy]) => <option key={value} value={value}>{copy.name}</option>)}</select></label>
-    <div className={`camera-viewport ${active ? 'active' : ''}`}><video ref={videoRef} muted playsInline aria-label="后置摄像头实时画面" />{!active && <div className="camera-placeholder"><img src="/assets/camera-tab.svg" alt="" /><p>相机画面不会被作为连续视频上传</p></div>}<div className="camera-status" role="status" aria-live="polite">{status}</div></div>
-    <div className="camera-actions">{active ? <button className="button secondary full" onClick={stopCamera}><Icon name="videocam_off" />关闭相机</button> : <button className="button primary full" onClick={startCamera}><Icon name="photo_camera" />开启后置相机</button>}</div>
-    <section className="camera-suggestions"><div className="section-heading"><h2>结构化临时建议</h2><span>不计分</span></div>{suggestions.length ? suggestions.map(item => <article key={item.suggestion_id}><span className="status-icon warn"><Icon name="visibility" filled /></span><div><b>{item.title}</b><p>{item.evidence}</p><small>模型把握约 {Math.round(item.confidence * 100)}%{item.possible_repeat ? ' · 可能与上一画面重复' : ''}</small></div></article>) : <p className="muted">开启相机并缓慢移动，建议会持续更新。这里不显示三维锚点，也不代表完成房间检查。</p>}</section>
+    <div className="page-intro"><h1>实时相机检查</h1><p>模型会流式输出改进建议，实时相机会优先保证流畅的用户体验，仍然推荐使用上传照片的形式，或在实时相机结束后，使用实时相机保存的关键帧更进一步。</p></div>
+    <div className={`camera-viewport ${active ? 'active' : ''}`}><video ref={videoRef} className={mirrored ? 'mirrored' : ''} muted playsInline aria-label="后置摄像头实时画面" />{!active && <button type="button" className="camera-placeholder" aria-label="开启后置相机" onClick={startCamera}><img src="/assets/camera-tab.svg" alt="" /><b>点击开启相机</b><p>将在你点击后申请相机权限</p></button>}{overlayFrame && <LiveCameraOverlay frameId={overlayFrame.frameId} imageUrl={overlayFrame.imageUrl} frameWidth={overlayFrame.width} frameHeight={overlayFrame.height} suggestions={overlayFrame.suggestions} mirrored={mirrored} />}{overlaySuggestion && <div className="camera-advice-overlay" role="status" aria-live="assertive"><Icon name="visibility" filled /><span><b>{overlaySuggestion.title}</b><small>{overlaySuggestion.short_advice}</small></span></div>}<div className="camera-status" role="status" aria-live="polite">{status}</div></div>
+    {active && <div className="camera-actions"><button className="button secondary full" onClick={stopCamera}><Icon name="videocam_off" />关闭相机</button></div>}
+    <section className="camera-suggestions"><div className="section-heading"><h2>结构化建议</h2>{suggestions.length ? <span>{suggestions.length} 条 · 刷新清空</span> : null}</div>{suggestions.length ? suggestions.map((item, index) => <article key={item.suggestion_id}><span className="camera-history-index">{index + 1}</span><div><b>{item.title}</b><p>{item.short_advice}</p><small>{item.evidence} · <strong>模型把握度 {Math.round(item.confidence * 100)}%</strong>{item.possible_repeat ? <> · <strong>可能重复</strong></> : null}</small></div></article>) : <p className="muted">开启相机并缓慢移动。每次发现都会保留在这里，刷新页面后清空。</p>}</section>
     {acceptedRef.current && <button className="button primary full" disabled={saving} onClick={saveEvidence}>{saving ? '正在保存…' : '保存当前代表画面，进入正式检查'}</button>}
-    <button className="button quiet full" onClick={() => { stopCamera(); navigate('/home'); }}>改用照片或视频</button>
+    <button className="button quiet full" onClick={() => { stopCamera(); navigate('/home'); }}>改用照片</button>
   </section>;
 }
 
@@ -307,10 +402,11 @@ function HomePage() {
   const navigate = useNavigate();
   const {session, setSession, showToast, capabilities} = useApp();
   const [busy, setBusy] = useState(false);
-  const start = async (mode: 'photo' | 'video_frame') => {
+  const [cameraIntroOpen, setCameraIntroOpen] = useState(false);
+  const startPhotoAssessment = async () => {
     setBusy(true);
     try {
-      const value = await api.createAssessment(mode);
+      const value = await api.createAssessment('photo');
       setSession({assessment_id: value.assessment_id, access_token: value.access_token});
       navigate('/profile');
     } catch (error) {
@@ -327,11 +423,12 @@ function HomePage() {
       <span className="image-callout teal"><Icon name="info" filled />{HOME_HERO_COPY.handrailCallout}</span>
     </div>
     <div className="button-stack">
-      <button className="button primary full" disabled={busy} onClick={() => start('photo')}><Icon name="add_a_photo" filled />{busy ? '正在开始…' : '上传家中照片'}</button>
-      {capabilities?.h5_video !== false && <button className="button secondary full" disabled={busy} onClick={() => start('video_frame')}><Icon name="video_camera_front" />从视频画面开始检查</button>}
+      <button className="button primary full" disabled={busy} onClick={startPhotoAssessment}><Icon name="add_a_photo" filled />{busy ? '正在开始…' : '上传家中照片'}</button>
+      {capabilities?.h5_camera !== false && <button className="button secondary full" disabled={busy} onClick={() => setCameraIntroOpen(true)}><Icon name="photo_camera" />{HOME_HERO_COPY.cameraEntry}</button>}
       {session && <button className="button quiet full" onClick={() => navigate(`/${session.last_route || 'profile'}`)}>继续上次检查</button>}
     </div>
     <p className="fine-print">无需专业设备 · 约 2 分钟完成 · 不涉及医疗诊断</p>
+    {cameraIntroOpen && <CameraIntroModal close={() => setCameraIntroOpen(false)} enter={() => { setCameraIntroOpen(false); navigate('/camera'); }} />}
   </section>;
 }
 

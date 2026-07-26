@@ -213,10 +213,14 @@ describe('recoverable product states', () => {
     });
     render(<App />);
     fireEvent.click(await screen.findByRole('button', {name: '相机'}));
-    expect(screen.getByRole('dialog', {name: '来游园会现场，解锁 iPhone AR 体验'})).toBeVisible();
+    const dialog = screen.getByRole('dialog', {name: '来游园会现场，解锁 iPhone AR 体验'});
+    expect(dialog).toBeVisible();
+    expect(dialog).toHaveTextContent('网页相机会提供实时的结构化建议');
+    expect(dialog).toHaveTextContent('实时相机为了保证流畅体验，完善的报告仍然建议通过上传家中照片体验。');
+    expect(dialog).not.toHaveTextContent('网页端不会显示虚假的三维锚点');
     expect(window.location.hash).toBe('#/home');
     fireEvent.click(screen.getByRole('button', {name: /进入网页相机/}));
     await waitFor(() => expect(window.location.hash).toBe('#/camera'));
-    expect(await screen.findByRole('heading', {name: '实时相机辅助检查'})).toBeVisible();
+    expect(await screen.findByRole('heading', {name: '实时相机检查'})).toBeVisible();
   });
 });

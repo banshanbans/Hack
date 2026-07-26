@@ -16,7 +16,10 @@ final class IssueOverlayCoordinator {
     func update(issues: [SafetyIssue], camera: ARCamera, viewportSize: CGSize) {
         guard let containerView else { return }
         let candidates = issues
-            .filter { $0.state != .dismissed && $0.evidence.worldPoint != nil }
+            .filter {
+                $0.state != .dismissed &&
+                    ($0.evidence.worldPoint != nil || $0.evidence.boundingBox != nil)
+            }
             .sorted { $0.severity.sortOrder < $1.severity.sortOrder }
             .prefix(5)
         let visibleIDs = Set(candidates.map(\.id))
@@ -34,12 +37,21 @@ final class IssueOverlayCoordinator {
             height: 140
         )
         for issue in candidates {
-            guard let world = issue.evidence.worldPoint else { continue }
-            let projected = camera.projectPoint(
-                SIMD3<Float>(world.x, world.y, world.z),
-                orientation: .portrait,
-                viewportSize: viewportSize
-            )
+            let projected: CGPoint
+            if let world = issue.evidence.worldPoint {
+                projected = camera.projectPoint(
+                    SIMD3<Float>(world.x, world.y, world.z),
+                    orientation: .portrait,
+                    viewportSize: viewportSize
+                )
+            } else if let box = issue.evidence.boundingBox {
+                projected = CGPoint(
+                    x: (box.xMin + box.xMax) * 0.5 * viewportSize.width,
+                    y: (box.yMin + box.yMax) * 0.5 * viewportSize.height
+                )
+            } else {
+                continue
+            }
             guard projected.x.isFinite, projected.y.isFinite,
                   projected.x >= -40, projected.x <= viewportSize.width + 40,
                   projected.y >= -40, projected.y <= viewportSize.height + 40 else {
@@ -62,9 +74,10 @@ final class IssueOverlayCoordinator {
     }
 
     func removeAll() {
-        labels.values.forEach { $0.removeFromSuperview() }
+        let views = Array(labels.values)
         labels.removeAll()
         issueByID.removeAll()
+        views.forEach { $0.removeFromSuperview() }
     }
 
     private func makeLabel(for issue: SafetyIssue, in container: UIView) -> UIButton {
@@ -76,7 +89,10 @@ final class IssueOverlayCoordinator {
         button.layer.shadowRadius = 5
         button.layer.shadowOffset = .init(width: 0, height: 2)
         button.backgroundColor = .systemBackground.withAlphaComponent(0.94)
-        button.setTitle(ProductCopy.shortLabel(for: issue.type), for: .normal)
+        let title = issue.evidence.worldPoint == nil
+            ? "\(ProductCopy.shortLabel(for: issue.type)) · 二维待定位"
+            : ProductCopy.shortLabel(for: issue.type)
+        button.setTitle(title, for: .normal)
         button.setTitleColor(AnjuTheme.ink, for: .normal)
         button.titleLabel?.font = .preferredFont(forTextStyle: .headline)
         button.titleLabel?.adjustsFontForContentSizeCategory = true

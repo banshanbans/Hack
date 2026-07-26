@@ -3,25 +3,20 @@ import UIKit
 
 enum ProductCopy {
     static let appName = "长者友好家"
-    static let homeTitle = "游园会现场安全辅助筛查"
+    static let homeTitle = "IPhone AR体验"
     static let homeSubtitle = "用 iPhone 分区扫描和空间定位，找出值得现场确认的通行风险"
-    static let startRoom = "开始游园会扫描"
-    static let focusTitle = "这次想重点看看什么"
-    static let focusSubtitle = "可以多选，我们会优先展示相关问题"
-    static let continueAction = "继续"
-    static let prepareTitle = "先选择游园会扫描区域"
-    static let prepareSubtitle = "按入口、主通道、展位和休息区分段扫描，不依赖无限扩张的单一地图"
-    static let roomTypeTitle = "当前游园会区域"
+    static let startRoom = "开启扫描"
+    static let prepareTitle = "先选择扫描区域"
+    static let fairPreparationTips = ["握稳手机，慢慢移动", "让地面和人员动线保持在画面中", "需要网络完成 AI 识别与报告汇总"]
     static let bedroom = "卧室"
     static let livingRoom = "客厅"
     static let bathroom = "卫生间"
     static let corridor = "通道"
     static let beginScan = "开始扫描这个区域"
-    static let scanning = "正在辅助筛查游园会现场"
+    static let scanning = "辅助筛查现场"
     static let scanMore = "再看看地面和人员通道"
-    static let finishScan = "结束扫描并复核"
-    static let finishingScan = "Pro 正在复核代表画面"
-    static let rugNeedsCheckObservation = "看到一块地毯，边缘和通道位置需要再确认。"
+    static let finishScan = "结束扫描"
+    static let finishingScan = "正在汇总扫描结果"
     static let reportTitle = "游园会现场辅助筛查结果"
     static let emptyReport = "暂时没有发现明显问题"
     static let emptyReportDetail = "你仍可以按日常使用习惯，再看看地面和通道。"
@@ -43,7 +38,15 @@ enum ProductCopy {
     static let unsupportedMessage = "请使用支持空间扫描的 iPhone。现在仍可以查看离线演示报告。"
     static let demoReport = "查看演示报告"
     static let remoteUnavailable = "这次没有看清，稍后再试也可以"
+    static let cameraFrameUnusable = "请稳住手机并调整光线，画面清晰后 AI 会继续检查"
+    static let directAnalysisNoCandidate = "AI 已检查当前画面，请继续缓慢移动"
+    static func directAnalysisCandidatesFound(_ count: Int) -> String { "AI 发现 \(count) 个待确认位置，正在定位" }
     static let partialReport = "部分内容稍后补充"
+    static let fairPartialReportDetail = "报告汇总未完成，以下只是待确认候选，本次不提供参考分。"
+    static let fairAIIncompleteTitle = "本次 AI 检查未完成"
+    static let fairAIIncompleteMessage = "本次没有成功完成任何一次云端发现，不会生成空报告。"
+    static let rescan = "重新扫描"
+    static let exitToHome = "退出"
     static let fairDisclaimer = "仅为游园会现场辅助筛查参考，不代表场馆验收或施工报价。"
 
     static func severityLabel(_ severity: Severity) -> String {
@@ -66,6 +69,11 @@ enum ProductCopy {
         case .unstableSupport: "需要再确认"
         case .highReachItem: "物品放得高"
         case .bedsideObstruction: "床边被挡住"
+        case .wetFloor: "地面有点滑"
+        case .levelChange: "脚下有高差"
+        case .crowdedPath: "人流挡路"
+        case .markedExitObstruction: "出口通道受阻"
+        case .lowHangingObstruction: "低位悬挂物"
         }
     }
 }

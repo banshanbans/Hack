@@ -7,7 +7,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from backend.app.providers.vision import ArkVisionProvider, OpenAIVisionProvider, ProviderError, provider_from_environment
+from backend.app.providers.vision import CAMERA_SCHEMA, ArkVisionProvider, OpenAIVisionProvider, ProviderError, provider_from_environment, schema_with_allowed_risks
 
 
 class OpenAIProviderTests(unittest.TestCase):
@@ -18,6 +18,16 @@ class OpenAIProviderTests(unittest.TestCase):
         body = {"status":"completed","model":"test-model","output":[{"content":[{"type":"output_text","text":json.dumps({"risk_candidates":[]})}]}],"usage":{"input_tokens":10,"output_tokens":2}}
         self.assertEqual(self.provider._extract(body), {"risk_candidates": []})
         self.assertEqual(self.provider._usage(body, 1)["retry_count"], 1)
+
+    def test_request_schema_constrains_risk_codes_without_mutating_shared_schema(self) -> None:
+        constrained = schema_with_allowed_risks(CAMERA_SCHEMA, ["RISK_B", "RISK_A", "RISK_A"])
+        risk_schema = constrained["properties"]["suggestions"]["items"]["properties"]["risk_code"]
+        self.assertEqual(risk_schema["enum"], ["RISK_A", "RISK_B"])
+        self.assertNotIn("enum", CAMERA_SCHEMA["properties"]["suggestions"]["items"]["properties"]["risk_code"])
+
+        with self.assertRaises(ProviderError) as raised:
+            schema_with_allowed_risks(CAMERA_SCHEMA, [])
+        self.assertEqual(raised.exception.code, "provider_invalid_request")
 
     def test_refusal_is_explicit(self) -> None:
         with self.assertRaises(ProviderError) as raised:
@@ -61,6 +71,7 @@ class OpenAIProviderTests(unittest.TestCase):
             self.assertTrue(result["usable"])
             self.assertEqual(Handler.calls, 2)
             self.assertEqual(usage["retry_count"], 1)
+            self.assertIsInstance(usage["latency_ms"], int)
             self.assertFalse(Handler.payload["store"])
             self.assertTrue(Handler.payload["text"]["format"]["strict"])
             self.assertEqual(Handler.payload["input"][0]["content"][1]["detail"], "low")
@@ -84,6 +95,77 @@ class OpenAIProviderTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, "provider_timeout")
         self.assertTrue(raised.exception.retryable)
         self.assertEqual(request.call_count, 2)
+
+    def test_realtime_camera_timeout_does_not_start_a_second_model_call(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "camera.jpg"
+            path.write_bytes(b"\xff\xd8\xffdemo")
+            media = {"media_id": "frame-1", "path": str(path), "mime_type": "image/jpeg"}
+            camera_rules = [{"risk_code": "floor_clutter", "visual_cue": "通道中有杂物"}]
+            with patch("backend.app.providers.vision.urlopen", side_effect=socket.timeout("read timed out")) as request:
+                with self.assertRaises(ProviderError) as raised:
+                    self.provider.inspect_camera("assessment-1", "bathroom", media, camera_rules, {}, [])
+        self.assertEqual(raised.exception.code, "provider_timeout")
+        self.assertEqual(request.call_count, 1)
+
+    def test_h5_live_camera_uses_dedicated_camera_model(self) -> None:
+        provider = ArkVisionProvider("ark-test-key", model_name="pro-model")
+        media = {"media_id": "frame-1", "path": "/tmp/not-read.jpg", "mime_type": "image/jpeg"}
+        camera_rules = [{"risk_code": "floor_clutter", "visual_cue": "通道中有杂物"}]
+        with patch.dict("os.environ", {
+            "ANJU_ARK_H5_CAMERA_MODEL": "h5-camera-model",
+            "ANJU_ARK_TURBO_MODEL": "ios-turbo-model",
+        }), patch.object(
+            provider, "_request", return_value=({}, {})
+        ) as request:
+            provider.inspect_camera("assessment-1", "living_room", media, camera_rules, {}, [])
+
+        self.assertEqual(request.call_args.kwargs["model_name"], "h5-camera-model")
+        self.assertEqual(request.call_args.kwargs["max_attempts"], 1)
+        prompt = request.call_args.args[1]
+        self.assertIn("豆包/懒人沙发/椅子", prompt)
+        self.assertIn("裸露线缆、延长线或插排", prompt)
+        self.assertIn("平台或舞台边缘、临时台阶或门槛", prompt)
+        self.assertIn("电缆保护槽", prompt)
+        self.assertIn("同一物理问题在同一帧只输出一个最具体的 risk_code", prompt)
+
+    def test_h5_live_camera_falls_back_to_shared_turbo_model(self) -> None:
+        provider = ArkVisionProvider("ark-test-key", model_name="pro-model")
+        media = {"media_id": "frame-1", "path": "/tmp/not-read.jpg", "mime_type": "image/jpeg"}
+        camera_rules = [{"risk_code": "floor_clutter", "visual_cue": "通道中有杂物"}]
+        with patch.dict("os.environ", {"ANJU_ARK_TURBO_MODEL": "shared-turbo-model"}, clear=True), patch.object(
+            provider, "_request", return_value=({}, {})
+        ) as request:
+            provider.inspect_camera("assessment-1", "living_room", media, camera_rules, {}, [])
+
+        self.assertEqual(request.call_args.kwargs["model_name"], "shared-turbo-model")
+
+    def test_fair_direct_pro_schema_constrains_risks_and_evidence_codes(self) -> None:
+        provider = ArkVisionProvider("ark-test-key", model_name="pro-model")
+        media = {"media_id": "fair-frame", "path": "/tmp/not-read.jpg", "mime_type": "image/jpeg"}
+        rules = [{
+            "risk_code": "marked_exit_obstruction", "title": "明确标识的出口通道被占用",
+            "visual_cue": "出口标识与障碍同时可见",
+            "evidence_codes": ["marked_exit_visible", "localized_obstruction_visible"],
+            "required_evidence_codes": ["marked_exit_visible", "localized_obstruction_visible"],
+        }]
+        with patch.dict("os.environ", {"ANJU_ARK_PRO_MODEL": "pro-direct-model"}), patch.object(
+            provider, "_request", return_value=({}, {})
+        ) as request:
+            provider.fair_analyze("scan-1", "entrance", media, rules)
+
+        schema = request.call_args.args[3]
+        candidate = schema["properties"]["candidates"]["items"]
+        self.assertEqual(candidate["properties"]["risk_code"]["enum"], ["marked_exit_obstruction"])
+        self.assertEqual(candidate["properties"]["evidence_codes"]["items"]["enum"], ["localized_obstruction_visible", "marked_exit_visible"])
+        self.assertIn("evidence_codes", candidate["required"])
+        self.assertEqual(request.call_args.args[7], "pro-direct-model")
+        prompt = request.call_args.args[1]
+        self.assertIn("豆包/懒人沙发/椅子", prompt)
+        self.assertIn("裸露线缆、延长线或插排", prompt)
+        self.assertIn("舞台边缘、临时台阶或门槛", prompt)
+        self.assertIn("电缆保护槽", prompt)
+        self.assertIn("同一物理问题在同一帧只输出一个最具体的 risk_code", prompt)
 
     def test_ark_request_disables_thinking(self) -> None:
         quality = {"usable": True, "clear": True, "floor_visible": True, "path_visible": True, "lighting_sufficient": True, "major_occlusion": False, "scene_elements": ["floor"], "missing_element_ids": []}
@@ -149,6 +231,8 @@ class OpenAIProviderTests(unittest.TestCase):
         self.assertEqual(payload["input"][0]["content"][1]["detail"], "high")
         self.assertEqual(payload["thinking"], {"type": "disabled"})
         self.assertNotIn("reasoning", payload)
+        risk_schema = payload["text"]["format"]["schema"]["properties"]["risk_candidates"]["items"]["properties"]["risk_code"]
+        self.assertEqual(risk_schema["enum"], ["BATH_NO_GRAB_BAR"])
         self.assertEqual(self.provider._image_detail("original"), "original")
 
     def test_selects_ark_provider_from_environment(self) -> None:

@@ -33,6 +33,75 @@ final class AnjuCoreTests: XCTestCase {
         XCTAssertNil(badBox.validatedCandidate(frameID: UUID()))
     }
 
+    func testFairDirectCandidateCarriesDeterministicCameraCopy() throws {
+        let data = Data(#"""
+        {
+          "candidate_id":"00000000-0000-0000-0000-000000000001",
+          "frame_id":"00000000-0000-0000-0000-000000000002",
+          "zone_id":"entrance",
+          "risk_code":"wet_floor",
+          "title":"地面有明显湿滑处",
+          "short_advice":"先擦干地面并提醒绕行",
+          "evidence_codes":["wet_surface_visible"],
+          "bbox":[0.1,0.2,0.7,0.8],
+          "evidence":"入口地面可见积水",
+          "confidence":0.91,
+          "needs_manual_check":false
+        }
+        """#.utf8)
+        let dto = try JSONDecoder().decode(FairDirectCandidateDTO.self, from: data)
+        let candidate = try XCTUnwrap(dto.validatedCandidate())
+
+        XCTAssertEqual(candidate.type, .wetFloor)
+        XCTAssertEqual(candidate.title, "地面有明显湿滑处")
+        XCTAssertEqual(candidate.recommendation, "先擦干地面并提醒绕行")
+        let issue = try XCTUnwrap(FairDirectAdapter().temporaryIssue(from: candidate, sessionID: UUID()))
+        XCTAssertEqual(issue.severity, .check)
+        XCTAssertEqual(issue.state, .tentative)
+        XCTAssertTrue(issue.needsManualCheck)
+    }
+
+    func testFairReportAdapterPreservesServerCopyAndValidatesFormalRisk() throws {
+        let report = try decodeFairReport(riskCode: "marked_exit_obstruction")
+        let issues = try FairReportAdapter().validatedIssues(report: report, sessionID: UUID(), preserving: [])
+
+        XCTAssertEqual(issues.count, 1)
+        XCTAssertEqual(issues[0].type, .markedExitObstruction)
+        XCTAssertEqual(issues[0].severity, .high)
+        XCTAssertEqual(issues[0].title, "服务端出口标题")
+        XCTAssertEqual(issues[0].recommendation, "服务端短建议")
+    }
+
+    func testFairReportAdapterRejectsUnknownRiskCode() throws {
+        let report = try decodeFairReport(riskCode: "invented_fair_risk")
+        XCTAssertThrowsError(try FairReportAdapter().validatedIssues(report: report, sessionID: UUID(), preserving: []))
+    }
+
+    private func decodeFairReport(riskCode: String) throws -> FairScanReportDTO {
+        let json = #"""
+        {
+          "scan_id":"00000000-0000-0000-0000-000000000010","status":"reviewed",
+          "assessed_area_score":84,"coverage_percent":25,"prompt_version":"pro-v1",
+          "rule_version":"venue-fair-rules-v1",
+          "budget":{"currency":"CNY","total_min":80,"total_max":500},
+          "zones":[{"zone_id":"entrance","score":84,"risks":[{
+            "candidate_id":"00000000-0000-0000-0000-000000000011",
+            "frame_id":"00000000-0000-0000-0000-000000000012",
+            "risk_code":"\#(riskCode)","status":"confirmed","severity":"high",
+            "title":"服务端出口标题","short_advice":"服务端短建议","evidence":"出口标识和障碍均清晰可见",
+            "evidence_frame_ids":["00000000-0000-0000-0000-000000000012"],
+            "rule_version":"venue-fair-rules-v1","score_eligible":true,"bbox":[0.1,0.2,0.7,0.8],
+            "solutions":[
+              {"tier":"A","title":"A","total_min":0,"total_max":80,"currency":"CNY","price_rule_id":"A"},
+              {"tier":"B","title":"B","total_min":80,"total_max":500,"currency":"CNY","price_rule_id":"B"},
+              {"tier":"C","title":"C","total_min":500,"total_max":3000,"currency":"CNY","price_rule_id":"C"}
+            ]
+          }]}]
+        }
+        """#
+        return try JSONDecoder().decode(FairScanReportDTO.self, from: Data(json.utf8))
+    }
+
     func testSeverityComesFromRuleAndWeakEvidenceDowngradesHigh() throws {
         let store = try SafetyRuleStore(rules: [makeRule(type: .looseRug, severity: .high)])
         let engine = IssueDetectionEngine(ruleStore: store)

@@ -1,7 +1,8 @@
-import {createContext, useCallback, useContext, useMemo, useReducer, useState, type ReactNode} from 'react';
+import {createContext, useCallback, useContext, useEffect, useMemo, useReducer, useState, type ReactNode} from 'react';
 import type {Assessment, RoomResult, ServerCapabilities, SessionState} from './types';
 
 const STORAGE_KEY = 'anju_h5_session_v2';
+export const SESSION_INVALIDATED_EVENT = 'anju-session-invalidated';
 
 export function readSession(storage: Storage | null = typeof localStorage === 'undefined' ? null : localStorage): SessionState | null {
   if (!storage) return null;
@@ -63,6 +64,15 @@ export function AppProvider({children}: {children: ReactNode}) {
   const showToast = useCallback((value: string) => {
     setToast(value);
     window.setTimeout(() => setToast(current => current === value ? null : current), 2800);
+  }, []);
+  useEffect(() => {
+    const invalidate = () => {
+      dispatch({type: 'session', value: null});
+      dispatch({type: 'assessment', value: null});
+      dispatch({type: 'roomResult', value: null});
+    };
+    window.addEventListener(SESSION_INVALIDATED_EVENT, invalidate);
+    return () => window.removeEventListener(SESSION_INVALIDATED_EVENT, invalidate);
   }, []);
   const value = useMemo<AppContextValue>(() => ({
     ...state,

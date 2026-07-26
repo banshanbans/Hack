@@ -1,13 +1,18 @@
-import AnjuCore
 import CoreVideo
 import Foundation
 
-final class FrameQualityService: @unchecked Sendable {
-    private let lock = NSLock()
-    private var consecutiveLowLightFrames = 0
+struct FrameQualityResult: Equatable, Sendable {
+    let brightness: Double
+    let sharpness: Double
 
-    /// Samples the full-range Y plane. Three consecutive dark keyframes are required.
-    func lowLightCandidate(pixelBuffer: CVPixelBuffer, frameID: UUID) -> IssueCandidate? {
+    var isUsable: Bool {
+        (28...232).contains(brightness) && sharpness >= 5
+    }
+}
+
+final class FrameQualityService: @unchecked Sendable {
+    /// Deterministic quality gate only. It never creates or classifies a risk.
+    func evaluate(pixelBuffer: CVPixelBuffer) -> FrameQualityResult? {
         guard CVPixelBufferGetPlaneCount(pixelBuffer) > 0 else { return nil }
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
@@ -16,27 +21,29 @@ final class FrameQualityService: @unchecked Sendable {
         let height = CVPixelBufferGetHeightOfPlane(pixelBuffer, 0)
         let rowStride = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0)
         let bytes = base.assumingMemoryBound(to: UInt8.self)
-        var total = 0
-        var count = 0
-        for y in stride(from: 0, to: height, by: 24) {
-            for x in stride(from: 0, to: width, by: 24) {
-                total += Int(bytes[y * rowStride + x])
-                count += 1
+        guard width >= 5, height >= 5 else { return nil }
+        var luminanceTotal = 0
+        var edgeTotal = 0
+        var sampleCount = 0
+        for y in stride(from: 2, to: height - 2, by: 12) {
+            for x in stride(from: 2, to: width - 2, by: 12) {
+                let center = Int(bytes[y * rowStride + x])
+                luminanceTotal += center
+                let laplacian = abs(
+                    center * 4
+                    - Int(bytes[y * rowStride + x - 2])
+                    - Int(bytes[y * rowStride + x + 2])
+                    - Int(bytes[(y - 2) * rowStride + x])
+                    - Int(bytes[(y + 2) * rowStride + x])
+                )
+                edgeTotal += laplacian
+                sampleCount += 1
             }
         }
-        guard count > 0 else { return nil }
-        let average = Double(total) / Double(count) / 255
-        lock.lock()
-        consecutiveLowLightFrames = average < 0.18 ? consecutiveLowLightFrames + 1 : 0
-        let stable = consecutiveLowLightFrames >= 3
-        lock.unlock()
-        guard stable,
-              let box = NormalizedBoundingBox(xMin: 0, yMin: 0, xMax: 1, yMax: 1) else { return nil }
-        return IssueCandidate(
-            type: .lowLighting,
-            needsManualCheck: true,
-            source: .localVision,
-            evidence: .init(frameID: frameID, boundingBox: box)
+        guard sampleCount > 0 else { return nil }
+        return FrameQualityResult(
+            brightness: Double(luminanceTotal) / Double(sampleCount),
+            sharpness: Double(edgeTotal) / Double(sampleCount)
         )
     }
 }

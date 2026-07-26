@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from copy import deepcopy
 from dataclasses import dataclass
 import hashlib
 import json
@@ -39,9 +40,8 @@ class VisionProvider(Protocol):
 
     def quality(self, assessment_id: str, media: dict) -> tuple[dict, dict]: ...
     def analyze(self, assessment_id: str, room_type: str, media: list[dict], allowed_risks: list[str]) -> tuple[dict, dict]: ...
-    def inspect_camera(self, assessment_id: str, room_type: str, media: dict, allowed_risks: list[str], profile_summary: dict, previous_summary: list[str]) -> tuple[dict, dict]: ...
-    def fair_turbo(self, scan_id: str, zone_id: str, media: dict, allowed_risks: list[str]) -> tuple[dict, dict]: ...
-    def fair_review(self, scan_id: str, zone_id: str, media: list[dict], candidates: list[dict], allowed_risks: list[str]) -> tuple[dict, dict]: ...
+    def inspect_camera(self, assessment_id: str, room_type: str, media: dict, camera_rules: list[dict], profile_summary: dict, previous_summary: list[str]) -> tuple[dict, dict]: ...
+    def fair_analyze(self, scan_id: str, zone_id: str, media: dict, camera_rules: list[dict]) -> tuple[dict, dict]: ...
 
 
 QUALITY_SCHEMA = {
@@ -103,7 +103,7 @@ ANALYSIS_SCHEMA = {
     },
 }
 
-CAMERA_PROMPT_VERSION = "anju_h5_camera_adaptive_v1"
+CAMERA_PROMPT_VERSION = "anju_h5_camera_discovery_v3"
 CAMERA_SCHEMA = {
     "type": "object", "additionalProperties": False,
     "required": ["media_id", "quality_usable", "scene_elements", "suggestions", "save_as_evidence_recommended"],
@@ -124,40 +124,43 @@ CAMERA_SCHEMA = {
     },
 }
 
-FAIR_TURBO_PROMPT_VERSION = "anju_ios_fair_turbo_v1"
-FAIR_REVIEW_PROMPT_VERSION = "anju_ios_fair_review_pro_v1"
-FAIR_TURBO_SCHEMA = {
+FAIR_DIRECT_PROMPT_VERSION = "anju_ios_fair_pro_direct_v2"
+FAIR_DISCOVERY_SCHEMA = {
     "type": "object", "additionalProperties": False, "required": ["frame_id", "zone_id", "candidates"],
     "properties": {
         "frame_id": {"type": "string"}, "zone_id": {"type": "string", "enum": ["entrance", "main_aisle", "booth", "rest_area"]},
         "candidates": {"type": "array", "maxItems": 5, "items": {
             "type": "object", "additionalProperties": False,
-            "required": ["risk_code", "evidence", "confidence", "needs_manual_check", "bbox"],
+            "required": ["risk_code", "evidence_codes", "evidence", "confidence", "needs_manual_check", "bbox"],
             "properties": {
                 "risk_code": {"type": "string"}, "evidence": {"type": "string"},
+                "evidence_codes": {"type": "array", "minItems": 1, "uniqueItems": True, "items": {"type": "string"}},
                 "confidence": {"type": "number", "minimum": 0, "maximum": 1}, "needs_manual_check": {"type": "boolean"},
                 "bbox": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4},
             },
         }},
     },
 }
-FAIR_REVIEW_SCHEMA = {
-    "type": "object", "additionalProperties": False, "required": ["zone_id", "reviews"],
-    "properties": {
-        "zone_id": {"type": "string", "enum": ["entrance", "main_aisle", "booth", "rest_area"]},
-        "reviews": {"type": "array", "maxItems": 30, "items": {
-            "type": "object", "additionalProperties": False,
-            "required": ["candidate_id", "status", "risk_code", "evidence", "bbox", "merged_into_candidate_id"],
-            "properties": {
-                "candidate_id": {"type": "string"},
-                "status": {"type": "string", "enum": ["confirmed", "rejected", "merged", "region_corrected", "manual_check"]},
-                "risk_code": {"type": "string"}, "evidence": {"type": "string"},
-                "bbox": {"anyOf": [{"type": "null"}, {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4}]},
-                "merged_into_candidate_id": {"type": ["string", "null"]},
-            },
-        }},
-    },
-}
+def schema_with_allowed_risks(schema: dict, allowed_risks: list[str]) -> dict:
+    """Return a request-local schema whose risk codes are constrained by rules."""
+    allowed = sorted({str(item) for item in allowed_risks if str(item)})
+    if not allowed:
+        raise ProviderError("provider_invalid_request", False)
+    result = deepcopy(schema)
+
+    def constrain(node: object) -> None:
+        if isinstance(node, dict):
+            properties = node.get("properties")
+            if isinstance(properties, dict) and "risk_code" in properties:
+                properties["risk_code"] = {"type": "string", "enum": allowed}
+            for value in node.values():
+                constrain(value)
+        elif isinstance(node, list):
+            for value in node:
+                constrain(value)
+
+    constrain(result)
+    return result
 
 
 @dataclass
@@ -196,48 +199,88 @@ class OpenAIVisionProvider:
             "bbox 坐标为相对对应原图的 0 到 1 值；无法可靠定位时 region 为 null 且 needs_manual_check 为 true。"
             "玻璃门、毛巾架和吸盘装置不能默认视为可靠支撑。避免重复报告同一照片中的同一风险。"
         )
-        return self._request(assessment_id, prompt, media, ANALYSIS_SCHEMA, "risk_analysis", "original")
+        schema = schema_with_allowed_risks(ANALYSIS_SCHEMA, allowed_risks)
+        return self._request(assessment_id, prompt, media, schema, "risk_analysis", "original")
 
-    def inspect_camera(self, assessment_id: str, room_type: str, media: dict, allowed_risks: list[str], profile_summary: dict, previous_summary: list[str]) -> tuple[dict, dict]:
+    def inspect_camera(self, assessment_id: str, room_type: str, media: dict, camera_rules: list[dict], profile_summary: dict, previous_summary: list[str]) -> tuple[dict, dict]:
+        allowed_risks = [str(item["risk_code"]) for item in camera_rules]
+        rule_guidance = [{"risk_code": item["risk_code"], "visible_when": item["visual_cue"]} for item in camera_rules]
         allowed_elements = ROOM_SCENE_ELEMENTS.get(room_type, [])
         prompt = (
-            "你正在对老人家庭的实时相机候选帧做环境安全辅助筛查。"
-            f"结构化上下文: assessment_context=home, room_type={room_type}, media_id={media['media_id']}, "
-            f"allowed_risk_codes={allowed_risks}, allowed_scene_elements={allowed_elements}, "
+            "你正在使用独立的实时相机发现规则，对老人家庭候选帧做环境安全辅助筛查。"
+            f"结构化上下文: assessment_context=home_live_camera, scene_hint={room_type}, media_id={media['media_id']}, "
+            f"camera_rules={rule_guidance}, scene_elements_hint={allowed_elements}, "
             f"profile_summary={profile_summary}, previous_accepted_summary={previous_summary[:5]}。"
             "只描述本帧中可直接观察且有图像证据的内容，不推断画面外或遮挡区域。"
             "相机帧可能不完整；不得把未看到的区域描述为安全，也不得声称完成房间或全屋检查。"
-            "只从允许的 risk_code 和场景要素中选择；无法可靠定位时 region 为 null。"
+            "scene_hint 仅帮助理解画面，不能限制发现其他相机规则；只从 camera_rules 的 risk_code 中选择。"
+            "先快速检查四类高频目标：豆包/懒人沙发/椅子等低位家具侵入路径；裸露线缆、延长线或插排进入路径；"
+            "平台或舞台边缘、临时台阶或门槛形成高差；跨通道电缆保护槽形成凸起。"
+            "分类时，裸线或插排优先使用 cable_crossing，完全封闭线槽形成的凸起使用 level_change；"
+            "单个家具或杂物侵入路径使用 floor_clutter，只有连续摆放明显压缩通道才使用 narrow_path。"
+            "同一物理问题在同一帧只输出一个最具体的 risk_code；不同物体或独立危险可以分别输出。"
+            "仅看到物体存在不足以报告，必须清楚看到它与可行走路径重叠或侵入的空间关系。"
+            "继续检查地垫、积水、暗处和尖角等其他直观问题；无法可靠定位时 region 为 null。"
             "输出是临时建议，不给最终等级、分数、价格、施工结论、HTML、SVG 或医疗结论。"
             "若与上一帧摘要可能是同一问题，设置 possible_repeat=true。"
         )
-        return self._request(assessment_id, prompt, [media], CAMERA_SCHEMA, "camera_suggestions", "high", CAMERA_PROMPT_VERSION)
+        schema = schema_with_allowed_risks(CAMERA_SCHEMA, allowed_risks)
+        if self.provider_name == "ark":
+            model = os.environ.get("ANJU_ARK_H5_CAMERA_MODEL") or os.environ.get("ANJU_ARK_TURBO_MODEL", self.model_name)
+        else:
+            model = os.environ.get("ANJU_OPENAI_H5_CAMERA_MODEL") or os.environ.get("ANJU_OPENAI_TURBO_MODEL", self.model_name)
+        return self._request(
+            assessment_id, prompt, [media], schema, "camera_suggestions", "high", CAMERA_PROMPT_VERSION,
+            model_name=model, request_timeout=min(self.timeout_seconds, 15), max_attempts=1,
+        )
 
-    def fair_turbo(self, scan_id: str, zone_id: str, media: dict, allowed_risks: list[str]) -> tuple[dict, dict]:
+    def fair_analyze(self, scan_id: str, zone_id: str, media: dict, camera_rules: list[dict]) -> tuple[dict, dict]:
+        allowed_risks = [str(item["risk_code"]) for item in camera_rules]
+        rule_guidance = [{
+            "risk_code": item["risk_code"], "title": item["title"], "visible_when": item["visual_cue"],
+            "allowed_evidence_codes": item["evidence_codes"],
+            "required_evidence_codes": item["required_evidence_codes"],
+        } for item in camera_rules]
         prompt = (
-            "你正在游园会活动现场对 iPhone 相机关键帧做临时环境安全辅助筛查。"
-            f"assessment_context=venue_fair, frame_id={media['media_id']}, zone_id={zone_id}, allowed_risk_codes={allowed_risks}。"
+            "你正在使用 Pro 级视觉模型直接分析活动现场的 iPhone 关键帧。"
+            f"assessment_context=venue_fair, frame_id={media['media_id']}, zone_id={zone_id}, camera_rules={rule_guidance}。"
             "只报告本帧中清楚可见、可定位、与人员通行或现场使用直接相关的候选风险。"
+            "四个 Zone 使用同一套可见问题规则；zone_id 只记录位置，不能缩窄候选类型。"
+            "先快速检查四类高频目标：豆包/懒人沙发/椅子等低位家具侵入路径；裸露线缆、延长线或插排进入路径；"
+            "舞台边缘、临时台阶或门槛形成高差；跨通道电缆保护槽形成凸起。"
+            "分类时，裸线或插排优先使用 cable_crossing，完全封闭线槽形成的凸起使用 level_change；"
+            "单个家具或杂物侵入路径使用 floor_clutter，只有连续摆放明显压缩通道才使用 narrow_path。"
+            "同一物理问题在同一帧只输出一个最具体的 risk_code；不同物体或独立危险可以分别输出。"
+            "仅看到物体存在不足以报告，必须同时清楚看到它与可行走路径重叠或侵入的空间关系。"
             "不得推断画面外、遮挡区域、承重、消防合规、施工质量或活动整体安全状态。"
             "bbox 使用左上角原点的 [x_min,y_min,x_max,y_max] 归一化坐标，无法可靠定位时不要输出候选。"
+            "evidence_codes 只能从该 risk_code 的 allowed_evidence_codes 选择，并必须包含全部 required_evidence_codes。"
             "不要输出风险等级、分数、价格、整改方案、HTML、SVG、医疗结论或场馆验收表述。"
         )
-        model = os.environ.get("ANJU_ARK_TURBO_MODEL" if self.provider_name == "ark" else "ANJU_OPENAI_TURBO_MODEL", self.model_name)
-        return self._request(scan_id, prompt, [media], FAIR_TURBO_SCHEMA, "fair_turbo_candidates", "high", FAIR_TURBO_PROMPT_VERSION, model)
-
-    def fair_review(self, scan_id: str, zone_id: str, media: list[dict], candidates: list[dict], allowed_risks: list[str]) -> tuple[dict, dict]:
-        compact_candidates = [{key: item.get(key) for key in ("candidate_id", "frame_id", "risk_code", "evidence", "confidence", "bbox")} for item in candidates]
-        prompt = (
-            "你正在复核一次游园会 Zone 扫描的代表帧和 Turbo 候选。"
-            f"assessment_context=venue_fair, zone_id={zone_id}, allowed_risk_codes={allowed_risks}, candidates={compact_candidates}。"
-            "逐个候选返回 confirmed、rejected、merged、region_corrected 或 manual_check，并保留 candidate_id。"
-            "只依据提供图片和候选证据，不补充画面外事实；只能使用允许的 risk_code。"
-            "bbox 为左上角原点的 [x_min,y_min,x_max,y_max]；不得决定最终等级、分数、价格或工程结论。"
-        )
         model = os.environ.get("ANJU_ARK_PRO_MODEL" if self.provider_name == "ark" else "ANJU_OPENAI_PRO_MODEL", self.model_name)
-        return self._request(scan_id, prompt, media, FAIR_REVIEW_SCHEMA, "fair_candidate_reviews", "high", FAIR_REVIEW_PROMPT_VERSION, model)
+        schema = schema_with_allowed_risks(FAIR_DISCOVERY_SCHEMA, allowed_risks)
+        allowed_evidence_codes = sorted({str(code) for rule in camera_rules for code in rule.get("evidence_codes", [])})
+        schema["properties"]["candidates"]["items"]["properties"]["evidence_codes"]["items"]["enum"] = allowed_evidence_codes
+        return self._request(
+            scan_id, prompt, [media], schema, "fair_pro_candidates", "high", FAIR_DIRECT_PROMPT_VERSION, model,
+            request_timeout=min(self.timeout_seconds, 20), max_attempts=1,
+        )
 
-    def _request(self, assessment_id: str, prompt: str, media: list[dict], schema: dict, schema_name: str, detail: str, prompt_version: str | None = None, model_name: str | None = None) -> tuple[dict, dict]:
+    def _request(
+        self,
+        assessment_id: str,
+        prompt: str,
+        media: list[dict],
+        schema: dict,
+        schema_name: str,
+        detail: str,
+        prompt_version: str | None = None,
+        model_name: str | None = None,
+        *,
+        request_timeout: float | None = None,
+        max_attempts: int = 2,
+    ) -> tuple[dict, dict]:
+        started_at = time.monotonic()
         content: list[dict] = [{"type": "input_text", "text": prompt}]
         for item in media:
             encoded = base64.b64encode(Path(item["path"]).read_bytes()).decode("ascii")
@@ -255,15 +298,16 @@ class OpenAIVisionProvider:
         }
         payload.update(self._generation_options())
         last_error: ProviderError | None = None
-        for attempt in range(2):
+        for attempt in range(max_attempts):
             try:
                 request = Request(self.endpoint, data=json.dumps(payload).encode("utf-8"), method="POST", headers={
                     "Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"
                 })
-                with urlopen(request, timeout=self.timeout_seconds) as response:
+                with urlopen(request, timeout=request_timeout or self.timeout_seconds) as response:
                     response_data = json.loads(response.read())
                 parsed = self._extract(response_data)
                 usage = self._usage(response_data, attempt)
+                usage["latency_ms"] = round((time.monotonic() - started_at) * 1_000)
                 if prompt_version:
                     usage["prompt_version"] = prompt_version
                 return parsed, usage
@@ -274,7 +318,7 @@ class OpenAIVisionProvider:
                 last_error = ProviderError("provider_timeout", True)
             except (ValueError, KeyError, json.JSONDecodeError):
                 last_error = ProviderError("provider_invalid_response", True)
-            if not last_error.retryable or attempt == 1:
+            if not last_error.retryable or attempt == max_attempts - 1:
                 raise last_error
             time.sleep(0.25)
         raise last_error or ProviderError("provider_failed")
@@ -346,7 +390,8 @@ class MockVisionProvider:
             } for code, title, evidence, confidence, box in candidates if code in allowed_risks],
         }, self._usage())
 
-    def inspect_camera(self, assessment_id: str, room_type: str, media: dict, allowed_risks: list[str], profile_summary: dict, previous_summary: list[str]) -> tuple[dict, dict]:
+    def inspect_camera(self, assessment_id: str, room_type: str, media: dict, camera_rules: list[dict], profile_summary: dict, previous_summary: list[str]) -> tuple[dict, dict]:
+        allowed_risks = [str(item["risk_code"]) for item in camera_rules]
         code = next(iter(allowed_risks), "")
         suggestions = [] if not code else [{
             "risk_code": code, "title": "现场画面中的待确认提示", "evidence": "当前画面可见一个需要进一步确认的环境细节",
@@ -357,14 +402,12 @@ class MockVisionProvider:
         usage["prompt_version"] = CAMERA_PROMPT_VERSION
         return {"media_id": media["media_id"], "quality_usable": True, "scene_elements": ROOM_SCENE_ELEMENTS.get(room_type, []), "suggestions": suggestions, "save_as_evidence_recommended": bool(suggestions)}, usage
 
-    def fair_turbo(self, scan_id: str, zone_id: str, media: dict, allowed_risks: list[str]) -> tuple[dict, dict]:
+    def fair_analyze(self, scan_id: str, zone_id: str, media: dict, camera_rules: list[dict]) -> tuple[dict, dict]:
+        allowed_risks = [str(item["risk_code"]) for item in camera_rules]
         code = next(iter(allowed_risks), "floor_clutter")
-        usage = self._usage(); usage["prompt_version"] = FAIR_TURBO_PROMPT_VERSION
-        return {"frame_id": media["media_id"], "zone_id": zone_id, "candidates": [{"risk_code": code, "evidence": "游园会通行区域可见需要确认的低位障碍", "confidence": .88, "needs_manual_check": False, "bbox": [.2, .5, .6, .85]}]}, usage
-
-    def fair_review(self, scan_id: str, zone_id: str, media: list[dict], candidates: list[dict], allowed_risks: list[str]) -> tuple[dict, dict]:
-        usage = self._usage(); usage["prompt_version"] = FAIR_REVIEW_PROMPT_VERSION
-        return {"zone_id": zone_id, "reviews": [{"candidate_id": item["candidate_id"], "status": "confirmed", "risk_code": item["risk_code"], "evidence": item["evidence"], "bbox": item["bbox"], "merged_into_candidate_id": None} for item in candidates]}, usage
+        usage = self._usage(); usage["prompt_version"] = FAIR_DIRECT_PROMPT_VERSION
+        rule = next((item for item in camera_rules if item["risk_code"] == code), camera_rules[0])
+        return {"frame_id": media["media_id"], "zone_id": zone_id, "candidates": [{"risk_code": code, "evidence_codes": list(rule["required_evidence_codes"]), "evidence": "通行区域可见需要确认的低位障碍", "confidence": .88, "needs_manual_check": False, "bbox": [.2, .5, .6, .85]}]}, usage
 
     def _usage(self) -> dict:
         return {"model_name": self.model_name, "prompt_version": self.prompt_version, "input_tokens": 0, "output_tokens": 0, "latency_ms": 0, "schema_valid": True, "retry_count": 0, "fallback_used": False, "error_type": None}

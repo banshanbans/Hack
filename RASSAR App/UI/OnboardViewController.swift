@@ -7,14 +7,7 @@ final class OnboardViewController: UIViewController {
 
     private enum Step {
         case landing
-        case focus
         case prepare
-    }
-
-    private struct FocusOption {
-        let title: String
-        let subtitle: String
-        let profile: String
     }
 
     private struct RoomOption {
@@ -22,12 +15,6 @@ final class OnboardViewController: UIViewController {
         let value: String
     }
 
-    private let options = [
-        FocusOption(title: "老人独居", subtitle: "优先看看日常通行和取物", profile: "older_adult"),
-        FocusOption(title: "夜间起身", subtitle: "优先看看床边、照明和地面", profile: "night_walking"),
-        FocusOption(title: "行动不便", subtitle: "优先看看借力和转身空间", profile: "limited_mobility"),
-        FocusOption(title: "使用助行器", subtitle: "优先看看连续通道", profile: "mobility_aid")
-    ]
     private let roomOptions = [
         RoomOption(title: "入口区", value: "entrance"),
         RoomOption(title: "主通道", value: "main_aisle"),
@@ -37,8 +24,6 @@ final class OnboardViewController: UIViewController {
 
     private let contentStack = UIStackView()
     private let scrollView = UIScrollView()
-    private var selectedProfiles: Set<String> = []
-    private var optionButtons: [UIButton] = []
     private var step: Step = .landing
     private var voiceGuidanceEnabled = false
     private var selectedRoomType = "entrance"
@@ -66,7 +51,7 @@ final class OnboardViewController: UIViewController {
         guard !didOpenDemoReport,
               ProcessInfo.processInfo.arguments.contains("-AnjuOpenDemoReport") else { return }
         didOpenDemoReport = true
-        let context = AnjuAppContext.makeDefault(profiles: ["older_adult"], roomType: "entrance")
+        let context = AnjuAppContext.makeDefault(profiles: [], roomType: "entrance")
         DemoIssueFactory.populateIfRequested(context: context, force: true)
         let report = ReportViewController(context: context)
         report.modalPresentationStyle = .fullScreen
@@ -104,7 +89,6 @@ final class OnboardViewController: UIViewController {
             contentStack.removeArrangedSubview($0)
             $0.removeFromSuperview()
         }
-        optionButtons.removeAll()
     }
 
     private func showLanding() {
@@ -116,46 +100,19 @@ final class OnboardViewController: UIViewController {
         contentStack.setCustomSpacing(42, after: contentStack.arrangedSubviews.last!)
 
         let button = AnjuTheme.primaryButton(title: ProductCopy.startRoom)
-        button.accessibilityHint = "进入关注重点选择"
-        button.addTarget(self, action: #selector(showFocus), for: .touchUpInside)
+        button.accessibilityHint = "进入扫描区域选择"
+        button.addTarget(self, action: #selector(showPreparation), for: .touchUpInside)
         contentStack.addArrangedSubview(button)
     }
 
-    @objc private func showFocus() {
-        step = .focus
-        resetContent()
-        contentStack.addArrangedSubview(makeTitle(ProductCopy.focusTitle))
-        contentStack.addArrangedSubview(makeSubtitle(ProductCopy.focusSubtitle))
-        for (index, option) in options.enumerated() {
-            let button = makeOptionButton(option: option, index: index)
-            optionButtons.append(button)
-            contentStack.addArrangedSubview(button)
-        }
-        let continueButton = AnjuTheme.primaryButton(title: ProductCopy.continueAction)
-        continueButton.accessibilityIdentifier = "focus_continue"
-        continueButton.addTarget(self, action: #selector(showPreparation), for: .touchUpInside)
-        contentStack.addArrangedSubview(continueButton)
-        refreshOptionButtons()
-    }
-
     @objc private func showPreparation() {
-        guard !selectedProfiles.isEmpty else {
-            UIAccessibility.post(notification: .announcement, argument: "请先选择一个关注重点")
-            return
-        }
         step = .prepare
         resetContent()
         contentStack.addArrangedSubview(makeTitle(ProductCopy.prepareTitle))
-        contentStack.addArrangedSubview(makeSubtitle(ProductCopy.prepareSubtitle))
-
-        let roomTitle = makeSubtitle(ProductCopy.roomTypeTitle)
-        roomTitle.textColor = AnjuTheme.ink
-        roomTitle.font = .preferredFont(forTextStyle: .headline)
-        contentStack.addArrangedSubview(roomTitle)
         let roomControl = UISegmentedControl(items: roomOptions.map(\.title))
         roomControl.selectedSegmentIndex = roomOptions.firstIndex { $0.value == selectedRoomType } ?? 0
         roomControl.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
-        roomControl.accessibilityLabel = ProductCopy.roomTypeTitle
+        roomControl.accessibilityLabel = "扫描区域"
         roomControl.addAction(UIAction { [weak self] action in
             guard let self,
                   let control = action.sender as? UISegmentedControl,
@@ -164,8 +121,7 @@ final class OnboardViewController: UIViewController {
         }, for: .valueChanged)
         contentStack.addArrangedSubview(roomControl)
 
-        let tips = ["握稳手机，慢慢移动", "让地面和家具保持在画面中", "没有网络也可以继续完成"]
-        for tip in tips {
+        for tip in ProductCopy.fairPreparationTips {
             let label = makeSubtitle("• \(tip)")
             label.textColor = AnjuTheme.ink
             contentStack.addArrangedSubview(label)
@@ -191,31 +147,6 @@ final class OnboardViewController: UIViewController {
         contentStack.addArrangedSubview(button)
     }
 
-    @objc private func toggleOption(_ sender: UIButton) {
-        let option = options[sender.tag]
-        if selectedProfiles.contains(option.profile) {
-            selectedProfiles.remove(option.profile)
-        } else {
-            selectedProfiles.insert(option.profile)
-        }
-        refreshOptionButtons()
-    }
-
-    private func refreshOptionButtons() {
-        for button in optionButtons {
-            let selected = selectedProfiles.contains(options[button.tag].profile)
-            var configuration = button.configuration ?? .bordered()
-            configuration.baseBackgroundColor = selected ? AnjuTheme.teal.withAlphaComponent(0.14) : .white
-            configuration.baseForegroundColor = AnjuTheme.ink
-            configuration.image = UIImage(systemName: selected ? "checkmark.circle.fill" : "circle")
-            configuration.imagePlacement = .leading
-            configuration.imagePadding = 12
-            button.configuration = configuration
-            button.accessibilityTraits = selected ? [.button, .selected] : .button
-            button.accessibilityValue = selected ? "已选择" : "未选择"
-        }
-    }
-
     @objc private func beginScan() {
         let authorization = AVCaptureDevice.authorizationStatus(for: .video)
         switch authorization {
@@ -235,7 +166,7 @@ final class OnboardViewController: UIViewController {
     }
 
     private func openScanner() {
-        let context = AnjuAppContext.makeDefault(profiles: selectedProfiles, roomType: selectedRoomType)
+        let context = AnjuAppContext.makeDefault(profiles: [], roomType: selectedRoomType)
         Settings.instance.BLVAssistance = voiceGuidanceEnabled
         guard RoomCaptureSession.isSupported else {
             showUnsupported(context: context)
@@ -243,6 +174,14 @@ final class OnboardViewController: UIViewController {
         }
         guard let scanner = storyboard?.instantiateViewController(withIdentifier: "MainView") as? ViewController else { return }
         scanner.appContext = context
+        scanner.onNoAIAction = { [weak self, weak scanner] action in
+            scanner?.dismiss(animated: true) {
+                switch action {
+                case .rescan: self?.showPreparation()
+                case .exit: self?.showLanding()
+                }
+            }
+        }
         scanner.modalPresentationStyle = .fullScreen
         present(scanner, animated: true)
     }
@@ -306,21 +245,4 @@ final class OnboardViewController: UIViewController {
         return label
     }
 
-    private func makeOptionButton(option: FocusOption, index: Int) -> UIButton {
-        let button = UIButton(type: .system)
-        var configuration = UIButton.Configuration.bordered()
-        configuration.title = option.title
-        configuration.subtitle = option.subtitle
-        configuration.titleAlignment = .leading
-        configuration.cornerStyle = .large
-        configuration.contentInsets = .init(top: 12, leading: 16, bottom: 12, trailing: 16)
-        button.configuration = configuration
-        button.contentHorizontalAlignment = .leading
-        button.tag = index
-        button.heightAnchor.constraint(greaterThanOrEqualToConstant: 64).isActive = true
-        button.accessibilityLabel = option.title
-        button.accessibilityHint = option.subtitle
-        button.addTarget(self, action: #selector(toggleOption(_:)), for: .touchUpInside)
-        return button
-    }
 }
