@@ -124,7 +124,7 @@ CAMERA_SCHEMA = {
     },
 }
 
-FAIR_DIRECT_PROMPT_VERSION = "anju_ios_fair_pro_direct_v2"
+FAIR_CAMERA_PROMPT_VERSION = "anju_ios_fair_camera_direct_v3"
 FAIR_DISCOVERY_SCHEMA = {
     "type": "object", "additionalProperties": False, "required": ["frame_id", "zone_id", "candidates"],
     "properties": {
@@ -242,7 +242,7 @@ class OpenAIVisionProvider:
             "required_evidence_codes": item["required_evidence_codes"],
         } for item in camera_rules]
         prompt = (
-            "你正在使用 Pro 级视觉模型直接分析活动现场的 iPhone 关键帧。"
+            "你正在使用低延迟视觉模型分析活动现场的 iPhone 关键帧。"
             f"assessment_context=venue_fair, frame_id={media['media_id']}, zone_id={zone_id}, camera_rules={rule_guidance}。"
             "只报告本帧中清楚可见、可定位、与人员通行或现场使用直接相关的候选风险。"
             "四个 Zone 使用同一套可见问题规则；zone_id 只记录位置，不能缩窄候选类型。"
@@ -257,12 +257,19 @@ class OpenAIVisionProvider:
             "evidence_codes 只能从该 risk_code 的 allowed_evidence_codes 选择，并必须包含全部 required_evidence_codes。"
             "不要输出风险等级、分数、价格、整改方案、HTML、SVG、医疗结论或场馆验收表述。"
         )
-        model = os.environ.get("ANJU_ARK_PRO_MODEL" if self.provider_name == "ark" else "ANJU_OPENAI_PRO_MODEL", self.model_name)
+        if self.provider_name == "ark":
+            model = (
+                os.environ.get("ANJU_ARK_IOS_CAMERA_MODEL")
+                or os.environ.get("ANJU_ARK_TURBO_MODEL")
+                or "doubao-seed-2-1-turbo-260628"
+            )
+        else:
+            model = os.environ.get("ANJU_OPENAI_IOS_CAMERA_MODEL") or os.environ.get("ANJU_OPENAI_TURBO_MODEL", self.model_name)
         schema = schema_with_allowed_risks(FAIR_DISCOVERY_SCHEMA, allowed_risks)
         allowed_evidence_codes = sorted({str(code) for rule in camera_rules for code in rule.get("evidence_codes", [])})
         schema["properties"]["candidates"]["items"]["properties"]["evidence_codes"]["items"]["enum"] = allowed_evidence_codes
         return self._request(
-            scan_id, prompt, [media], schema, "fair_pro_candidates", "high", FAIR_DIRECT_PROMPT_VERSION, model,
+            scan_id, prompt, [media], schema, "fair_camera_candidates", "high", FAIR_CAMERA_PROMPT_VERSION, model,
             request_timeout=min(self.timeout_seconds, 20), max_attempts=1,
         )
 
@@ -405,7 +412,7 @@ class MockVisionProvider:
     def fair_analyze(self, scan_id: str, zone_id: str, media: dict, camera_rules: list[dict]) -> tuple[dict, dict]:
         allowed_risks = [str(item["risk_code"]) for item in camera_rules]
         code = next(iter(allowed_risks), "floor_clutter")
-        usage = self._usage(); usage["prompt_version"] = FAIR_DIRECT_PROMPT_VERSION
+        usage = self._usage(); usage["prompt_version"] = FAIR_CAMERA_PROMPT_VERSION
         rule = next((item for item in camera_rules if item["risk_code"] == code), camera_rules[0])
         return {"frame_id": media["media_id"], "zone_id": zone_id, "candidates": [{"risk_code": code, "evidence_codes": list(rule["required_evidence_codes"]), "evidence": "通行区域可见需要确认的低位障碍", "confidence": .88, "needs_manual_check": False, "bbox": [.2, .5, .6, .85]}]}, usage
 

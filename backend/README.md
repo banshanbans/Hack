@@ -52,7 +52,7 @@ ANJU_MOCK_ANALYSIS=1 .venv/bin/python -m backend.app.server
 - `OPENAI_API_KEY` / `ANJU_OPENAI_MODEL`：切换到 OpenAI Provider 时使用。
 - `ANJU_ANALYSIS_TIMEOUT_SECONDS`：模型请求超时，默认 60 秒；网络超时最多重试一次。
 - `ANJU_TURBO_MAX_CONCURRENCY`：进程内 H5 实时相机并发上限，默认 2；满载的新帧快速返回可重试的 429。
-- `ANJU_PRO_MAX_CONCURRENCY`：进程内质量检查、正式照片分析和 iOS 实时 Pro 分析共享并发上限，默认 1；等待过程在线程池完成，不阻塞事件循环。
+- `ANJU_PRO_MAX_CONCURRENCY`：进程内质量检查、正式照片分析和 iOS 实时视觉分析共享并发上限，默认 1；等待过程在线程池完成，不阻塞事件循环。
 - 方舟 Responses API 请求固定发送 `thinking.type=disabled`，关闭深度思考以降低质量检查和风险定位延迟。
 - 方舟图片质量检查使用 `detail=low`，正式风险分析使用其支持的最高细节等级 `detail=high`。
 - `ANJU_DB_PATH`：SQLite 路径，默认 `backend/data/anju.db`。
@@ -66,8 +66,9 @@ ANJU_MOCK_ANALYSIS=1 .venv/bin/python -m backend.app.server
 - `ANJU_FORWARDED_ALLOW_IPS`：允许提供转发头的边缘代理 IP，默认只信任本机。
 - `ANJU_ENABLE_H5_VIDEO` / `ANJU_ENABLE_H5_CAMERA` / `ANJU_ENABLE_IOS_FAIR_AR`：P0—P2 独立能力开关，默认关闭，本地 `.env` 可显式开启。
 - `ANJU_ARK_H5_CAMERA_MODEL`：H5 实时相机模型，当前值为 `doubao-seed-2-1-turbo-260628`；未设置时兼容回退到 `ANJU_ARK_TURBO_MODEL`。
-- `ANJU_ARK_TURBO_MODEL`：H5 实时相机的兼容回退配置。
-- `ANJU_ARK_PRO_MODEL`：iOS 实时帧直接分析使用的 Pro 级模型，当前验证值为 `doubao-seed-2-1-pro-260628`。
+- `ANJU_ARK_IOS_CAMERA_MODEL`：iOS 游园会实时帧模型，当前本地配置为 `doubao-seed-2-1-turbo-260628`；未设置时回退到 `ANJU_ARK_TURBO_MODEL`。
+- `ANJU_ARK_TURBO_MODEL`：H5/iOS 实时相机的兼容回退配置。
+- `ANJU_ARK_PRO_MODEL`：保留给正式照片或后续 iOS Pro 复核流程，不再决定 iOS 实时帧模型。
 
 不要把 `.env`、密钥、数据库或用户照片提交到仓库。对外部署时必须使用 HTTPS，并为数据目录配置备份和删除策略。
 
@@ -82,7 +83,7 @@ ANJU_MOCK_ANALYSIS=1 .venv/bin/python -m backend.app.server
 - A/B/C 方案、参考价格、清单和报告 PNG 长图下载；旧只读分享 API 仅保留兼容；
 - H5 视频只在浏览器解码，确认后上传 3—6 张代表帧，并保存来源字段用于跨帧合并；
 - H5 相机使用独立的版本化可见问题规则和 `anju_h5_camera_discovery_v2`；房型只作为场景提示，临时帧响应后删除，不进入分数；
-- iPhone 游园会四个 Zone 共用独立的 12 类版本化规则和 `anju_ios_fair_pro_direct_v1`，每个合格关键帧直接使用 Pro 级模型；扫描结束只做确定性归并、评分和 A/B/C 预算，不再调用复核模型。H5 家庭相机规则与此分离。
+- iPhone 游园会四个 Zone 共用独立的 12 类版本化规则和 `anju_ios_fair_camera_direct_v3`，本地实时帧已切换到 Turbo 模型。误合并与正式复核的收口计划见 `docs/IOS_CAMERA_REJECTION_REMEDIATION_PLAN.md`；未完成真机验收前不视为生产可发布能力。
 
 整改复查对比和 PDF 导出仍不在本次范围；移动浏览器和 LiDAR 真机效果以外部验收记录为准。
 

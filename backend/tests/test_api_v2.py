@@ -287,7 +287,7 @@ class V2APITests(unittest.TestCase):
         self.assertIs(dispatched.await_args.args[0].__self__, self.service)
         self.assertEqual(dispatched.await_args.args[0].__name__, "inspect_camera_frame")
 
-    def test_fair_direct_pro_analysis_and_deterministic_report(self) -> None:
+    def test_fair_camera_analysis_and_deterministic_report(self) -> None:
         created = self.client.post("/api/v2/fair-scans")
         self.assertEqual(created.status_code, 201)
         scan = created.json()
@@ -301,13 +301,13 @@ class V2APITests(unittest.TestCase):
                 content=b"\xff\xd8\xfffair-frame" + bytes([index]),
             )
             self.assertEqual(analyzed.status_code, 200)
-            self.assertEqual(analyzed.json()["prompt_version"], "anju_ios_fair_pro_direct_v2")
+            self.assertEqual(analyzed.json()["prompt_version"], "anju_ios_fair_camera_direct_v3")
             self.assertEqual(analyzed.json()["rule_version"], "venue-fair-rules-2026-07-26-v2")
             self.assertTrue(all(item["title"] and item["short_advice"] for item in analyzed.json()["candidates"]))
             self.assertTrue(analyzed.json()["candidates"])
         finalized = self.client.post(f"/api/v2/fair-scans/{scan['scan_id']}/zones/entrance:finalize", headers=auth)
         self.assertEqual(finalized.status_code, 200)
-        self.assertEqual(finalized.json()["prompt_version"], "anju_ios_fair_pro_direct_v2")
+        self.assertEqual(finalized.json()["prompt_version"], "anju_ios_fair_camera_direct_v3")
         self.assertEqual(finalized.json()["rule_version"], "venue-fair-rules-2026-07-26-v2")
         self.assertEqual(len(finalized.json()["risks"]), 1)
         report = self.client.get(f"/api/v2/fair-scans/{scan['scan_id']}/report", headers=auth)
@@ -318,7 +318,7 @@ class V2APITests(unittest.TestCase):
         self.assertTrue(all(item["score_eligible"] for item in report.json()["zones"][0]["risks"]))
         self.assertEqual(report.json()["rule_version"], "venue-fair-rules-2026-07-26-v2")
 
-    def test_fair_direct_pro_provider_error_is_structured_and_audited(self) -> None:
+    def test_fair_camera_provider_error_is_structured_and_audited(self) -> None:
         class TimeoutProvider(MockVisionProvider):
             def fair_analyze(self, scan_id, zone_id, media, allowed_risks):
                 raise ProviderError("provider_timeout")
@@ -340,7 +340,7 @@ class V2APITests(unittest.TestCase):
             (scan["scan_id"],),
         )
         self.assertIsNotNone(event)
-        self.assertIn('"skill_name": "fair_pro_analysis"', event["payload_json"])
+        self.assertIn('"skill_name": "fair_camera_analysis"', event["payload_json"])
 
     def test_encoded_ios_fair_action_paths_are_routed(self) -> None:
         scan = self.client.post("/api/v2/fair-scans").json()

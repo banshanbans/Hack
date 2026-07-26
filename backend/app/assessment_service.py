@@ -484,7 +484,7 @@ class AssessmentService:
             media = {"media_id": frame_id, "path": str(path), "mime_type": mime_type, "zone_id": zone_id}
             camera_rules = self.rules.fair_rules_for(zone_id)
             rule_catalog = {item["risk_code"]: item for item in camera_rules}
-            with self._model_slot("pro", scan_id, None, "fair_pro_analysis"):
+            with self._model_slot("pro", scan_id, None, "fair_camera_analysis"):
                 response, usage = self.provider().fair_analyze(scan_id, zone_id, media, camera_rules)
             candidates = self._validate_fair_candidates(response, frame_id, zone_id, rule_catalog)
             raw_candidates = response.get("candidates", []) if isinstance(response, dict) else []
@@ -495,7 +495,7 @@ class AssessmentService:
             })
             self._prune_fair_frames(scan_id, zone_id)
             self.event(scan_id, None, "ai_call_completed", {
-                "skill_name": "fair_pro_analysis", "zone_id": zone_id, **usage,
+                "skill_name": "fair_camera_analysis", "zone_id": zone_id, **usage,
                 "candidate_count_raw": raw_count,
                 "candidate_count_validated": len(candidates),
                 "candidate_count_rejected": max(0, raw_count - len(candidates)),
@@ -503,12 +503,12 @@ class AssessmentService:
             })
             return {
                 "frame_id": frame_id, "zone_id": zone_id, "candidates": candidates, "temporary": True,
-                "prompt_version": usage.get("prompt_version", "anju_ios_fair_pro_direct_v2"),
+                "prompt_version": usage.get("prompt_version", "anju_ios_fair_camera_direct_v3"),
                 "rule_version": self.rules.fair_rule_version,
             }
         except ProviderError as error:
             self.event(scan_id, None, "ai_call_failed", {
-                "skill_name": "fair_pro_analysis", "zone_id": zone_id, "error_type": error.code,
+                "skill_name": "fair_camera_analysis", "zone_id": zone_id, "error_type": error.code,
             })
             if not self.repository.fetchone("SELECT id FROM fair_frames WHERE id=?", (frame_id,)):
                 path.unlink(missing_ok=True)
@@ -533,7 +533,7 @@ class AssessmentService:
             result = {
                 "zone_id": zone_id, "status": "reviewed", "score": 100,
                 "coverage_limited": len(rows) < 2, "risks": [],
-                "prompt_version": "anju_ios_fair_pro_direct_v2",
+                "prompt_version": "anju_ios_fair_camera_direct_v3",
                 "rule_version": self.rules.fair_rule_version,
             }
         else:
@@ -550,7 +550,7 @@ class AssessmentService:
                 "zone_id": zone_id, "status": "reviewed",
                 "score": max(0, 100 - sum(deductions.values())),
                 "coverage_limited": len(rows) < 2, "risks": risks,
-                "prompt_version": "anju_ios_fair_pro_direct_v2", "rule_version": self.rules.fair_rule_version,
+                "prompt_version": "anju_ios_fair_camera_direct_v3", "rule_version": self.rules.fair_rule_version,
             }
         now = utc_now()
         self.repository.execute("DELETE FROM fair_zones WHERE scan_id=? AND zone_id=?", (scan_id, zone_id))
@@ -559,7 +559,7 @@ class AssessmentService:
         return result
 
     def review_fair_zone(self, scan_id: str, zone_id: str) -> dict:
-        """Compatibility alias for clients released before direct Pro analysis."""
+        """Compatibility alias for clients released before direct frame analysis."""
         return self.finalize_fair_zone(scan_id, zone_id)
 
     def fair_report(self, scan_id: str) -> dict:
@@ -577,7 +577,7 @@ class AssessmentService:
             "coverage_percent": round(len({item["zone_id"] for item in zones}) / len(FAIR_ZONES) * 100),
             "zones": zones,
             "budget": {"currency": "CNY", "total_min": sum(item["total_min"] for item in selected_prices), "total_max": sum(item["total_max"] for item in selected_prices)},
-            "prompt_version": "anju_ios_fair_pro_direct_v2",
+            "prompt_version": "anju_ios_fair_camera_direct_v3",
             "rule_version": self.rules.fair_rule_version,
             "disclaimer": "仅为游园会现场辅助筛查参考，不代表场馆验收或施工报价。",
         }
@@ -614,7 +614,7 @@ class AssessmentService:
         return accepted
 
     def _direct_fair_reviews(self, candidates: list[dict]) -> list[dict]:
-        """Deterministically canonicalize direct Pro findings without another model call."""
+        """Deterministically canonicalize direct camera findings without another model call."""
         grouped: dict[str, list[dict]] = {}
         for candidate in candidates:
             grouped.setdefault(candidate["risk_code"], []).append(candidate)

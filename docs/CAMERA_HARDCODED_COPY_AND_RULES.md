@@ -1,7 +1,7 @@
 # H5 实时相机与 iOS 游园会相机：硬编码文案和规则清单
 
 > 盘点日期：2026-07-26  
-> 范围：H5 实时相机、iOS 游园会直接 Pro 分析，以及两套相互独立的服务端规则  
+> 范围：H5 实时相机、iOS 游园会实时帧分析，以及两套相互独立的服务端规则
 > 本文只记录当前代码真实行为，不代表这些内容已经完成产品评审或真实场景验证。
 
 ## 1. 当前版本与边界
@@ -9,7 +9,8 @@
 | 项目 | 当前值 |
 |---|---|
 | H5 实时发现 Prompt | `anju_h5_camera_discovery_v2` |
-| iOS 直接 Pro Prompt | `anju_ios_fair_pro_direct_v1` |
+| iOS 实时帧 Prompt | `anju_ios_fair_camera_direct_v3` |
+| iOS 实时帧模型 | `doubao-seed-2-1-turbo-260628` |
 | 实时相机规则版本 | `live-camera-rules-2026-07-25-v2` |
 | H5 场景 | `assessment_context=home_live_camera` |
 | iOS 场景 | `assessment_context=venue_fair` |
@@ -186,7 +187,7 @@
 | `high_reach_item` | 仅 H5 | 常用物品放得过高 | 把常用物品移到肩部以下 | 常用物品明显需要踮脚、踩高或过度伸手才能取得 |
 | `bedside_obstruction` | 仅 H5 | 床边起身路线被挡 | 清出床边起身路线 | 床边落脚或起身通道被清楚可见的物品占用 |
 
-## 6. iOS Pro 后正式等级与扣分
+## 6. iOS 服务端正式等级与扣分
 
 来源：`backend/rules/venue_fair_rules.zh-CN.json`
 
@@ -247,13 +248,14 @@
 
 B 档预算汇总为所有风险 B 方案区间的直接求和。
 
-## 8. iOS 直接 Pro 当前调用规则
+## 8. iOS 实时帧当前调用规则
 
-- 每个通过端侧画质和变化门控的关键帧直接调用 Pro 级模型。
+- 每个通过端侧画质和变化门控的关键帧调用 `doubao-seed-2-1-turbo-260628`。
 - 每个 Zone 最多保留 6 张服务端代表帧。
 - 每帧最多接受 5 个候选；iOS 单帧请求超时为 30 秒。
 - 扫描结束调用 `:finalize`，只做确定性证据校验、同类跨帧归并、评分和预算汇总，不发起模型请求。
-- iOS 直接 Pro 与照片质量检查、正式照片分析共享一个并发槽，默认并发上限为 1。
+- iOS 实时帧当前仍与照片质量检查、正式照片分析共享一个排队并发槽，默认并发上限为 1。
+- 当前的误合并与 Pro 正式复核缺口见 `IOS_CAMERA_REJECTION_REMEDIATION_PLAN.md`，完成前不将该模型切换标记为生产已验证。
 
 ## 9. 当前仍需要收口的文案
 

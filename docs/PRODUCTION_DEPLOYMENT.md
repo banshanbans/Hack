@@ -15,8 +15,10 @@
 - `/opt/anju/backups`：仅 root 可读的发布前备份。
 
 SQLite 模式必须保持单 worker、单应用副本。`anju-app` 不映射公网端口，只有
-Caddy 暴露 80/443。方舟模型固定为 `doubao-seed-2-1-pro-260628`，请求发送
-`thinking.type=disabled`；最终风险等级、评分和预算仍由本地规则决定。
+Caddy 暴露 80/443。正式照片分析默认使用
+`doubao-seed-2-1-pro-260628`；iOS 实时帧的候选配置为
+`doubao-seed-2-1-turbo-260628`。方舟请求发送 `thinking.type=disabled`；最终风险等级、评分和预算仍由本地规则决定。
+iOS 模型切换在完成 `IOS_CAMERA_REJECTION_REMEDIATION_PLAN.md` 的发布门禁前不得上生产。
 
 ## 2. 发布内容与密钥准备
 
@@ -44,6 +46,7 @@ sudoedit /opt/anju/shared/.env.production
 - `ANJU_MOCK_ANALYSIS=0`；
 - `ANJU_VISION_PROVIDER=ark`；
 - `ANJU_ARK_MODEL=doubao-seed-2-1-pro-260628`；
+- `ANJU_ARK_IOS_CAMERA_MODEL=doubao-seed-2-1-turbo-260628`；
 - `ANJU_ALLOWED_HOSTS` 只包含两个生产域名及容器健康检查需要的本机 Host；
 - `ANJU_FORWARDED_ALLOW_IPS=172.30.25.2`；
 - `.env.production` 未进入 release、镜像或 Git。

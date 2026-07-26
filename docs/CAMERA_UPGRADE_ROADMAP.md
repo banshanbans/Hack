@@ -4,7 +4,7 @@
 > 适用范围：H5 视频抽帧、H5 实时相机、游园会 iPhone AR 演示
 > 依赖：根目录 `PRD.md`、`AGENTS.md` 及当前 v2 Assessment API
 > 更新时间：2026-07-26
-> 当前 iOS 实现已由“Turbo 发现 → Pro 复核”改为 `anju_ios_fair_pro_direct_v1` 直接 Pro 分析；本文后续保留的 Turbo/Review 内容仅是历史路线记录。
+> 当前工作区的 iOS 实时帧已切换为 `anju_ios_fair_camera_direct_v3` 和 `doubao-seed-2-1-turbo-260628`；误合并、可观测性和正式 Pro 复核收口见 `IOS_CAMERA_REJECTION_REMEDIATION_PLAN.md`，尚未部署生产。
 
 ---
 
@@ -14,7 +14,7 @@
 
 1. P0：H5 在浏览器本地解码视频，选出 3—6 张代表帧，只上传图片；
 2. P1：H5 增加实时相机入口，以本地门控和临时检查接口持续输出结构化建议；
-3. P2：iPhone 在游园会现场使用 Pro 级模型直接分析关键帧、ARKit 定位，并在扫描结束时仅用确定性规则完成归并、评分和方案链路。
+3. P2：iPhone 在游园会现场使用 Turbo 模型实时发现关键帧候选、ARKit 定位，并在正式评分前完成可追溯的空间归并和 Pro 复核。
 
 实施前先补齐跨帧媒体来源、重复风险合并和图像方向转换。否则视频和连续相机帧可能把同一物理风险重复计分，iPhone 的 bbox 也可能无法正确映射到深度图。
 
@@ -52,8 +52,8 @@
 
 - P0：`frontend/src/video.ts` 完成本地解码、8—16 帧候选、本地亮度/清晰度/感知哈希筛选和 3—6 帧确认上传；服务端保存来源元数据并在评分前合并同源相邻重复证据；
 - P1：新增 `/api/v2/assessments/{assessment_id}/camera/frames:inspect`，当前使用 `anju_h5_camera_discovery_v2` 和独立可见问题规则，响应后删除临时帧；H5 完成三栏导航、活动弹窗、后置相机、2 秒候选门控、单请求、退避和离页停轨；
-- P2：新增 `/api/v2/fair-scans`、Zone Turbo、Zone Pro review 和 v2 游园会报告；iOS 当前使用 `anju_ios_fair_turbo_v2` 与 `anju_ios_fair_review_pro_v1`，支持四 Zone 共用临时规则、静止画面门控、ARKit 历史深度定位、Pro 后正式规则结果和 A/B/C 预算；
-- 模型：H5 实时相机通过 `ANJU_ARK_H5_CAMERA_MODEL` 独立使用 `doubao-seed-2-1-turbo-260628`；iPhone 游园会直接分析通过 `ANJU_ARK_PRO_MODEL` 使用 `doubao-seed-2-1-pro-260628`；旧的 `ANJU_ARK_TURBO_MODEL` 仅保留兼容回退，不在日志中输出密钥；
+- P2：新增 `/api/v2/fair-scans`、Zone 关键帧分析和 v2 游园会报告；当前工作区的 iOS 实时帧使用 `anju_ios_fair_camera_direct_v3`，四 Zone 共用独立规则、静止画面门控和 ARKit 历史深度定位；Pro 正式复核回归列入收口计划；
+- 模型：H5 实时相机通过 `ANJU_ARK_H5_CAMERA_MODEL` 独立使用 `doubao-seed-2-1-turbo-260628`；iPhone 游园会实时帧通过 `ANJU_ARK_IOS_CAMERA_MODEL` 使用同一 Turbo 模型；`ANJU_ARK_TURBO_MODEL` 仅作兼容回退，`ANJU_ARK_PRO_MODEL` 保留给正式分析/复核；
 - 自动验证：Python 33 项、React 22 项、Swift 18 项通过，React 生产构建与 iOS generic 无签名构建通过。
 
 ---
@@ -79,7 +79,7 @@ H5 实时相机
   -> 用户确认保存的代表帧才进入 v2 正式媒体
 
 iPhone 游园会
-  -> Pro 级模型直接候选：risk_code + bbox + confidence
+  -> Turbo 模型实时候选：risk_code + bbox + confidence
   -> 历史 ARFrame 深度/内参/位姿
   -> 世界坐标与 Zone 内合并
   -> 扫描结束后由服务端确定性归并候选

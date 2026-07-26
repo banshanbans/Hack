@@ -32,7 +32,7 @@ class FairRiskProvider(MockVisionProvider):
     def fair_analyze(self, scan_id, zone_id, media, camera_rules):
         rule = next(item for item in camera_rules if item["risk_code"] == self.risk_code)
         usage = self._usage()
-        usage["prompt_version"] = "anju_ios_fair_pro_direct_v2"
+        usage["prompt_version"] = "anju_ios_fair_camera_direct_v3"
         return {
             "frame_id": media["media_id"], "zone_id": zone_id,
             "candidates": [{
@@ -190,19 +190,19 @@ class AssessmentServiceTests(unittest.TestCase):
         self.assertEqual(len(risks[0]["evidence_media_ids"]), 2)
 
     @patch.dict("os.environ", {"ANJU_ENABLE_IOS_FAIR_AR": "1"})
-    def test_direct_pro_findings_are_finalized_without_a_second_model_call(self) -> None:
+    def test_direct_camera_findings_are_finalized_without_a_second_model_call(self) -> None:
         service = AssessmentService(SQLiteRepository(self.db), self.media, provider=FairRiskProvider("floor_clutter"))
         scan = service.create_fair_scan()
         service.analyze_fair_frame(scan["scan_id"], "entrance", "frame-direct", JPEG, "image/jpeg", 1280, 720, "right")
         reviewed = service.finalize_fair_zone(scan["scan_id"], "entrance")
         self.assertEqual(reviewed["status"], "reviewed")
-        self.assertEqual(reviewed["prompt_version"], "anju_ios_fair_pro_direct_v2")
+        self.assertEqual(reviewed["prompt_version"], "anju_ios_fair_camera_direct_v3")
         self.assertLess(reviewed["score"], 100)
         self.assertEqual(reviewed["risks"][0]["status"], "confirmed")
         self.assertTrue(reviewed["risks"][0]["score_eligible"])
         report = service.fair_report(scan["scan_id"])
         self.assertEqual(report["status"], "reviewed")
-        self.assertEqual(report["prompt_version"], "anju_ios_fair_pro_direct_v2")
+        self.assertEqual(report["prompt_version"], "anju_ios_fair_camera_direct_v3")
 
     def test_venue_fair_rules_are_versioned_and_identical_for_all_zones(self) -> None:
         expected = set(self.service.rules.fair_risk_rules)

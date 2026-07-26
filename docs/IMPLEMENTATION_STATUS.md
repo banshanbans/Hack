@@ -32,7 +32,7 @@
 | 生产 Web 入口 | 已实现 | FastAPI/Uvicorn 完整迁移，单进程托管 React 构建；旧标准库 HTTP 服务和原生 DOM H5 已移除 |
 | P0 H5 视频 | 已实现 | 浏览器本地解码、亮度/清晰度/感知哈希初筛、3—6 张代表帧确认上传；原视频不进入请求，跨帧重复在评分前合并 |
 | P1 H5 相机 | 已实现 | 点击画面中央相机图标后才申请后置相机权限，无额外开启按钮；本地门控、单请求与退避；使用独立跨房型可见问题规则，场景选择只作为提示；最近已分析帧作为短暂冻结背景，bbox/polygon 以二维 SVG 对齐标注约 3 秒，不做跨帧跟踪或世界锚定；本页发现记录累计展示且刷新清空；临时建议不落正式风险、不计分 |
-| P2 游园会 iPhone AR | 已实现 | 每个合格关键帧直接使用云端 Pro 级模型发现，结束扫描时不再调用模型，只由服务端确定性归并、评分和预算；iOS target 已移除 YOLO/Core ML 风险模型和本地风险同步；保留质量/变化门控、ARKit 历史深度定位、四 Zone、12 类独立规则和 A/B/C 预算 |
+| P2 游园会 iPhone AR | 收口中 | 本地实时帧已切换为 `doubao-seed-2-1-turbo-260628`；质量/变化门控、ARKit 历史深度定位、四 Zone、12 类独立规则和 A/B/C 预算保留。误合并、驳回分类埋点和正式 Pro 复核仍待实施，不视为生产已完成 |
 
 ## 明确未实施
 
@@ -60,9 +60,16 @@
 ## 2026-07-26 H5 实时相机模型切换
 
 - H5 实时相机新增独立的 `ANJU_ARK_H5_CAMERA_MODEL`，生产值为 `doubao-seed-2-1-turbo-260628`；未配置时兼容回退到旧的 `ANJU_ARK_TURBO_MODEL`；
-- iPhone 游园会保持直接使用 `ANJU_ARK_PRO_MODEL=doubao-seed-2-1-pro-260628`，不受 H5 切换影响；
+- 该次 H5 切换当时 iPhone 仍使用 `ANJU_ARK_PRO_MODEL`；当前 iOS 状态以下方“iOS 实时相机模型切换（本地）”为准；
 - Provider 单测、完整 Python 测试和产品文案校验通过；候选及正式容器使用受控演示图片完成真实方舟冒烟，审计返回 H5 `model_name=doubao-seed-2-1-turbo-260628`；
 - 生产镜像为 `anju-app:d1c1e47-wip-h5turbo-20260726-091412`，公网 `/health` 与 H5 首页验证通过；真实家庭/游园会效果仍需授权画面评测。
+
+## 2026-07-26 iOS 实时相机模型切换（本地）
+
+- 新增 `ANJU_ARK_IOS_CAMERA_MODEL`，当前值为 `doubao-seed-2-1-turbo-260628`；未设置时回退到 `ANJU_ARK_TURBO_MODEL`；
+- iOS 审计 Prompt 版本更新为 `anju_ios_fair_camera_direct_v3`，不再把 Turbo 模型记录为 Pro；
+- 该切换尚未部署生产，也未使用授权游园会画面完成效果对比；
+- 驳回率口径、空间去重、重试与 Pro 正式复核计划见 `docs/IOS_CAMERA_REJECTION_REMEDIATION_PLAN.md`。
 
 ## 2026-07-25 生产相机会话故障修复
 
@@ -92,7 +99,7 @@
 - H5 使用 11 类跨房型临时发现规则，`room_type` 降为场景提示，不再把卫生间等单一房型作为候选白名单；
 - iOS 四个游园会 Zone 使用同一套 9 类临时发现规则，新增湿滑地面和通行高差；Zone 只记录位置，不缩窄候选类型；
 - 服务端为临时候选返回规则确定的 `title`、`short_advice` 和 `rule_version`，模型只负责可见证据、位置和置信度；
-- H5 实时相机复用现有 Turbo 模型配置以缩短交互等待；正式照片分析和 iOS Pro 复核仍使用 Pro 模型；
+- H5 实时相机复用现有 Turbo 模型配置以缩短交互等待；正式照片分析仍使用 Pro 模型；iOS 后续切换见上方独立记录；
 - H5 每次发现追加到页面内存历史，画面 1/3 处一次显示一条短建议约 3 秒；刷新后清空，不写入正式风险或浏览器持久化；
 - iOS 在相机下方显示可滚动的本次扫描临时建议历史；按产品要求不增加 3 秒浮层；
 - Analytics 记录原始、通过、拒绝候选数量、画面质量和实时相机规则版本，但不记录原始相机帧或完整模型响应。
@@ -100,10 +107,10 @@
 
 以上改动仍在工作区，尚未部署到生产，也尚未完成 Safari/Chrome 与 LiDAR iPhone 真机视觉验收。
 
-## 2026-07-26 iOS Pro 复核前资源释放
+## 2026-07-26 iOS 远端完成前资源释放
 
 - 扫描完成路径不再强制解包 `appContext`；上下文异常时改为可恢复的部分结果提示；
-- 进入纯网络 Pro Review 前暂停并脱离 ARKit / RoomPlan session 和 delegate，清理 RealityKit 锚点、风险标签、Core Image 缓存和语音队列；
+- 进入纯网络 Zone finalize / report 前暂停并脱离 ARKit / RoomPlan session 和 delegate，清理 RealityKit 锚点、风险标签、Core Image 缓存和语音队列；
 - 清理 `RoomObjectReplicator` 的 RoomPlan 对象图，并断开 `Settings` 单例对扫描页和 replicator 的强引用；
 - 报告仍仅使用释放前已同步到 `AnjuCore` repository 的风险，不依赖已清理的 AR 资源。
 

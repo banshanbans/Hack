@@ -140,7 +140,7 @@ class OpenAIProviderTests(unittest.TestCase):
 
         self.assertEqual(request.call_args.kwargs["model_name"], "shared-turbo-model")
 
-    def test_fair_direct_pro_schema_constrains_risks_and_evidence_codes(self) -> None:
+    def test_ios_camera_uses_dedicated_turbo_model_and_constrains_schema(self) -> None:
         provider = ArkVisionProvider("ark-test-key", model_name="pro-model")
         media = {"media_id": "fair-frame", "path": "/tmp/not-read.jpg", "mime_type": "image/jpeg"}
         rules = [{
@@ -149,7 +149,10 @@ class OpenAIProviderTests(unittest.TestCase):
             "evidence_codes": ["marked_exit_visible", "localized_obstruction_visible"],
             "required_evidence_codes": ["marked_exit_visible", "localized_obstruction_visible"],
         }]
-        with patch.dict("os.environ", {"ANJU_ARK_PRO_MODEL": "pro-direct-model"}), patch.object(
+        with patch.dict("os.environ", {
+            "ANJU_ARK_IOS_CAMERA_MODEL": "doubao-seed-2-1-turbo-260628",
+            "ANJU_ARK_PRO_MODEL": "pro-direct-model",
+        }), patch.object(
             provider, "_request", return_value=({}, {})
         ) as request:
             provider.fair_analyze("scan-1", "entrance", media, rules)
@@ -159,13 +162,44 @@ class OpenAIProviderTests(unittest.TestCase):
         self.assertEqual(candidate["properties"]["risk_code"]["enum"], ["marked_exit_obstruction"])
         self.assertEqual(candidate["properties"]["evidence_codes"]["items"]["enum"], ["localized_obstruction_visible", "marked_exit_visible"])
         self.assertIn("evidence_codes", candidate["required"])
-        self.assertEqual(request.call_args.args[7], "pro-direct-model")
+        self.assertEqual(request.call_args.args[7], "doubao-seed-2-1-turbo-260628")
+        self.assertEqual(request.call_args.args[6], "anju_ios_fair_camera_direct_v3")
         prompt = request.call_args.args[1]
         self.assertIn("豆包/懒人沙发/椅子", prompt)
         self.assertIn("裸露线缆、延长线或插排", prompt)
         self.assertIn("舞台边缘、临时台阶或门槛", prompt)
         self.assertIn("电缆保护槽", prompt)
         self.assertIn("同一物理问题在同一帧只输出一个最具体的 risk_code", prompt)
+
+    def test_ios_camera_falls_back_to_shared_turbo_model(self) -> None:
+        provider = ArkVisionProvider("ark-test-key", model_name="pro-model")
+        media = {"media_id": "fair-frame", "path": "/tmp/not-read.jpg", "mime_type": "image/jpeg"}
+        rules = [{
+            "risk_code": "floor_clutter", "title": "低位物体侵入通行区域", "visual_cue": "通道中有杂物",
+            "evidence_codes": ["localized_obstruction_visible", "path_intrusion_visible"],
+            "required_evidence_codes": ["localized_obstruction_visible", "path_intrusion_visible"],
+        }]
+        with patch.dict("os.environ", {"ANJU_ARK_TURBO_MODEL": "shared-turbo-model"}, clear=True), patch.object(
+            provider, "_request", return_value=({}, {})
+        ) as request:
+            provider.fair_analyze("scan-1", "entrance", media, rules)
+
+        self.assertEqual(request.call_args.args[7], "shared-turbo-model")
+
+    def test_ios_camera_defaults_to_requested_turbo_model(self) -> None:
+        provider = ArkVisionProvider("ark-test-key", model_name="pro-model")
+        media = {"media_id": "fair-frame", "path": "/tmp/not-read.jpg", "mime_type": "image/jpeg"}
+        rules = [{
+            "risk_code": "floor_clutter", "title": "低位物体侵入通行区域", "visual_cue": "通道中有杂物",
+            "evidence_codes": ["localized_obstruction_visible", "path_intrusion_visible"],
+            "required_evidence_codes": ["localized_obstruction_visible", "path_intrusion_visible"],
+        }]
+        with patch.dict("os.environ", {}, clear=True), patch.object(
+            provider, "_request", return_value=({}, {})
+        ) as request:
+            provider.fair_analyze("scan-1", "entrance", media, rules)
+
+        self.assertEqual(request.call_args.args[7], "doubao-seed-2-1-turbo-260628")
 
     def test_ark_request_disables_thinking(self) -> None:
         quality = {"usable": True, "clear": True, "floor_visible": True, "path_visible": True, "lighting_sufficient": True, "major_occlusion": False, "scene_elements": ["floor"], "missing_element_ids": []}
