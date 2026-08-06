@@ -3,6 +3,12 @@
 > 基线：`feat/anjushouhu-mvp@eb2d909`
 > 原则：优先提升“首个价值结果速度、可信度、可恢复性、可重复演示”；不做大重构，不把尚未真机/真实样本验证的能力包装成已完成。
 
+## 0. 实施进度
+
+- **2026-08-06：P0-A 已完成。** 结果错误优先展示；同房间活动 job 幂等复用；未知 worker 异常安全失败；重启时原子恢复 job/room/assessment；H5 使用无重叠轮询并由服务端 stage 驱动。
+- 验证结果：Python 58/58、React 33/33、TypeScript/Vite production build、产品文案检查全部通过。
+- 未改变 API 路径、数据库 Schema 和环境变量；`start_analysis` 响应只新增兼容字段 `reused`。
+
 ## 1. 总体策略
 
 总决赛前只保一条主演示链路：

@@ -1,5 +1,6 @@
 from pathlib import Path
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -45,6 +46,23 @@ class FairRiskProvider(MockVisionProvider):
         }, usage
 
 
+class BlockingAnalysisProvider(MockVisionProvider):
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def analyze(self, assessment_id, room_type, media, allowed_risks):
+        self.started.set()
+        if not self.release.wait(timeout=3):
+            raise RuntimeError("blocking_provider_timeout")
+        return super().analyze(assessment_id, room_type, media, allowed_risks)
+
+
+class CrashingAnalysisProvider(MockVisionProvider):
+    def analyze(self, assessment_id, room_type, media, allowed_risks):
+        raise RuntimeError("internal provider detail must not escape")
+
+
 class AssessmentServiceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -67,6 +85,71 @@ class AssessmentServiceTests(unittest.TestCase):
         self.assertNotEqual(stored["token_hash"], self.token)
         restarted = AssessmentService(SQLiteRepository(self.db), self.media, provider=MockVisionProvider())
         self.assertEqual(restarted.assessment(self.assessment_id)["profile"]["mobility"], "walker")
+
+    def test_restart_recovers_job_room_and_assessment_atomically(self) -> None:
+        now = "2026-08-06T00:00:00+00:00"
+        self.service.repository.insert("jobs", {
+            "id": "orphan-job", "assessment_id": self.assessment_id, "room_id": self.room["room_id"],
+            "status": "running", "stage": "risks_detecting", "error": None,
+            "created_at": now, "updated_at": now,
+        })
+        self.service.repository.execute("UPDATE rooms SET status='analyzing' WHERE id=?", (self.room["room_id"],))
+        self.service.repository.execute("UPDATE assessments SET status='analyzing' WHERE id=?", (self.assessment_id,))
+
+        restarted = AssessmentService(SQLiteRepository(self.db), self.media, provider=MockVisionProvider())
+
+        job = restarted.repository.fetchone("SELECT status,stage,error FROM jobs WHERE id='orphan-job'")
+        room = restarted.repository.fetchone("SELECT status FROM rooms WHERE id=?", (self.room["room_id"],))
+        assessment = restarted.repository.fetchone("SELECT status FROM assessments WHERE id=?", (self.assessment_id,))
+        self.assertEqual(job, {"status": "failed", "stage": "interrupted", "error": "analysis_interrupted"})
+        self.assertEqual(room["status"], "analysis_failed")
+        self.assertEqual(assessment["status"], "in_progress")
+
+    def test_start_analysis_reuses_the_active_room_job(self) -> None:
+        provider = BlockingAnalysisProvider()
+        service = AssessmentService(SQLiteRepository(self.db), self.media, provider=provider)
+        service.upload_media(self.assessment_id, self.room["room_id"], JPEG, "image/jpeg", 1200, 900)
+
+        first = service.start_analysis(self.assessment_id, self.room["room_id"])
+        self.assertTrue(provider.started.wait(timeout=1))
+        second = service.start_analysis(self.assessment_id, self.room["room_id"])
+
+        self.assertFalse(first["reused"])
+        self.assertTrue(second["reused"])
+        self.assertEqual(second["job_id"], first["job_id"])
+        count = service.repository.fetchone(
+            "SELECT COUNT(*) AS value FROM jobs WHERE room_id=? AND status IN ('queued','running')",
+            (self.room["room_id"],),
+        )
+        self.assertEqual(count["value"], 1)
+        provider.release.set()
+        deadline = time.time() + 3
+        while time.time() < deadline:
+            status = service.analysis_status(self.assessment_id, self.room["room_id"])
+            if status["status"] in {"completed", "failed"}:
+                break
+            time.sleep(.02)
+        self.assertEqual(status["status"], "completed")
+
+    def test_unknown_worker_error_is_safely_failed_and_retryable(self) -> None:
+        service = AssessmentService(SQLiteRepository(self.db), self.media, provider=CrashingAnalysisProvider())
+        service.upload_media(self.assessment_id, self.room["room_id"], JPEG, "image/jpeg", 1200, 900)
+        started = service.start_analysis(self.assessment_id, self.room["room_id"])
+        deadline = time.time() + 3
+        while time.time() < deadline:
+            status = service.analysis_status(self.assessment_id, self.room["room_id"])
+            if status["status"] in {"completed", "failed"}:
+                break
+            time.sleep(.02)
+
+        room = service.repository.fetchone("SELECT status FROM rooms WHERE id=?", (self.room["room_id"],))
+        assessment = service.repository.fetchone("SELECT status FROM assessments WHERE id=?", (self.assessment_id,))
+        self.assertEqual(status["job_id"], started["job_id"])
+        self.assertEqual(status["status"], "failed")
+        self.assertEqual(status["error"], "analysis_failed")
+        self.assertNotIn("internal provider detail", status["error"])
+        self.assertEqual(room["status"], "analysis_failed")
+        self.assertEqual(assessment["status"], "in_progress")
 
     def test_upload_analyze_feedback_solution_report_and_delete(self) -> None:
         uploaded = self.service.upload_media(self.assessment_id, self.room["room_id"], JPEG, "image/jpeg", 1200, 900)

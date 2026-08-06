@@ -171,6 +171,65 @@ describe('recoverable product states', () => {
     expect(screen.getByRole('button', {name: '我的'})).toBeVisible();
   });
 
+  it('shows a result request failure instead of an endless loading state', async () => {
+    restoreAt('/result/room-1');
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      const url = String(input);
+      if (url.endsWith('/health')) return json({analysis: 'ark'});
+      if (url.endsWith('/api/v2/assessments/a-1')) return json({assessment_id: 'a-1', rooms: [{room_id: 'room-1', room_type: 'bathroom', status: 'result_ready', media: []}]});
+      if (url.endsWith('/rooms/room-1/result')) return json({code: 'provider_timeout', message: 'timed out'}, 504);
+      return json({code: 'not_found', message: 'not found'}, 404);
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', {name: '这次没有完成'})).toBeVisible();
+    expect(screen.getByText('分析时间较长，请稍后重试')).toBeVisible();
+    expect(screen.queryByText('正在准备检查结果…')).not.toBeInTheDocument();
+  });
+
+  it('drives the analysis step from the server stage', async () => {
+    restoreAt('/analyzing/room-1');
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      const url = String(input);
+      if (url.endsWith('/health')) return json({analysis: 'ark'});
+      if (url.endsWith('/api/v2/assessments/a-1')) return json({assessment_id: 'a-1', rooms: [{
+        room_id: 'room-1', room_type: 'bathroom', status: 'analyzing', score: null,
+        media: [{media_id: 'media-1', content_path: '/media/1', quality: {usable: true, scene_elements: ['floor'], missing_views: []}}],
+      }]});
+      if (url.endsWith('/media/1')) return new Response(new Blob(['image'], {type: 'image/jpeg'}), {status: 200, headers: {'Content-Type': 'image/jpeg'}});
+      if (url.endsWith('/rooms/room-1/status')) return json({job_id: 'job-1', status: 'running', stage: 'rules_applied', error: null});
+      return json({code: 'not_found', message: 'not found'}, 404);
+    });
+
+    render(<App />);
+
+    const stage = await screen.findByText('正在应用居家安全规则');
+    expect(stage.closest('.active')).not.toBeNull();
+    expect(screen.getByText('当前服务端任务阶段')).toBeVisible();
+  });
+
+  it('does not overlap status polling while the previous request is pending', async () => {
+    restoreAt('/analyzing/room-1');
+    let statusCalls = 0;
+    const pendingStatus = new Promise<Response>(() => undefined);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      const url = String(input);
+      if (url.endsWith('/health')) return json({analysis: 'ark'});
+      if (url.endsWith('/api/v2/assessments/a-1')) return json({assessment_id: 'a-1', rooms: [{room_id: 'room-1', room_type: 'bathroom', status: 'analyzing', media: []}]});
+      if (url.endsWith('/rooms/room-1/status')) {
+        statusCalls += 1;
+        return pendingStatus;
+      }
+      return json({code: 'not_found', message: 'not found'}, 404);
+    });
+
+    render(<App />);
+    await waitFor(() => expect(statusCalls).toBe(1));
+    await new Promise(resolve => window.setTimeout(resolve, 1350));
+    expect(statusCalls).toBe(1);
+  });
+
   it('recovers a stale risk route after re-analysis instead of showing a generic failure', async () => {
     restoreAt('/solutions/room-1/stale-risk');
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {

@@ -54,8 +54,7 @@ class AssessmentService:
         self.pro_max_concurrency = self._positive_int_env("ANJU_PRO_MAX_CONCURRENCY", 1)
         self._turbo_slots = threading.BoundedSemaphore(self.turbo_max_concurrency)
         self._pro_slots = threading.BoundedSemaphore(self.pro_max_concurrency)
-        now = utc_now()
-        self.repository.execute("UPDATE jobs SET status='failed', stage='interrupted', error='analysis_interrupted', updated_at=? WHERE status IN ('queued','running')", (now,))
+        self._recover_interrupted_analyses()
 
     def close(self) -> None:
         self._executor.shutdown(wait=False, cancel_futures=True)
@@ -202,12 +201,29 @@ class AssessmentService:
             raise AssessmentError("no_usable_media")
         job_id = str(uuid.uuid4())
         now = utc_now()
-        self.repository.insert("jobs", {"id": job_id, "assessment_id": assessment_id, "room_id": room_id, "status": "queued", "stage": "quality_checked", "error": None, "created_at": now, "updated_at": now})
-        self.repository.execute("UPDATE rooms SET status='analyzing', updated_at=? WHERE id=?", (now, room_id))
-        self.repository.execute("UPDATE assessments SET status='analyzing', updated_at=? WHERE id=?", (now, assessment_id))
-        self.event(assessment_id, room_id, "analysis_started", {"job_id": job_id})
-        self._executor.submit(self._analyze, assessment_id, room_id, job_id)
-        return {"job_id": job_id, "status": "queued", "stage": "quality_checked"}
+        with self.repository.transaction() as connection:
+            active = connection.execute(
+                "SELECT * FROM jobs WHERE room_id=? AND status IN ('queued','running') ORDER BY created_at DESC LIMIT 1",
+                (room_id,),
+            ).fetchone()
+            if active:
+                return {
+                    "job_id": active["id"], "status": active["status"],
+                    "stage": active["stage"], "reused": True,
+                }
+            connection.execute(
+                "INSERT INTO jobs (id,assessment_id,room_id,status,stage,error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)",
+                (job_id, assessment_id, room_id, "queued", "quality_checked", None, now, now),
+            )
+            connection.execute("UPDATE rooms SET status='analyzing', updated_at=? WHERE id=?", (now, room_id))
+            connection.execute("UPDATE assessments SET status='analyzing', updated_at=? WHERE id=?", (now, assessment_id))
+        self._best_effort_event(assessment_id, room_id, "analysis_started", {"job_id": job_id})
+        try:
+            self._executor.submit(self._analyze, assessment_id, room_id, job_id)
+        except Exception:
+            self._fail_analysis(assessment_id, room_id, job_id, "analysis_start_failed")
+            raise AssessmentError("analysis_start_failed", 503)
+        return {"job_id": job_id, "status": "queued", "stage": "quality_checked", "reused": False}
 
     def analysis_status(self, assessment_id: str, room_id: str) -> dict:
         self._owned_room(assessment_id, room_id)
@@ -340,6 +356,13 @@ class AssessmentService:
     def event(self, assessment_id: str | None, room_id: str | None, name: str, payload: dict) -> None:
         safe_payload = {key: value for key, value in payload.items() if key not in {"image", "api_key", "profile", "prompt"}}
         self.repository.insert("analytics_events", {"id": str(uuid.uuid4()), "assessment_id": assessment_id, "room_id": room_id, "event_name": name, "payload_json": json.dumps(safe_payload, ensure_ascii=False), "created_at": utc_now()})
+
+    def _best_effort_event(self, assessment_id: str | None, room_id: str | None, name: str, payload: dict) -> None:
+        """Keep analytics failures from changing a completed user-facing operation."""
+        try:
+            self.event(assessment_id, room_id, name, payload)
+        except Exception:
+            return
 
     def provider(self) -> VisionProvider:
         with self._provider_lock:
@@ -786,13 +809,44 @@ class AssessmentService:
             self._compute_result(assessment_id, room_id)
             self._job(job_id, "completed", "solutions_ready")
             self.repository.execute("UPDATE assessments SET status='in_progress', updated_at=? WHERE id=?", (utc_now(), assessment_id))
-            self.event(assessment_id, room_id, "ai_call_completed", {"skill_name": "risk_analysis", **usage})
-            self.event(assessment_id, room_id, "analysis_completed", {"risk_count": len(seen), "candidate_count": len(candidates), "merged_count": len(candidates) - len(normalized)})
-        except (ProviderError, AssessmentError, ValueError) as error:
-            code = error.code if hasattr(error, "code") else "analysis_failed"
-            self._job(job_id, "failed", "failed", code)
-            self.repository.execute("UPDATE rooms SET status='analysis_failed', updated_at=? WHERE id=?", (utc_now(), room_id))
-            self.event(assessment_id, room_id, "ai_call_failed", {"skill_name": "risk_analysis", "error_type": code})
+            self._best_effort_event(assessment_id, room_id, "ai_call_completed", {"skill_name": "risk_analysis", **usage})
+            self._best_effort_event(assessment_id, room_id, "analysis_completed", {"risk_count": len(seen), "candidate_count": len(candidates), "merged_count": len(candidates) - len(normalized)})
+        except Exception as error:
+            code = error.code if isinstance(error, (ProviderError, AssessmentError)) else "analysis_failed"
+            self._fail_analysis(assessment_id, room_id, job_id, code)
+            self._best_effort_event(assessment_id, room_id, "ai_call_failed", {"skill_name": "risk_analysis", "error_type": code})
+
+    def _recover_interrupted_analyses(self) -> None:
+        now = utc_now()
+        with self.repository.transaction() as connection:
+            interrupted = connection.execute(
+                "SELECT DISTINCT assessment_id,room_id FROM jobs WHERE status IN ('queued','running')"
+            ).fetchall()
+            if not interrupted:
+                return
+            connection.execute(
+                "UPDATE jobs SET status='failed', stage='interrupted', error='analysis_interrupted', updated_at=? "
+                "WHERE status IN ('queued','running')",
+                (now,),
+            )
+            connection.executemany(
+                "UPDATE rooms SET status='analysis_failed', updated_at=? WHERE id=?",
+                [(now, row["room_id"]) for row in interrupted],
+            )
+            connection.executemany(
+                "UPDATE assessments SET status='in_progress', updated_at=? WHERE id=?",
+                [(now, assessment_id) for assessment_id in {row["assessment_id"] for row in interrupted}],
+            )
+
+    def _fail_analysis(self, assessment_id: str, room_id: str, job_id: str, code: str) -> None:
+        now = utc_now()
+        with self.repository.transaction() as connection:
+            connection.execute(
+                "UPDATE jobs SET status='failed',error=?,updated_at=? WHERE id=?",
+                (code, now, job_id),
+            )
+            connection.execute("UPDATE rooms SET status='analysis_failed', updated_at=? WHERE id=?", (now, room_id))
+            connection.execute("UPDATE assessments SET status='in_progress', updated_at=? WHERE id=?", (now, assessment_id))
 
     def _job(self, job_id: str, status: str, stage: str, error: str | None = None) -> None:
         self.repository.execute("UPDATE jobs SET status=?,stage=?,error=?,updated_at=? WHERE id=?", (status, stage, error, utc_now(), job_id))

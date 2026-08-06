@@ -1,16 +1,16 @@
 # 全国总决赛测试清单
 
 > 基线：`feat/anjushouhu-mvp@eb2d909`
-> 日期：2026-08-04
+> 初次审查：2026-08-04；最近更新：2026-08-06
 > 状态定义：`通过`＝本轮有执行证据；`代码测试通过`＝只证明自动化契约；`待真机`/`待生产链路`＝本轮没有执行，禁止口头宣称已验收。
 
 ## 1. 本轮已执行门禁
 
 | 命令/检查 | 结果 | 覆盖边界 |
 |---|---|---|
-| `.venv/bin/python -m unittest discover -s backend/tests -v` | 55/55 通过 | v1/v2 API、服务、Provider 契约、并发、规则、评分；多数使用 Mock/本地 stub |
+| `.venv/bin/python -m unittest discover -s backend/tests -v` | 58/58 通过 | v1/v2 API、服务、Provider 契约、并发、规则、评分；新增 job 幂等、未知异常和重启状态恢复测试；多数使用 Mock/本地 stub |
 | `npm run typecheck` | 通过 | TypeScript 静态检查 |
-| `npm test -- --run` | 8 files、30/30 通过 | jsdom 组件/流程/相机/Overlay/视频/Store；不等于真实 Safari/Chrome |
+| `npm test -- --run` | 8 files、33/33 通过 | 新增结果错误优先、服务端 stage 和无重叠轮询测试；不等于真实 Safari/Chrome |
 | `npm run build` | 通过 | Vite production bundle |
 | `swift test` | 21/21 通过 | AnjuCore 规则、bbox、去重、方向/深度数学契约 |
 | `xcodebuild ... generic/platform=iOS ... build` | `BUILD SUCCEEDED` | iOS 无签名编译；不等于安装、相机、RoomPlan、LiDAR、内存验收 |
@@ -20,7 +20,7 @@
 | 公网 `shotapi.socialdog.cn` | 根 404、health 200 | 符合仅 API/health 路由目标 |
 | 公网 bundle SHA | 与本地 dist 一致 | 证明当前 H5 构建已上线 |
 
-已观察到但尚未修复：视频入口不可达、结果错误永久 Loading、报告混入未选 A/B/C、分析进度与真实 stage 脱节、H5 无反馈/重圈。
+已观察到但尚未修复：视频入口不可达、报告混入未选 A/B/C、H5 无反馈/重圈、质量 Provider 临时失败会把照片持久化为不可用。结果错误永久 Loading、重复 job、未知 worker 异常、重启状态残留和分析 stage 脱节已于 2026-08-06 修复。
 
 ## 2. 浏览器与设备覆盖矩阵
 
@@ -54,11 +54,11 @@
 | H5-10 | iPhone HEIC 可选/可转码；若不支持则给出截图/JPEG 回退 | 是 | 是 | 部分 | 是 | 待真机；当前 accept 不含 HEIC |
 | H5-11 | iPhone 右旋/左旋照片显示方向正确，bbox 与原图一致 | 是 | 是 | 部分 | 是 | 数学/浏览器代码存在；待真机 |
 | H5-12 | EXIF 被移除，不向服务端泄露相册位置/时间 | 是 | 是 | 是 | 是 | 代码路径通过；真机网络包待验 |
-| H5-13 | 重复点击“开始 AI 检查”只创建一个活动 job | 是 | 是 | 是 | 否 | **当前未满足** |
-| H5-14 | P05 服务端 stage 与 UI 对应，不以固定计时伪造完成 | 是 | 是 | 是 | 否 | **当前未满足** |
+| H5-13 | 重复点击“开始 AI 检查”只创建一个活动 job | 是 | 是 | 是 | 否 | Python 幂等测试通过 |
+| H5-14 | P05 服务端 stage 与 UI 对应，不以固定计时伪造完成 | 是 | 是 | 是 | 否 | React stage 驱动测试通过 |
 | H5-15 | P05 可退出；返回房间后能恢复进度/结果 | 是 | 是 | 是 | 是 | Demo 文案观察通过；弱网待测 |
 | H5-16 | 模型超时/429/非法 JSON/拒绝均显示友好错误并可重试 | 是 | 是 | 是 | 否 | Provider 单测通过；整链路待测 |
-| H5-17 | 结果接口 404/500/断网显示 ErrorState，不永久 Loading | 是 | 是 | 是 | 否 | **当前未满足** |
+| H5-17 | 结果接口 404/500/断网显示 ErrorState，不永久 Loading | 是 | 是 | 是 | 否 | React 504/ErrorState 回归测试通过；断网真机待测 |
 | H5-18 | 评分依据逐项对应风险、档案、规则版本 | 是 | 是 | 是 | 否 | 规则测试通过；UI 人工复核待补 |
 | H5-19 | 覆盖度低时只显示“已检查区域参考分”，不称全屋分 | 是 | 是 | 是 | 否 | Demo 报告通过 |
 | H5-20 | region 为 null/非法的风险不进入正式扣分 | 是 | 是 | 是 | 否 | **当前未满足** |
@@ -161,7 +161,7 @@
 | BE-08 | 第 3 个 Turbo 快速返回可重试 busy，不占满线程 | 是 | 是 | 是 | 是 | Python 通过 |
 | BE-09 | 第 2 个 Pro 等待有最大预算，超时给友好错误 | 是 | 是 | 是 | 是 | **当前无等待上限** |
 | BE-10 | 冷启动后首页、health、DB migration/初始化、首个分析可用 | 是 | 是 | 是 | 是 | 首页/health 通过；真实首分析待测 |
-| BE-11 | 容器重启中断的 running job 标记 interrupted，关联 room 不残留 analyzing，并可创建可追踪重试 | 是 | 是 | 是 | 是 | **当前只更新 job，room 可能残留 analyzing** |
+| BE-11 | 容器重启中断的 running job 标记 interrupted，关联 room 不残留 analyzing，并可创建可追踪重试 | 是 | 是 | 是 | 是 | 原子恢复单测通过；生产容器重启待 smoke |
 | BE-12 | SQLite/media 挂载重启后持久；每日备份可恢复 | 是 | 是 | 是 | 是 | 本地重启测试部分覆盖；生产恢复待演练 |
 | BE-13 | 日志不含 API key、原图、完整个人档案、token、内部堆栈 | 是 | 是 | 是 | 是 | 代码过滤存在；生产日志抽样待验 |
 | BE-14 | 日志含 request/job id、provider/model/prompt/rule version、latency、error type | 是 | 是 | 是 | 是 | 部分实现；schema_valid/成本等仍不完整 |

@@ -11,6 +11,7 @@ import {AppProvider, formatRange, useApp} from './store';
 import type {AnalysisStatus, Assessment, AssessmentReport, CameraSuggestion, ElderProfile, MediaAsset, RoomAssessment, RoomResult, RoomType, SafetyRisk, SolutionPackage} from './types';
 
 const ASSETS = '/assets/stitch';
+const ANALYSIS_STAGES = ['quality_checked', 'scene_understood', 'risks_detecting', 'regions_grounded', 'rules_applied', 'score_calculated', 'solutions_ready'] as const;
 
 function Icon({name, filled = false, className = ''}: {name: string; filled?: boolean; className?: string}) {
   return <span className={`material-symbols-rounded ${filled ? 'is-filled' : ''} ${className}`} aria-hidden="true">{name}</span>;
@@ -695,7 +696,7 @@ function AnalyzingPage() {
   const assessmentState = useAssessment();
   const [status, setStatus] = useState<AnalysisStatus | null>(null);
   const [error, setError] = useState<unknown>(null);
-  const [visualStage, setVisualStage] = useState(0);
+  const [pollVersion, setPollVersion] = useState(0);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const room = assessmentState.assessment?.rooms.find(item => item.room_id === roomId);
   const media = room?.media.find(item => item.quality.usable);
@@ -705,46 +706,64 @@ function AnalyzingPage() {
       const value = await api.status(roomId, signal);
       setStatus(value);
       setError(null);
-    } catch (value) { if ((value as Error).name !== 'AbortError') setError(value); }
-  }, [navigate, roomId]);
+      return value;
+    } catch (value) {
+      if ((value as Error).name !== 'AbortError') setError(value);
+      return null;
+    }
+  }, [roomId]);
   useEffect(() => {
     if (!session) return;
     const controller = new AbortController();
-    poll(controller.signal);
-    const timer = window.setInterval(() => poll(controller.signal), 1200);
-    return () => { controller.abort(); window.clearInterval(timer); };
-  }, [poll, session]);
+    let stopped = false;
+    let timer: number | undefined;
+    const run = async () => {
+      const value = await poll(controller.signal);
+      if (!stopped && value && ['not_started', 'queued', 'running'].includes(value.status)) {
+        timer = window.setTimeout(run, 1200);
+      }
+    };
+    void run();
+    return () => {
+      stopped = true;
+      controller.abort();
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [poll, pollVersion, session?.access_token, session?.assessment_id]);
   useEffect(() => {
+    if (status?.status === 'completed' || status?.status === 'failed') return;
     const timer = window.setInterval(() => setElapsedSeconds(value => value + 1), 1000);
     return () => window.clearInterval(timer);
-  }, []);
-  const stages = ['scene_understood', 'risks_detecting', 'regions_grounded', 'rules_applied', 'score_calculated', 'solutions_ready'];
+  }, [status?.status]);
   useEffect(() => {
-    if (status?.status === 'failed') return;
-    if (visualStage < stages.length - 1) {
-      const timer = window.setTimeout(() => setVisualStage(value => value + 1), 850);
-      return () => window.clearTimeout(timer);
-    }
     if (status?.status === 'completed') {
       const timer = window.setTimeout(() => navigate(`/result/${roomId}`, {replace: true}), 500);
       return () => window.clearTimeout(timer);
     }
-  }, [navigate, roomId, status?.status, visualStage]);
+  }, [navigate, roomId, status?.status]);
   if (!session) return <Navigate to="/home" replace />;
-  if (error || assessmentState.error) return <ErrorState error={error || assessmentState.error} retry={() => { poll(); assessmentState.reload(); }} />;
+  if (error || assessmentState.error) return <ErrorState error={error || assessmentState.error} retry={() => { setPollVersion(value => value + 1); assessmentState.reload(); }} />;
   const roomName = room ? ROOM_COPY[room.room_type].name : '房间';
   const recognizedElements = [...new Set(media?.quality.scene_elements || [])].filter(item => SCENE_ELEMENT_COPY[item]);
-  const retry = async () => { try { await api.analyze(roomId); await poll(); } catch (value) { showToast(friendlyError(value)); } };
-  const progressPercent = status?.status === 'completed' ? 100 : Math.min(95, Math.round((visualStage + 1) / stages.length * 100));
-  const timeExpectation = elapsedSeconds < 8
-    ? `预计还需约 ${Math.max(1, 8 - elapsedSeconds)} 秒`
-    : elapsedSeconds < 30 ? '正在生成结果，通常会在 1 分钟内完成' : '分析时间比平时久，可以退出等待，稍后从首页继续';
+  const retry = async () => {
+    try {
+      await api.analyze(roomId);
+      setElapsedSeconds(0);
+      setPollVersion(value => value + 1);
+    } catch (value) { showToast(friendlyError(value)); }
+  };
+  const reportedStage = ANALYSIS_STAGES.indexOf(status?.stage as typeof ANALYSIS_STAGES[number]);
+  const visualStage = reportedStage >= 0 ? reportedStage : 0;
+  const progressPercent = status?.status === 'completed' ? 100 : Math.min(95, Math.round((visualStage + 1) / ANALYSIS_STAGES.length * 100));
+  const timeExpectation = elapsedSeconds < 30
+    ? '正在按服务端返回的分析阶段处理'
+    : '分析时间比平时久，可以退出等待，稍后从首页继续';
   return <section className="page analyzing-page">
     <div className="center-heading"><h1>正在检查{roomName}</h1><p>AI 正在深度分析您的居家环境</p></div>
     <div className="analysis-progress" role="status" aria-live="polite"><div><b>{progressPercent}%</b><span>{timeExpectation}</span></div><div className="progress"><i style={{width: `${progressPercent}%`}} /></div></div>
     <div className="scan-visual"><img src={url || `${ASSETS}/analysis-bathroom.jpg`} alt={`正在检查的${roomName}`} /><span className="scan-line" /></div>
     <div className="recognized-card"><b><Icon name={recognizedElements.length ? 'check_circle' : 'progress_activity'} filled={Boolean(recognizedElements.length)} />{recognizedElements.length ? '照片预检识别到的要素' : '正在预检照片要素'}</b><div className="chip-row">{recognizedElements.length ? recognizedElements.map(element => <span key={element}>{SCENE_ELEMENT_COPY[element]}</span>) : <span>请稍候…</span>}</div><small>这些标签表示照片中已看清的区域，不代表精确位置。</small></div>
-    <div className="analysis-steps" role="status" aria-live="polite">{stages.map((stage, index) => <div key={stage} className={index < visualStage ? 'done' : index === visualStage ? 'active' : ''}><span><Icon name={index < visualStage ? 'check' : index === visualStage ? 'progress_activity' : 'circle'} filled={index < visualStage} /></span><p><b>{STAGE_COPY[stage]}</b>{index === visualStage && <small>分析画面中可见的环境特征</small>}</p></div>)}</div>
+    <div className="analysis-steps" role="status" aria-live="polite">{ANALYSIS_STAGES.map((stage, index) => <div key={stage} className={index < visualStage ? 'done' : index === visualStage ? 'active' : ''}><span><Icon name={index < visualStage ? 'check' : index === visualStage ? 'progress_activity' : 'circle'} filled={index < visualStage} /></span><p><b>{STAGE_COPY[stage]}</b>{index === visualStage && <small>{status?.status === 'failed' ? '分析在此处停止' : '当前服务端任务阶段'}</small>}</p></div>)}</div>
     {status?.status === 'failed' && <div className="error-panel"><b>分析没有完成</b><p>{friendlyError({message: status.error || '', code: status.error})}</p><button className="button primary full" onClick={retry}>重新分析</button></div>}
     {status?.status !== 'failed' && <button className="button quiet full" onClick={() => { showToast('已退出等待，服务端会继续分析'); navigate('/rooms'); }}>退出等待，返回房间列表</button>}
     <p className="analysis-exit-note">退出只会停止本页轮询，服务端仍会继续分析；之后点击该房间即可返回进度页。</p>
@@ -797,8 +816,8 @@ function ResultPage() {
     if (selectedMediaId && !evidenceMedia.some(item => item.media.media_id === selectedMediaId)) setSelectedMediaId(evidenceMedia[0]?.media.media_id || '');
   }, [evidenceMedia, selectedMediaId]);
   if (!session) return <Navigate to="/home" replace />;
-  if (loading || assessmentState.loading || !result) return <Loading label="正在准备检查结果…" />;
   if (error || assessmentState.error) return <ErrorState error={error || assessmentState.error} retry={() => { reload(); assessmentState.reload(); }} />;
+  if (loading || assessmentState.loading || !result) return <Loading label="正在准备检查结果…" />;
   const roomName = ROOM_COPY[result.room_type].name;
   const activeEvidence = evidenceMedia.find(item => item.media.media_id === selectedMediaId) || evidenceMedia[0];
   const numberById = Object.fromEntries(result.risks.map((risk, index) => [risk.risk_id, index + 1]));

@@ -111,4 +111,6 @@ export const ERROR_COPY: Record<string, string> = {
   room_rules_not_ready: '这个房间的完整规则仍在完善中',
   no_usable_media: '至少需要一张可以看清的照片',
   analysis_interrupted: '服务重启中断了分析，请重新开始',
+  analysis_start_failed: '暂时无法开始分析，请稍后重试',
+  analysis_failed: '分析没有完成，请重新尝试',
 };

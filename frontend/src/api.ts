@@ -80,7 +80,7 @@ export const api = {
     headers: {'Content-Type': blob.type || 'image/jpeg', 'X-Image-Width': String(width), 'X-Image-Height': String(height), 'X-Camera-Context': JSON.stringify(context)},
     body: blob,
   }),
-  analyze: (roomId: string) => request<{job_id: string}>(assessmentPath(`/rooms/${roomId}:analyze`), {method: 'POST'}),
+  analyze: (roomId: string) => request<{job_id: string; status: string; stage: string; reused?: boolean}>(assessmentPath(`/rooms/${roomId}:analyze`), {method: 'POST'}),
   status: (roomId: string, signal?: AbortSignal) => request<AnalysisStatus>(assessmentPath(`/rooms/${roomId}/status`), {signal}),
   result: (roomId: string, signal?: AbortSignal) => request<RoomResult>(assessmentPath(`/rooms/${roomId}/result`), {signal}),
   feedback: (riskId: string, feedback: string) => request<{score: number}>(assessmentPath(`/risks/${riskId}/feedback`), json('POST', {feedback})),
@@ -107,6 +107,8 @@ export function friendlyError(error: unknown): string {
     room_rules_not_ready: '这个房间的完整规则仍在完善中',
     no_usable_media: '至少需要一张可以看清的照片',
     analysis_interrupted: '服务重启中断了分析，请重新开始',
+    analysis_start_failed: '暂时无法开始分析，请稍后重试',
+    analysis_failed: '分析没有完成，请重新尝试',
   };
   return messages[value?.code || ''] || value?.message || '这次操作没有完成，请稍后重试';
 }
