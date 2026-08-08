@@ -72,6 +72,7 @@ class AssessmentService:
         self.advisor = AdvisorService(self)
         self._recover_interrupted_analyses()
         self._recover_interrupted_renovation_previews()
+        self.advisor.recover_interrupted_confirmations()
 
     def close(self) -> None:
         self._executor.shutdown(wait=False, cancel_futures=True)
@@ -293,8 +294,13 @@ class AssessmentService:
         allowed = {item["solution_package_id"] for item in self.rules.solutions_for(risk["risk_code"])}
         if solution_id not in allowed:
             raise AssessmentError("solution_not_allowed")
-        self.repository.execute("DELETE FROM selected_solutions WHERE risk_id=?", (risk_id,))
-        self.repository.insert("selected_solutions", {"id": str(uuid.uuid4()), "assessment_id": assessment_id, "risk_id": risk_id, "solution_package_id": solution_id, "status": "todo", "created_at": utc_now()})
+        now = utc_now()
+        self.repository.execute(
+            "INSERT INTO selected_solutions (id,assessment_id,risk_id,solution_package_id,status,created_at) "
+            "VALUES (?,?,?,?,?,?) ON CONFLICT(risk_id) DO UPDATE SET "
+            "solution_package_id=excluded.solution_package_id,status=excluded.status,created_at=excluded.created_at",
+            (str(uuid.uuid4()), assessment_id, risk_id, solution_id, "todo", now),
+        )
         self.event(assessment_id, risk["room_id"], "solution_added_to_plan", {"risk_id": risk_id, "solution_package_id": solution_id})
         return self.report(assessment_id)
 

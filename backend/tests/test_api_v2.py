@@ -54,6 +54,47 @@ class V2APITests(unittest.TestCase):
     def auth(token: str) -> dict[str, str]:
         return {"Authorization": f"Bearer {token}"}
 
+    def create_formal_advisor_context(self) -> dict[str, str]:
+        assessment_id, token = self.create_assessment()
+        auth = self.auth(token)
+        self.client.put(
+            f"/api/v2/assessments/{assessment_id}/profile", headers=auth,
+            json={"mobility": "normal", "fall_history": "none", "living_status": "with_family"},
+        )
+        room_id = self.client.post(
+            f"/api/v2/assessments/{assessment_id}/rooms", headers=auth,
+            json={"room_type": "bathroom"},
+        ).json()["room_id"]
+        self.client.post(
+            f"/api/v2/assessments/{assessment_id}/rooms/{room_id}/media",
+            headers={**auth, "Content-Type": "image/jpeg", "X-Image-Width": "1200", "X-Image-Height": "900"},
+            content=b"\xff\xd8\xffadvisor-formal",
+        )
+        self.client.post(f"/api/v2/assessments/{assessment_id}/rooms/{room_id}:analyze", headers=auth)
+        deadline = time.time() + 3
+        while time.time() < deadline:
+            status = self.client.get(
+                f"/api/v2/assessments/{assessment_id}/rooms/{room_id}/status", headers=auth,
+            ).json()
+            if status["status"] in {"completed", "failed"}:
+                break
+            time.sleep(.02)
+        self.assertEqual(status["status"], "completed")
+        risk_id = self.client.get(
+            f"/api/v2/assessments/{assessment_id}/rooms/{room_id}/result", headers=auth,
+        ).json()["risks"][0]["risk_id"]
+        solution_id = self.client.get(
+            f"/api/v2/assessments/{assessment_id}/risks/{risk_id}/solutions", headers=auth,
+        ).json()["solutions"][0]["solution_package_id"]
+        session_id = self.client.post(
+            f"/api/v2/assessments/{assessment_id}/rooms/{room_id}/advisor/sessions",
+            headers=auth, json={"context_refs": {"risk_id": risk_id}},
+        ).json()["session_id"]
+        return {
+            "assessment_id": assessment_id, "token": token, "room_id": room_id,
+            "risk_id": risk_id, "solution_id": solution_id, "session_id": session_id,
+        }
+
     def test_static_health_v1_and_authenticated_v2(self) -> None:
         health = self.client.get("/health")
         self.assertEqual(health.status_code, 200)
@@ -267,6 +308,16 @@ class V2APITests(unittest.TestCase):
             json={"media_ids": [upload["media_id"]]},
         )
         self.assertEqual(completed.status_code, 200)
+        self.assertEqual(self.service.repository.fetchone(
+            "SELECT COUNT(*) AS value FROM jobs WHERE assessment_id=?", (assessment_id,),
+        )["value"], 0)
+        self.assertEqual(self.service.repository.fetchone(
+            "SELECT COUNT(*) AS value FROM risks WHERE assessment_id=?", (assessment_id,),
+        )["value"], 0)
+        self.assertEqual(self.service.repository.fetchone(
+            "SELECT COUNT(*) AS value FROM analytics_events WHERE assessment_id=? AND event_name='analysis_started'",
+            (assessment_id,),
+        )["value"], 0)
 
         bootstrap = self.client.post(
             f"/api/v2/assessments/{assessment_id}/rooms/{room_id}/advisor/sessions",
@@ -293,6 +344,27 @@ class V2APITests(unittest.TestCase):
             "SELECT event_token_used_at FROM advisor_sessions WHERE id=?", (session_id,),
         )
         self.assertIsNotNone(consumed["event_token_used_at"])
+        token_path = (
+            f"/api/v2/assessments/{assessment_id}/rooms/{room_id}"
+            f"/advisor/sessions/{session_id}/events-token"
+        )
+        first_refresh = self.client.post(token_path, headers=auth)
+        second_refresh = self.client.post(token_path, headers=auth)
+        self.assertEqual(first_refresh.status_code, 200)
+        self.assertEqual(second_refresh.status_code, 200)
+        self.assertFalse(self.service.advisor.consume_event_token(
+            assessment_id, room_id, session_id, first_refresh.json()["token"],
+        ))
+        self.assertTrue(self.service.advisor.consume_event_token(
+            assessment_id, room_id, session_id, second_refresh.json()["token"],
+        ))
+        self.assertFalse(self.service.advisor.consume_event_token(
+            assessment_id, room_id, session_id, second_refresh.json()["token"],
+        ))
+        other_assessment_id, other_token = self.create_assessment()
+        unauthorized_refresh = self.client.post(token_path, headers=self.auth(other_token))
+        self.assertEqual(unauthorized_refresh.status_code, 404)
+        self.assertNotEqual(other_assessment_id, assessment_id)
 
         answer = self.client.post(
             f"/api/v2/assessments/{assessment_id}/rooms/{room_id}/advisor/sessions/{session_id}/messages",
@@ -368,6 +440,122 @@ class V2APITests(unittest.TestCase):
         ).json()["turns"]
         self.assertGreaterEqual(len(turns), 5)
         self.assertTrue(all("audio" not in json.dumps(turn) for turn in turns))
+
+    def test_advisor_confirmation_is_claimed_once_and_history_uses_current_state(self) -> None:
+        context = self.create_formal_advisor_context()
+        assessment_id = context["assessment_id"]
+        room_id = context["room_id"]
+        session_id = context["session_id"]
+        risk_id = context["risk_id"]
+        solution_id = context["solution_id"]
+        auth = self.auth(context["token"])
+        message_path = (
+            f"/api/v2/assessments/{assessment_id}/rooms/{room_id}"
+            f"/advisor/sessions/{session_id}/messages"
+        )
+        solutions_turn = self.client.post(
+            message_path, headers=auth,
+            json={"text": "这个怎么改？", "context_refs": {"risk_id": risk_id}},
+        ).json()["assistant_turn"]
+        self.assertEqual(solutions_turn["cards"][0]["type"], "solution_options")
+        requested = self.client.post(
+            message_path, headers=auth,
+            json={
+                "text": "加入改造清单", "context_refs": {"risk_id": risk_id},
+                "requested_action": {"tool_name": "select_solution", "arguments": {
+                    "risk_id": risk_id, "solution_package_id": solution_id,
+                }},
+            },
+        ).json()["assistant_turn"]
+        confirmation_id = requested["cards"][0]["confirmation_id"]
+        workers = 6
+        barrier = threading.Barrier(workers)
+
+        def approve(_: int) -> tuple[str, str]:
+            barrier.wait()
+            try:
+                result = self.service.advisor.decide_confirmation(
+                    assessment_id, room_id, session_id, confirmation_id, True,
+                )
+                return "ok", result["status"]
+            except Exception as error:
+                return "error", getattr(error, "code", "unknown")
+
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            results = list(executor.map(approve, range(workers)))
+        self.assertEqual(results.count(("ok", "approved")), 1)
+        self.assertTrue(all(
+            result == ("ok", "approved") or result[1] in {
+                "advisor_confirmation_in_progress", "advisor_confirmation_already_decided",
+            }
+            for result in results
+        ))
+        self.assertEqual(self.service.repository.fetchone(
+            "SELECT COUNT(*) AS value FROM selected_solutions WHERE risk_id=?", (risk_id,),
+        )["value"], 1)
+        self.assertEqual(self.service.repository.fetchone(
+            "SELECT COUNT(*) AS value FROM analytics_events WHERE assessment_id=? "
+            "AND event_name='solution_added_to_plan'", (assessment_id,),
+        )["value"], 1)
+
+        turns = self.client.get(
+            f"/api/v2/assessments/{assessment_id}/rooms/{room_id}/advisor/sessions/{session_id}/turns",
+            headers=auth,
+        ).json()["turns"]
+        solution_cards = [card for turn in turns for card in turn["cards"] if card["type"] == "solution_options"]
+        confirmation_cards = [card for turn in turns for card in turn["cards"] if card["type"] == "confirmation"]
+        self.assertEqual(solution_cards[-1]["selected_solution_package_id"], solution_id)
+        self.assertEqual(confirmation_cards[-1]["status"], "approved")
+
+    def test_advisor_approve_reject_race_has_one_winner_and_processing_recovers_as_failed(self) -> None:
+        context = self.create_formal_advisor_context()
+        assessment_id = context["assessment_id"]
+        room_id = context["room_id"]
+        session_id = context["session_id"]
+        risk_id = context["risk_id"]
+        solution_id = context["solution_id"]
+        requested = self.client.post(
+            f"/api/v2/assessments/{assessment_id}/rooms/{room_id}/advisor/sessions/{session_id}/messages",
+            headers=self.auth(context["token"]),
+            json={
+                "text": "是否加入清单", "context_refs": {"risk_id": risk_id},
+                "requested_action": {"tool_name": "select_solution", "arguments": {
+                    "risk_id": risk_id, "solution_package_id": solution_id,
+                }},
+            },
+        ).json()["assistant_turn"]
+        confirmation_id = requested["cards"][0]["confirmation_id"]
+        barrier = threading.Barrier(2)
+
+        def decide(approved: bool) -> tuple[str, str]:
+            barrier.wait()
+            try:
+                result = self.service.advisor.decide_confirmation(
+                    assessment_id, room_id, session_id, confirmation_id, approved,
+                )
+                return "ok", result["status"]
+            except Exception as error:
+                return "error", getattr(error, "code", "unknown")
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(decide, [True, False]))
+        winners = [result for result in results if result[0] == "ok"]
+        self.assertEqual(len(winners), 1)
+        self.assertIn(winners[0][1], {"approved", "rejected"})
+        expected_side_effects = 1 if winners[0][1] == "approved" else 0
+        self.assertEqual(self.service.repository.fetchone(
+            "SELECT COUNT(*) AS value FROM selected_solutions WHERE risk_id=?", (risk_id,),
+        )["value"], expected_side_effects)
+
+        self.service.repository.execute(
+            "UPDATE advisor_confirmations SET status='processing',decided_at=NULL WHERE id=?",
+            (confirmation_id,),
+        )
+        self.service.advisor.recover_interrupted_confirmations()
+        recovered = self.service.repository.fetchone(
+            "SELECT status FROM advisor_confirmations WHERE id=?", (confirmation_id,),
+        )
+        self.assertEqual(recovered["status"], "failed")
 
     def test_advisor_rtc_queue_caps_at_eight_and_promotes_fifo(self) -> None:
         entries: list[dict[str, str]] = []

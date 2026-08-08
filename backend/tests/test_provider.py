@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from backend.app.providers.vision import CAMERA_SCHEMA, ArkVisionProvider, OpenAIVisionProvider, ProviderError, provider_from_environment, renovation_grounding_schema, schema_with_allowed_risks
-from backend.app.providers.renovation import ArkRenovationProvider, renovation_provider_from_environment
+from backend.app.providers.renovation import ArkRenovationProvider, MAX_PROVIDER_RESPONSE_BYTES, renovation_provider_from_environment
 from backend.app.providers.voice import VolcengineVoiceProvider, build_rtc_token
 
 
@@ -211,7 +211,7 @@ class OpenAIProviderTests(unittest.TestCase):
         self.assertTrue(raised.exception.retryable)
         self.assertEqual(request.call_count, 2)
 
-    def test_ark_renovation_provider_sends_private_image_and_downloads_output(self) -> None:
+    def test_ark_renovation_provider_sends_private_image_and_accepts_base64_output(self) -> None:
         class Handler(BaseHTTPRequestHandler):
             payload = None
 
@@ -233,10 +233,81 @@ class OpenAIProviderTests(unittest.TestCase):
                 image = provider.edit("assessment", {"path": str(path), "mime_type": "image/jpeg"}, "只增加扶手")
             self.assertEqual(image.mime_type, "image/jpeg")
             self.assertTrue(Handler.payload["image"][0].startswith("data:image/jpeg;base64,"))
+            self.assertEqual(Handler.payload["response_format"], "b64_json")
             self.assertFalse(Handler.payload["watermark"])
             self.assertNotIn("secret", json.dumps(Handler.payload))
         finally:
             server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+    def test_ark_renovation_provider_rejects_url_without_a_second_network_get(self) -> None:
+        class Handler(BaseHTTPRequestHandler):
+            post_calls = 0
+            get_calls = 0
+
+            def do_POST(self):  # noqa: N802
+                type(self).post_calls += 1
+                self.rfile.read(int(self.headers["Content-Length"]))
+                output_url = f"http://127.0.0.1:{self.server.server_address[1]}/generated.jpg"
+                body = json.dumps({"data": [{"url": output_url}]}).encode()
+                self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+
+            def do_GET(self):  # noqa: N802
+                type(self).get_calls += 1
+                self.send_response(200); self.end_headers(); self.wfile.write(b"\xff\xd8\xffshould-not-be-read")
+
+            def log_message(self, *_):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "source.jpg"; path.write_bytes(b"\xff\xd8\xffsource")
+                provider = ArkRenovationProvider("secret", endpoint=f"http://127.0.0.1:{server.server_address[1]}", timeout_seconds=1)
+                with self.assertRaises(ProviderError) as raised:
+                    provider.edit("assessment", {"path": str(path), "mime_type": "image/jpeg"}, "只增加扶手")
+            self.assertEqual(raised.exception.code, "provider_invalid_response")
+            self.assertEqual(Handler.post_calls, 1)
+            self.assertEqual(Handler.get_calls, 0)
+        finally:
+            server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+    def test_ark_renovation_provider_rejects_invalid_base64_magic_and_oversize_response(self) -> None:
+        provider = ArkRenovationProvider("secret")
+        for encoded in ("not-base64%", "bm90LWFuLWltYWdl"):
+            if encoded == "bm90LWFuLWltYWdl":
+                body = json.dumps({"data": [{"b64_json": encoded}]}).encode()
+            else:
+                with self.assertRaises(ProviderError) as raised:
+                    provider._extract_image({"data": [{"b64_json": encoded}]})
+                self.assertEqual(raised.exception.code, "provider_invalid_response")
+                continue
+            class Response:
+                def __enter__(self): return self
+                def __exit__(self, *_): return False
+                def read(self, limit): return body
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "source.jpg"; path.write_bytes(b"\xff\xd8\xffsource")
+                with patch("backend.app.providers.renovation.urlopen", return_value=Response()):
+                    with self.assertRaises(ProviderError) as raised:
+                        provider.edit("assessment", {"path": str(path), "mime_type": "image/jpeg"}, "只增加扶手")
+            self.assertEqual(raised.exception.code, "provider_invalid_response")
+
+        class OversizeResponse:
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+            def read(self, limit):
+                self.limit = limit
+                return b"x" * limit
+
+        response = OversizeResponse()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "source.jpg"; path.write_bytes(b"\xff\xd8\xffsource")
+            with patch("backend.app.providers.renovation.urlopen", return_value=response):
+                with self.assertRaises(ProviderError) as raised:
+                    provider.edit("assessment", {"path": str(path), "mime_type": "image/jpeg"}, "只增加扶手")
+        self.assertEqual(response.limit, MAX_PROVIDER_RESPONSE_BYTES + 1)
+        self.assertEqual(raised.exception.code, "provider_invalid_response")
 
     def test_renovation_provider_requires_key_outside_mock(self) -> None:
         with patch.dict(os.environ, {"ANJU_MOCK_ANALYSIS": "0", "ARK_API_KEY": ""}, clear=True):

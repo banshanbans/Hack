@@ -58,6 +58,8 @@ ERROR_MESSAGES = {
     "advisor_session_not_found": "本次顾问对话已结束，请重新进入",
     "advisor_message_invalid": "请输入需要咨询的问题",
     "advisor_confirmation_not_found": "这项确认已处理或已失效",
+    "advisor_confirmation_in_progress": "这项确认正在另一端处理，请稍候",
+    "advisor_confirmation_already_decided": "这项确认已经处理，请刷新查看",
     "advisor_tool_not_allowed": "这项操作不能由顾问直接执行",
     "advisor_room_in_use": "这个房间正在另一台设备上使用，请稍后再试",
     "advisor_queue_required": "AI 顾问体验人数较多，正在排队，请稍候。",
@@ -587,6 +589,13 @@ def create_app(
     def advisor_turns(assessment_id: str, room_id: str, session_id: str, request: Request) -> dict[str, Any]:
         _authorize(request, assessment_id)
         return _service(request).advisor.list_turns(assessment_id, room_id, session_id)
+
+    @application.post("/api/v2/assessments/{assessment_id}/rooms/{room_id}/advisor/sessions/{session_id}/events-token")
+    def advisor_events_token(
+        assessment_id: str, room_id: str, session_id: str, request: Request,
+    ) -> dict[str, Any]:
+        _authorize(request, assessment_id)
+        return _service(request).advisor.issue_event_token(assessment_id, room_id, session_id)
 
     @application.post("/api/v2/assessments/{assessment_id}/rooms/{room_id}/advisor/sessions/{session_id}/rtc-queue", status_code=201)
     async def join_advisor_rtc_queue(

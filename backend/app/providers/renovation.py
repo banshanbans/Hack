@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
-import ipaddress
 import json
 import os
 from pathlib import Path
@@ -10,7 +9,6 @@ import socket
 import time
 from typing import Protocol
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from .vision import ProviderError
@@ -18,6 +16,7 @@ from .vision import ProviderError
 
 RENOVATION_PROMPT_VERSION = "anju_renovation_visualization_v1"
 MAX_GENERATED_IMAGE_BYTES = 12 * 1024 * 1024
+MAX_PROVIDER_RESPONSE_BYTES = 17 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -47,20 +46,6 @@ def _mime_type(body: bytes, declared: str = "") -> str:
     raise ProviderError("provider_invalid_response", True)
 
 
-def _safe_output_url(value: str) -> str:
-    parsed = urlparse(value)
-    hostname = (parsed.hostname or "").strip().lower()
-    if parsed.scheme != "https" or not hostname or hostname == "localhost" or hostname.endswith(".localhost"):
-        raise ProviderError("provider_invalid_response", False)
-    try:
-        address = ipaddress.ip_address(hostname)
-    except ValueError:
-        address = None
-    if address and (address.is_private or address.is_loopback or address.is_link_local or address.is_reserved):
-        raise ProviderError("provider_invalid_response", False)
-    return value
-
-
 class ArkRenovationProvider:
     provider_name = "ark"
     prompt_version = RENOVATION_PROMPT_VERSION
@@ -85,7 +70,7 @@ class ArkRenovationProvider:
             "model": self.model_name,
             "prompt": prompt,
             "image": [f"data:{source['mime_type']};base64,{encoded}"],
-            "response_format": "url",
+            "response_format": "b64_json",
             "size": os.environ.get("ANJU_ARK_IMAGE_EDIT_SIZE", "2K"),
             "watermark": False,
             "sequential_image_generation": "disabled",
@@ -99,8 +84,11 @@ class ArkRenovationProvider:
         )
         try:
             with urlopen(request, timeout=self.timeout_seconds) as response:
-                response_data = json.loads(response.read())
-            body, declared = self._extract_and_download(response_data)
+                encoded_response = response.read(MAX_PROVIDER_RESPONSE_BYTES + 1)
+            if len(encoded_response) > MAX_PROVIDER_RESPONSE_BYTES:
+                raise ProviderError("provider_invalid_response", False)
+            response_data = json.loads(encoded_response)
+            body = self._extract_image(response_data)
         except HTTPError as error:
             retryable = error.code == 429 or error.code >= 500
             raise ProviderError(f"provider_http_{error.code}", retryable) from error
@@ -116,29 +104,23 @@ class ArkRenovationProvider:
             "prompt_version": self.prompt_version,
             "model": str(response_data.get("model") or self.model_name),
         })
-        return RenovationImage(body=body, mime_type=_mime_type(body, declared), usage=usage)
+        return RenovationImage(body=body, mime_type=_mime_type(body), usage=usage)
 
-    def _extract_and_download(self, response: dict) -> tuple[bytes, str]:
+    def _extract_image(self, response: dict) -> bytes:
         data = response.get("data")
         if not isinstance(data, list) or not data or not isinstance(data[0], dict):
             raise ProviderError("provider_invalid_response", True)
         item = data[0]
-        if isinstance(item.get("b64_json"), str):
-            try:
-                body = base64.b64decode(item["b64_json"], validate=True)
-            except ValueError as error:
-                raise ProviderError("provider_invalid_response", True) from error
-            if len(body) > MAX_GENERATED_IMAGE_BYTES:
-                raise ProviderError("provider_invalid_response", False)
-            return body, ""
-        url = _safe_output_url(str(item.get("url") or ""))
-        download = Request(url, headers={"User-Agent": "AnjuGuard/2.0"})
-        with urlopen(download, timeout=self.timeout_seconds) as response:
-            body = response.read(MAX_GENERATED_IMAGE_BYTES + 1)
-            declared = response.headers.get("Content-Type", "")
+        encoded = item.get("b64_json")
+        if not isinstance(encoded, str) or not encoded:
+            raise ProviderError("provider_invalid_response", False)
+        try:
+            body = base64.b64decode(encoded, validate=True)
+        except ValueError as error:
+            raise ProviderError("provider_invalid_response", True) from error
         if not body or len(body) > MAX_GENERATED_IMAGE_BYTES:
             raise ProviderError("provider_invalid_response", False)
-        return body, declared
+        return body
 
 
 class MockRenovationProvider:

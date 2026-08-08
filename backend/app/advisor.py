@@ -885,46 +885,65 @@ class AdvisorService:
     ) -> dict:
         session = self._owned_session(assessment_id, room_id, session_id)
         self._touch_session(session_id)
-        confirmation = self.repository.fetchone(
-            "SELECT * FROM advisor_confirmations WHERE id=? AND session_id=? AND assessment_id=? AND room_id=?",
-            (confirmation_id, session_id, assessment_id, room_id),
-        )
-        if not confirmation or confirmation["status"] != "pending":
-            raise self.owner.error("advisor_confirmation_not_found", 404)
-        if not approved:
+        with self.repository.transaction() as connection:
+            confirmation = connection.execute(
+                "SELECT * FROM advisor_confirmations WHERE id=? AND session_id=? AND assessment_id=? AND room_id=?",
+                (confirmation_id, session_id, assessment_id, room_id),
+            ).fetchone()
+            if not confirmation:
+                raise self.owner.error("advisor_confirmation_not_found", 404)
+            if confirmation["status"] == "processing":
+                raise self.owner.error("advisor_confirmation_in_progress", 409)
+            if confirmation["status"] != "pending":
+                raise self.owner.error("advisor_confirmation_already_decided", 409)
+            claimed = connection.execute(
+                "UPDATE advisor_confirmations SET status='processing' WHERE id=? AND status='pending'",
+                (confirmation_id,),
+            )
+            if claimed.rowcount != 1:
+                raise self.owner.error("advisor_confirmation_in_progress", 409)
+            confirmation = dict(confirmation)
+        try:
+            if not approved:
+                turn = self._insert_turn(session, "assistant", "system", "好的，这次没有修改检查结果。", [], {})
+                self.repository.execute(
+                    "UPDATE advisor_confirmations SET status='rejected',decided_at=? WHERE id=? AND status='processing'",
+                    (utc_now(), confirmation_id),
+                )
+                self._trim_turns(session_id)
+                return {"confirmation_id": confirmation_id, "status": "rejected", "turn": turn}
+            tool = confirmation["tool_name"]
+            arguments = json.loads(confirmation["arguments_json"])
+            result: dict | None = None
+            if tool == "start_formal_analysis":
+                result = self.owner.start_analysis(assessment_id, room_id)
+                message = "已开始正式分析。完成后会回到顾问页展示规则确认的风险。"
+            elif tool == "select_solution":
+                self._validate_solution_reference(assessment_id, room_id, arguments)
+                result = self.owner.select_solution(assessment_id, arguments["risk_id"], arguments["solution_package_id"])
+                message = "已把这个方案加入改造清单，预算会按结构化价格规则重新汇总。"
+            elif tool == "remove_solution":
+                risk = self.owner._owned_risk(assessment_id, arguments.get("risk_id", ""))
+                if risk["room_id"] != room_id:
+                    raise self.owner.error("risk_not_found", 404)
+                self.owner.remove_solution(assessment_id, risk["id"])
+                message = "已从改造清单移除这项方案。"
+            else:
+                raise self.owner.error("advisor_tool_not_allowed")
+            turn = self._insert_turn(session, "assistant", "system", message, [], {})
             self.repository.execute(
-                "UPDATE advisor_confirmations SET status='rejected',decided_at=? WHERE id=?",
+                "UPDATE advisor_confirmations SET status='approved',decided_at=? WHERE id=? AND status='processing'",
                 (utc_now(), confirmation_id),
             )
-            turn = self._insert_turn(session, "assistant", "system", "好的，这次没有修改检查结果。", [], {})
             self._trim_turns(session_id)
-            return {"confirmation_id": confirmation_id, "status": "rejected", "turn": turn}
-        tool = confirmation["tool_name"]
-        arguments = json.loads(confirmation["arguments_json"])
-        result: dict | None = None
-        if tool == "start_formal_analysis":
-            result = self.owner.start_analysis(assessment_id, room_id)
-            message = "已开始正式分析。完成后会回到顾问页展示规则确认的风险。"
-        elif tool == "select_solution":
-            self._validate_solution_reference(assessment_id, room_id, arguments)
-            result = self.owner.select_solution(assessment_id, arguments["risk_id"], arguments["solution_package_id"])
-            message = "已把这个方案加入改造清单，预算会按结构化价格规则重新汇总。"
-        elif tool == "remove_solution":
-            risk = self.owner._owned_risk(assessment_id, arguments.get("risk_id", ""))
-            if risk["room_id"] != room_id:
-                raise self.owner.error("risk_not_found", 404)
-            self.owner.remove_solution(assessment_id, risk["id"])
-            message = "已从改造清单移除这项方案。"
-        else:
-            raise self.owner.error("advisor_tool_not_allowed")
-        self.repository.execute(
-            "UPDATE advisor_confirmations SET status='approved',decided_at=? WHERE id=?",
-            (utc_now(), confirmation_id),
-        )
-        turn = self._insert_turn(session, "assistant", "system", message, [], {})
-        self._trim_turns(session_id)
-        self.owner.event(assessment_id, room_id, "advisor_action_confirmed", {"tool_name": tool})
-        return {"confirmation_id": confirmation_id, "status": "approved", "turn": turn, "result": result}
+            self.owner.event(assessment_id, room_id, "advisor_action_confirmed", {"tool_name": tool})
+            return {"confirmation_id": confirmation_id, "status": "approved", "turn": turn, "result": result}
+        except Exception:
+            self.repository.execute(
+                "UPDATE advisor_confirmations SET status='failed',decided_at=? WHERE id=? AND status='processing'",
+                (utc_now(), confirmation_id),
+            )
+            raise
 
     def end_session(self, assessment_id: str, room_id: str, session_id: str) -> None:
         session = self._owned_session(assessment_id, room_id, session_id)
@@ -970,6 +989,11 @@ class AdvisorService:
             "events": self._issue_event_token(session),
             "prompt_version": "anju_voice_advisor_v1",
         }
+
+    def issue_event_token(self, assessment_id: str, room_id: str, session_id: str) -> dict:
+        session = self._owned_session(assessment_id, room_id, session_id)
+        self._touch_session(session_id)
+        return self._issue_event_token(session)
 
     def consume_event_token(self, assessment_id: str, room_id: str, session_id: str, token: str) -> bool:
         if not token:
@@ -1044,7 +1068,7 @@ class AdvisorService:
                 None,
             )
             if "预算" in text or "价格" in text or "多少钱" in text:
-                return "现在只是扫描中的待确认提示，不能据此给出预算。结束扫描后会直接进入正式分析，价格将来自结构化规则区间。", []
+                return "现在只是扫描中的待确认提示，不能据此给出预算。保存代表画面后，请在照片页确认并手动开始 AI 检查；价格将来自结构化规则区间。", []
             refers_to_place = any(value in text for value in ("这个地方", "这里", "这处"))
             if refers_to_place and suggestions and not selected:
                 return "请先点选画面上的编号，或在底部提示列表中选一处，我再说明你指的位置。", []
@@ -1352,22 +1376,59 @@ class AdvisorService:
         rows = self.repository.fetchall(
             "SELECT * FROM advisor_turns WHERE session_id=? ORDER BY created_at,id LIMIT 200", (session_id,),
         )
-        return [self._serialize_turn(row) for row in rows]
+        if not rows:
+            return []
+        statuses, selected = self._turn_card_state(rows[0]["assessment_id"], rows[0]["room_id"])
+        return [self._serialize_turn(row, statuses, selected) for row in rows]
 
     def _room_turns(self, assessment_id: str, room_id: str) -> list[dict]:
         rows = self.repository.fetchall(
             "SELECT * FROM advisor_turns WHERE assessment_id=? AND room_id=? ORDER BY created_at,id LIMIT 200",
             (assessment_id, room_id),
         )
-        return [self._serialize_turn(row) for row in rows]
+        statuses, selected = self._turn_card_state(assessment_id, room_id)
+        return [self._serialize_turn(row, statuses, selected) for row in rows]
+
+    def _turn_card_state(self, assessment_id: str, room_id: str) -> tuple[dict[str, str], dict[str, str]]:
+        statuses = {
+            row["id"]: row["status"] for row in self.repository.fetchall(
+                "SELECT id,status FROM advisor_confirmations WHERE assessment_id=? AND room_id=?",
+                (assessment_id, room_id),
+            )
+        }
+        selected = {
+            row["risk_id"]: row["solution_package_id"] for row in self.repository.fetchall(
+                "SELECT ss.risk_id,ss.solution_package_id FROM selected_solutions ss "
+                "JOIN risks r ON r.id=ss.risk_id WHERE ss.assessment_id=? AND r.room_id=?",
+                (assessment_id, room_id),
+            )
+        }
+        return statuses, selected
 
     @staticmethod
-    def _serialize_turn(row: dict) -> dict:
+    def _serialize_turn(
+        row: dict, confirmation_statuses: dict[str, str] | None = None,
+        selected_solutions: dict[str, str] | None = None,
+    ) -> dict:
+        cards = json.loads(row["cards_json"] or "[]")
+        confirmation_statuses = confirmation_statuses or {}
+        selected_solutions = selected_solutions or {}
+        for card in cards:
+            if card.get("type") == "confirmation" and card.get("confirmation_id") in confirmation_statuses:
+                card["status"] = confirmation_statuses[card["confirmation_id"]]
+            elif card.get("type") == "solution_options" and card.get("risk_id"):
+                card["selected_solution_package_id"] = selected_solutions.get(card["risk_id"])
         return {
             "turn_id": row["id"], "role": row["role"], "kind": row["kind"], "text": row["text"],
             "status": row["status"], "context_refs": json.loads(row["context_json"] or "{}"),
-            "cards": json.loads(row["cards_json"] or "[]"), "created_at": row["created_at"],
+            "cards": cards, "created_at": row["created_at"],
         }
+
+    def recover_interrupted_confirmations(self) -> None:
+        self.repository.execute(
+            "UPDATE advisor_confirmations SET status='failed',decided_at=? WHERE status='processing'",
+            (utc_now(),),
+        )
 
     def _trim_turns(self, session_id: str) -> None:
         session = self.repository.fetchone("SELECT assessment_id,room_id FROM advisor_sessions WHERE id=?", (session_id,))
