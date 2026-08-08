@@ -101,12 +101,17 @@ public final class ViewController: UIViewController {
     private var isPaused = false
     private var hasFinished = false
     private var uploadTask: Task<Void, Never>?
-    private var advisorEventTask: URLSessionWebSocketTask?
+    private var advisorEventSocket: URLSessionWebSocketTask?
+    private var advisorEventLoopTask: Task<Void, Never>?
+    private var advisorHeartbeatTask: Task<Void, Never>?
+    private var advisorRecoveryTask: Task<Void, Never>?
+    private var handledAdvisorEventIDs: Set<String> = []
     private var selectedSuggestionID: String?
     private var selectedSuggestionFrameID: String?
     private var advisorVoiceState: NativeAdvisorVoiceState = .idle
     private var resumesAfterBackground = false
     private var rtcVideoEnabled = false
+    private var rtcRecoveryInProgress = false
     private var rtcInspectionFailures = 0
     private var inspectionGroups: [String: Int] = [:]
     private var inspectionTimeoutTasks: [String: Task<Void, Never>] = [:]
@@ -202,18 +207,37 @@ public final class ViewController: UIViewController {
             pauseButton.accessibilityLabel = ProductCopy.resumeScan
             guidanceLabel.text = ProductCopy.scanPaused
         }
+        rtcVideoEnabled = false
+        rtcRecoveryInProgress = false
+        advisorHeartbeatTask?.cancel()
+        advisorHeartbeatTask = nil
+        advisorRecoveryTask?.cancel()
+        advisorRecoveryTask = nil
+        stopAdvisorEvents()
+        clearRealtimeInspectionState()
         advisorVoiceClient.pauseMedia()
     }
 
     @objc private func appWillEnterForeground() {
-        guard !hasFinished, resumesAfterBackground else { return }
+        guard !hasFinished else { return }
+        let shouldResumeScanning = resumesAfterBackground
         resumesAfterBackground = false
-        isPaused = false
-        pauseButton.configuration?.image = UIImage(systemName: "pause.fill")
-        pauseButton.accessibilityLabel = ProductCopy.pauseScan
-        guidanceLabel.text = ProductCopy.homeCameraScanning
-        advisorVoiceClient.resumeVideo()
-        startSession()
+        if shouldResumeScanning {
+            isPaused = false
+            pauseButton.configuration?.image = UIImage(systemName: "pause.fill")
+            pauseButton.accessibilityLabel = ProductCopy.pauseScan
+            startSession()
+        }
+        guard NativeAdvisorVoiceClient.isSDKAvailable,
+              captureRequest?.advisorQueueTicketID != nil else {
+            startAdvisorEvents(refreshToken: true)
+            guidanceLabel.text = isPaused || !isScanning
+                ? ProductCopy.scanPaused
+                : ProductCopy.homeCameraScanning
+            return
+        }
+        guidanceLabel.text = ProductCopy.advisorReconnecting
+        recoverAdvisorRealtime()
     }
 
     private func startSession() {
@@ -245,14 +269,16 @@ public final class ViewController: UIViewController {
         arView.scene.anchors.removeAll()
         captureCoordinator.releaseResourcesAfterScan()
         ciContext.clearCaches()
-        inspectionTimeoutTasks.values.forEach { $0.cancel() }
-        inspectionTimeoutTasks.removeAll()
-        inspectionGroups.values.forEach { advisorVoiceClient.deleteInspectionImage(groupID: $0) }
-        inspectionGroups.removeAll()
-        Task { await frameContextStore.removeAll() }
-        advisorEventTask?.cancel(with: .goingAway, reason: nil)
-        advisorEventTask = nil
+        clearRealtimeInspectionState()
+        stopAdvisorEvents()
+        advisorHeartbeatTask?.cancel()
+        advisorHeartbeatTask = nil
+        advisorRecoveryTask?.cancel()
+        advisorRecoveryTask = nil
+        Task { [client] in await client?.cancelAdvisorRTCQueue() }
         advisorVoiceClient.disconnect()
+        rtcRecoveryInProgress = false
+        handledAdvisorEventIDs.removeAll()
         UIApplication.shared.isIdleTimerDisabled = false
     }
 
@@ -558,6 +584,8 @@ public final class ViewController: UIViewController {
                     self.advisorSendButton.isEnabled = true
                     UIAccessibility.post(notification: .announcement, argument: response.assistantTurn.text)
                 }
+            } catch is CancellationError {
+                return
             } catch {
                 await MainActor.run {
                     self?.advisorConversationLabel.text = ProductCopy.advisorMessageFailed
@@ -625,12 +653,97 @@ public final class ViewController: UIViewController {
                         microphone: false
                     )
                     self.rtcVideoEnabled = true
+                    self.rtcRecoveryInProgress = false
                     self.guidanceLabel.text = ProductCopy.homeCameraScanning
+                    self.startAdvisorHeartbeat()
                 }
             } catch {
                 await MainActor.run {
                     self?.rtcVideoEnabled = false
+                    self?.rtcRecoveryInProgress = false
                     self?.guidanceLabel.text = ProductCopy.remoteUnavailable
+                }
+            }
+        }
+    }
+
+    private func startAdvisorHeartbeat() {
+        advisorHeartbeatTask?.cancel()
+        let client = self.client!
+        advisorHeartbeatTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(
+                        nanoseconds: NativeAdvisorLeaseRecoveryPolicy.heartbeatIntervalSeconds * 1_000_000_000
+                    )
+                    guard !Task.isCancelled else { return }
+                    _ = try await client.heartbeatAdvisorRTCQueue()
+                } catch is CancellationError {
+                    return
+                } catch {
+                    Task {
+                        await client.recordAnalytics(
+                            "advisor_rtc_lease_recovery_started", payload: ["trigger": "heartbeat_failed"]
+                        )
+                    }
+                    await MainActor.run {
+                        guard let self, !self.hasFinished else { return }
+                        self.rtcVideoEnabled = false
+                        self.guidanceLabel.text = ProductCopy.advisorReconnecting
+                        self.recoverAdvisorRealtime()
+                    }
+                    return
+                }
+            }
+        }
+    }
+
+    private func recoverAdvisorRealtime() {
+        guard !hasFinished else { return }
+        advisorRecoveryTask?.cancel()
+        advisorHeartbeatTask?.cancel()
+        advisorHeartbeatTask = nil
+        let client = self.client!
+        rtcVideoEnabled = false
+        rtcRecoveryInProgress = true
+        clearRealtimeInspectionState()
+        advisorRecoveryTask = Task { [weak self] in
+            do {
+                let configuration = try await client.recoverAdvisorRealtime()
+                guard configuration.supportsVideo else { throw RemoteAnalysisError.invalidResponse }
+                Task {
+                    await client.recordAnalytics("advisor_rtc_lease_recovered", payload: ["holder": "ios_native"])
+                }
+                try await MainActor.run {
+                    guard let self, !self.hasFinished else { return }
+                    self.advisorRecoveryTask = nil
+                    self.rtcRecoveryInProgress = false
+                    try self.advisorVoiceClient.connect(configuration, video: true, microphone: false)
+                    self.rtcVideoEnabled = true
+                    if self.isPaused || !self.isScanning {
+                        self.advisorVoiceClient.pauseMedia()
+                        self.guidanceLabel.text = ProductCopy.scanPaused
+                    } else {
+                        self.guidanceLabel.text = ProductCopy.homeCameraScanning
+                    }
+                    self.startAdvisorHeartbeat()
+                    self.startAdvisorEvents(refreshToken: true)
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                Task {
+                    await client.recordAnalytics("advisor_rtc_http_fallback", payload: ["reason": "recovery_failed"])
+                }
+                await MainActor.run {
+                    guard let self, !self.hasFinished else { return }
+                    self.advisorRecoveryTask = nil
+                    self.rtcVideoEnabled = false
+                    self.rtcRecoveryInProgress = false
+                    self.guidanceLabel.text = self.isPaused || !self.isScanning
+                        ? ProductCopy.scanPaused
+                        : ProductCopy.remoteUnavailable
+                    self.startAdvisorEvents(refreshToken: true)
                 }
             }
         }
@@ -686,67 +799,117 @@ public final class ViewController: UIViewController {
         if state != .idle { UIAccessibility.post(notification: .announcement, argument: copy) }
     }
 
-    private func startAdvisorEvents() {
+    private func startAdvisorEvents(refreshToken: Bool = false) {
+        stopAdvisorEvents()
         let client = self.client!
-        Task { [weak self] in
-            do {
-                guard let socket = try await client.advisorEventSocket() else { return }
-                await MainActor.run {
-                    self?.advisorEventTask?.cancel(with: .goingAway, reason: nil)
-                    self?.advisorEventTask = socket
-                    socket.resume()
-                }
-                while !Task.isCancelled {
-                    let message = try await socket.receive()
-                    let data: Data
-                    switch message {
-                    case let .data(value): data = value
-                    case let .string(value): data = Data(value.utf8)
-                    @unknown default: continue
+        advisorEventLoopTask = Task { [weak self] in
+            let delays: [UInt64] = [1, 2, 4, 8, 15]
+            var retryIndex = 0
+            var needsToken = refreshToken
+            while !Task.isCancelled {
+                do {
+                    guard let socket = try await client.advisorEventSocket(refreshToken: needsToken) else { return }
+                    needsToken = true
+                    await MainActor.run {
+                        guard let self, !self.hasFinished else { return }
+                        self.advisorEventSocket?.cancel(with: .goingAway, reason: nil)
+                        self.advisorEventSocket = socket
+                        socket.resume()
                     }
-                    guard let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                          let type = payload["type"] as? String else { continue }
-                    if type == "turn",
-                       let turn = payload["turn"] as? [String: Any],
-                       turn["role"] as? String == "assistant",
-                       let text = turn["text"] as? String,
-                       !text.isEmpty {
-                        await MainActor.run {
-                            self?.advisorSubtitleLabel.text = text
-                            self?.advisorConversationLabel.text = text
+                    while !Task.isCancelled {
+                        let message = try await socket.receive()
+                        let data: Data
+                        switch message {
+                        case let .data(value): data = value
+                        case let .string(value): data = Data(value.utf8)
+                        @unknown default: continue
                         }
-                    } else if type == "camera_suggestion_added",
-                              let inspectionID = payload["inspection_id"] as? String,
-                              let frameIDText = payload["frame_id"] as? String,
-                              let value = payload["suggestion"],
-                              let suggestionData = try? JSONSerialization.data(withJSONObject: value),
-                              let suggestion = try? JSONDecoder().decode(CameraSuggestion.self, from: suggestionData),
-                              let frameID = UUID(uuidString: frameIDText) {
-                        await self?.display(
-                            CameraSuggestionResponse(
-                                frameID: frameIDText,
-                                temporary: true,
-                                suggestions: [suggestion]
-                            ),
-                            frameID: frameID,
-                            inspectionID: inspectionID
+                        guard let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                              let type = payload["type"] as? String else { continue }
+                        if type == "ready" { retryIndex = 0 }
+                        if type == "turn",
+                           let turn = payload["turn"] as? [String: Any],
+                           let turnID = turn["turn_id"] as? String,
+                           turn["role"] as? String == "assistant",
+                           let text = turn["text"] as? String,
+                           !text.isEmpty,
+                           self?.shouldHandleAdvisorEvent("turn:\(turnID)") == true {
+                            await MainActor.run {
+                                self?.advisorSubtitleLabel.text = text
+                                self?.advisorConversationLabel.text = text
+                            }
+                        } else if type == "camera_suggestion_added",
+                                  let inspectionID = payload["inspection_id"] as? String,
+                                  let frameIDText = payload["frame_id"] as? String,
+                                  let value = payload["suggestion"],
+                                  let suggestionData = try? JSONSerialization.data(withJSONObject: value),
+                                  let suggestion = try? JSONDecoder().decode(CameraSuggestion.self, from: suggestionData),
+                                  let frameID = UUID(uuidString: frameIDText),
+                                  self?.shouldHandleAdvisorEvent(
+                                    "suggestion:\(suggestion.suggestionID ?? inspectionID)"
+                                  ) == true {
+                            await self?.display(
+                                CameraSuggestionResponse(
+                                    frameID: frameIDText,
+                                    temporary: true,
+                                    suggestions: [suggestion]
+                                ),
+                                frameID: frameID,
+                                inspectionID: inspectionID
+                            )
+                        } else if type == "inspection_state",
+                                  let inspectionID = payload["inspection_id"] as? String,
+                                  let state = payload["status"] as? String,
+                                  ["suggested", "inspected", "expired"].contains(state),
+                                  self?.shouldHandleAdvisorEvent(
+                                    "inspection:\(inspectionID):\(state)"
+                                  ) == true {
+                            await self?.finishInspection(inspectionID)
+                        }
+                    }
+                } catch is CancellationError {
+                    return
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    let reconnectAttempt = retryIndex + 1
+                    Task {
+                        await client.recordAnalytics(
+                            "advisor_events_reconnecting", payload: ["attempt": String(reconnectAttempt)]
                         )
-                    } else if type == "inspection_state",
-                              let inspectionID = payload["inspection_id"] as? String,
-                              let state = payload["status"] as? String,
-                              ["suggested", "inspected", "expired"].contains(state) {
-                        await self?.finishInspection(inspectionID)
                     }
-                }
-            } catch {
-                guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    if self?.advisorVoiceState != .idle {
-                        self?.displayAdvisorVoiceState(.reconnecting)
+                    await MainActor.run {
+                        self?.advisorEventSocket?.cancel(with: .goingAway, reason: nil)
+                        self?.advisorEventSocket = nil
+                        if self?.advisorVoiceState != .idle {
+                            self?.displayAdvisorVoiceState(.reconnecting)
+                        }
                     }
+                    let seconds = delays[min(retryIndex, delays.count - 1)]
+                    retryIndex += 1
+                    try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
                 }
             }
         }
+    }
+
+    private func stopAdvisorEvents() {
+        advisorEventLoopTask?.cancel()
+        advisorEventLoopTask = nil
+        advisorEventSocket?.cancel(with: .goingAway, reason: nil)
+        advisorEventSocket = nil
+    }
+
+    @MainActor
+    private func shouldHandleAdvisorEvent(_ identifier: String) -> Bool {
+        handledAdvisorEventIDs.insert(identifier).inserted
+    }
+
+    private func clearRealtimeInspectionState() {
+        inspectionTimeoutTasks.values.forEach { $0.cancel() }
+        inspectionTimeoutTasks.removeAll()
+        inspectionGroups.values.forEach { advisorVoiceClient.deleteInspectionImage(groupID: $0) }
+        inspectionGroups.removeAll()
+        Task { await frameContextStore.removeAll() }
     }
 
     @objc private func togglePause() {
@@ -863,7 +1026,8 @@ public final class ViewController: UIViewController {
         hash: UInt64?,
         quality: FrameQualityResult?
     ) {
-        guard selectionPolicy.permitsModelRequest(
+        guard !rtcRecoveryInProgress,
+              selectionPolicy.permitsModelRequest(
                   elapsed: timestamp - lastModelRequestTime,
                   completedRequests: modelRequestCount
               ),
@@ -1132,8 +1296,13 @@ public final class ViewController: UIViewController {
         guard !hasFinished else { return }
         hasFinished = true
         advisorVoiceClient.disconnect()
-        advisorEventTask?.cancel(with: .goingAway, reason: nil)
-        advisorEventTask = nil
+        stopAdvisorEvents()
+        advisorHeartbeatTask?.cancel()
+        advisorHeartbeatTask = nil
+        advisorRecoveryTask?.cancel()
+        advisorRecoveryTask = nil
+        rtcRecoveryInProgress = false
+        clearRealtimeInspectionState()
         stopSession()
         finishButton.isEnabled = false
         guidanceLabel.text = ProductCopy.uploadingRepresentativeFrames
@@ -1141,6 +1310,7 @@ public final class ViewController: UIViewController {
         let client = self.client!
         let request = captureRequest!
         uploadTask = Task { [weak self] in
+            await client.cancelAdvisorRTCQueue()
             await client.cancelPending()
             var uploaded: [String] = []
             var failed = 0
@@ -1194,13 +1364,19 @@ public final class ViewController: UIViewController {
         guard !hasFinished else { return }
         hasFinished = true
         advisorVoiceClient.disconnect()
-        advisorEventTask?.cancel(with: .goingAway, reason: nil)
-        advisorEventTask = nil
+        stopAdvisorEvents()
+        advisorHeartbeatTask?.cancel()
+        advisorHeartbeatTask = nil
+        advisorRecoveryTask?.cancel()
+        advisorRecoveryTask = nil
+        rtcRecoveryInProgress = false
+        clearRealtimeInspectionState()
         stopSession()
         uploadTask?.cancel()
         let client = self.client!
         let request = captureRequest!
         Task { [weak self] in
+            await client.cancelAdvisorRTCQueue()
             await client.cancelPending()
             await MainActor.run {
                 guard let self else { return }

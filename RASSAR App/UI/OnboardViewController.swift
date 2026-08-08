@@ -54,11 +54,12 @@ final class OnboardViewController: UIViewController {
         let contentController = WKUserContentController()
         contentController.add(WeakScriptMessageHandler(target: self), name: Self.bridgeName)
         let spatial = RoomCaptureSession.isSupported ? "true" : "false"
+        let advisorRTCLease = NativeAdvisorVoiceClient.isSDKAvailable ? "true" : "false"
         let bridgeScript = """
         Object.defineProperty(window, '__ANJU_NATIVE__', {
           value: Object.freeze({
             bridge_version: 1,
-            capabilities: Object.freeze({photo_capture: true, live_scan: true, spatial_tracking: \(spatial)})
+            capabilities: Object.freeze({photo_capture: true, live_scan: true, spatial_tracking: \(spatial), advisor_rtc_lease: \(advisorRTCLease)})
           }),
           configurable: false,
           writable: false

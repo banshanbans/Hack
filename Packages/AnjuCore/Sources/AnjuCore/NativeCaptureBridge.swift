@@ -21,6 +21,47 @@ public struct NativeAdvisorEventConfig: Codable, Sendable {
     }
 }
 
+public enum NativeAdvisorLeaseRecoveryEvent: Equatable, Sendable {
+    case enteredBackground
+    case leaseStillValid
+    case leaseExpired
+    case capacityUnavailable
+    case finished
+}
+
+public enum NativeAdvisorLeaseRecoveryAction: Equatable, Sendable {
+    case pauseRealtime
+    case resumeRealtime
+    case requeue
+    case useHTTPFallback
+    case cancelLease
+}
+
+public enum NativeAdvisorLeaseRecoveryPolicy {
+    public static let heartbeatIntervalSeconds: UInt64 = 20
+    public static let recoveryTimeoutSeconds: TimeInterval = 30
+    public static let retryDelaysSeconds: [UInt64] = [1, 2, 4, 8]
+
+    public static func action(for event: NativeAdvisorLeaseRecoveryEvent) -> NativeAdvisorLeaseRecoveryAction {
+        switch event {
+        case .enteredBackground:
+            return .pauseRealtime
+        case .leaseStillValid:
+            return .resumeRealtime
+        case .leaseExpired:
+            return .requeue
+        case .capacityUnavailable:
+            return .useHTTPFallback
+        case .finished:
+            return .cancelLease
+        }
+    }
+
+    public static func retryDelaySeconds(attempt: Int) -> UInt64 {
+        retryDelaysSeconds[min(max(0, attempt), retryDelaysSeconds.count - 1)]
+    }
+}
+
 public enum NativeBridgeCommand: String, Codable, Sendable {
     case capturePhoto = "capture_photo"
     case startLiveScan = "start_live_scan"

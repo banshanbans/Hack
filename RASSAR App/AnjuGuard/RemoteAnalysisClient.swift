@@ -76,6 +76,23 @@ struct AdvisorRTCConfiguration: Decodable, Sendable {
     }
 }
 
+struct AdvisorRTCQueueTicket: Decodable, Sendable {
+    let ticketID: String?
+    let status: String
+    let position: Int?
+    let expiresAt: String?
+    let pollAfterMilliseconds: Int?
+    let mode: String?
+    let reason: String?
+
+    enum CodingKeys: String, CodingKey {
+        case status, position, mode, reason
+        case ticketID = "ticket_id"
+        case expiresAt = "expires_at"
+        case pollAfterMilliseconds = "poll_after_ms"
+    }
+}
+
 struct PreparedCameraInspection: Decodable, Sendable {
     let inspectionID: String
     let frameID: String
@@ -134,12 +151,18 @@ actor RemoteAnalysisClient {
     private let baseURL: URL
     private let requestContext: NativeCaptureRequest
     private let urlSession: URLSession
+    private let advisorClientInstanceID: String?
+    private var advisorQueueTicketID: String?
+    private var advisorEvents: NativeAdvisorEventConfig?
     private let logger = Logger(subsystem: "com.anjuguard.app", category: "home-camera")
 
     init?(baseURL: URL, request: NativeCaptureRequest, timeout: TimeInterval = 25) {
         guard baseURL.scheme?.lowercased() == "https", request.isValid else { return nil }
         self.baseURL = baseURL
         requestContext = request
+        advisorClientInstanceID = request.advisorClientInstanceID
+        advisorQueueTicketID = request.advisorQueueTicketID
+        advisorEvents = request.advisorEvents
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = timeout
         configuration.timeoutIntervalForResource = 75
@@ -224,6 +247,67 @@ actor RemoteAnalysisClient {
         return try JSONDecoder().decode(AdvisorRTCConfiguration.self, from: data)
     }
 
+    func heartbeatAdvisorRTCQueue() async throws -> AdvisorRTCQueueTicket {
+        guard let sessionID = requestContext.advisorSessionID,
+              let clientID = advisorClientInstanceID,
+              let ticketID = advisorQueueTicketID else {
+            throw RemoteAnalysisError.server(code: "advisor_queue_required", status: 409)
+        }
+        let endpoint = try roomEndpoint(
+            suffix: "advisor/sessions/\(sessionID)/rtc-queue/\(ticketID)/heartbeat"
+        )
+        var request = authorizedRequest(endpoint, method: "POST")
+        request.setValue(clientID, forHTTPHeaderField: "X-Advisor-Client-ID")
+        let data = try await perform(request)
+        return try JSONDecoder().decode(AdvisorRTCQueueTicket.self, from: data)
+    }
+
+    func recoverAdvisorRealtime(
+        timeout: TimeInterval = NativeAdvisorLeaseRecoveryPolicy.recoveryTimeoutSeconds
+    ) async throws -> AdvisorRTCConfiguration {
+        let deadline = Date().addingTimeInterval(timeout)
+        var retryIndex = 0
+        while !Task.isCancelled, Date() < deadline {
+            do {
+                _ = try await heartbeatAdvisorRTCQueue()
+                return try await startAdvisorRealtime()
+            } catch let RemoteAnalysisError.server(code, status)
+                where status == 410 || code == "advisor_queue_expired" {
+                return try await reacquireAdvisorRealtime(deadline: deadline)
+            } catch {
+                let seconds = NativeAdvisorLeaseRecoveryPolicy.retryDelaySeconds(attempt: retryIndex)
+                retryIndex += 1
+                try await sleepBeforeRetry(seconds: seconds, deadline: deadline)
+            }
+        }
+        throw RemoteAnalysisError.timedOut
+    }
+
+    func cancelAdvisorRTCQueue() async {
+        guard let sessionID = requestContext.advisorSessionID,
+              let clientID = advisorClientInstanceID,
+              let ticketID = advisorQueueTicketID,
+              let endpoint = try? roomEndpoint(
+                suffix: "advisor/sessions/\(sessionID)/rtc-queue/\(ticketID)"
+              ) else { return }
+        var request = authorizedRequest(endpoint, method: "DELETE")
+        request.setValue(clientID, forHTTPHeaderField: "X-Advisor-Client-ID")
+        _ = try? await perform(request)
+        advisorQueueTicketID = nil
+    }
+
+    func issueAdvisorEventToken() async throws -> NativeAdvisorEventConfig {
+        guard let sessionID = requestContext.advisorSessionID else {
+            throw RemoteAnalysisError.invalidEndpoint
+        }
+        let endpoint = try roomEndpoint(suffix: "advisor/sessions/\(sessionID)/events-token")
+        let data = try await perform(authorizedRequest(endpoint, method: "POST"))
+        let events = try JSONDecoder().decode(NativeAdvisorEventConfig.self, from: data)
+        guard events.isValid else { throw RemoteAnalysisError.invalidResponse }
+        advisorEvents = events
+        return events
+    }
+
     func prepareInspection(
         frameID: UUID,
         capturedAtMilliseconds: Int,
@@ -290,8 +374,15 @@ actor RemoteAnalysisClient {
         return try JSONDecoder().decode(AdvisorMessageResponse.self, from: data)
     }
 
-    func advisorEventSocket() throws -> URLSessionWebSocketTask? {
-        guard let events = requestContext.advisorEvents else { return nil }
+    func advisorEventSocket(refreshToken: Bool = false) async throws -> URLSessionWebSocketTask? {
+        let events: NativeAdvisorEventConfig
+        if refreshToken {
+            events = try await issueAdvisorEventToken()
+        } else if let current = advisorEvents {
+            events = current
+        } else {
+            return nil
+        }
         var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
         components?.scheme = baseURL.scheme == "https" ? "wss" : "ws"
         components?.path = events.websocketPath
@@ -303,6 +394,25 @@ actor RemoteAnalysisClient {
     func cancelPending() async {
         let tasks = await urlSession.allTasks
         tasks.forEach { $0.cancel() }
+    }
+
+    func recordAnalytics(_ eventName: String, payload: [String: String] = [:]) async {
+        let endpoint = baseURL
+            .appendingPathComponent("api")
+            .appendingPathComponent("v2")
+            .appendingPathComponent("assessments")
+            .appendingPathComponent(requestContext.assessmentID)
+            .appendingPathComponent("analytics")
+            .appendingPathComponent("events")
+        guard endpoint.scheme == "https", !eventName.isEmpty else { return }
+        var request = authorizedRequest(endpoint, method: "POST")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "event_name": String(eventName.prefix(64)),
+            "room_id": requestContext.roomID,
+            "payload": payload,
+        ])
+        _ = try? await perform(request)
     }
 
     private func roomEndpoint(suffix: String) throws -> URL {
@@ -328,14 +438,90 @@ actor RemoteAnalysisClient {
     }
 
     private func authorizedAdvisorRTCRequest(_ endpoint: URL) throws -> URLRequest {
-        guard let clientID = requestContext.advisorClientInstanceID,
-              let ticketID = requestContext.advisorQueueTicketID else {
+        guard let clientID = advisorClientInstanceID,
+              let ticketID = advisorQueueTicketID else {
             throw RemoteAnalysisError.server(code: "advisor_queue_required", status: 409)
         }
         var request = authorizedRequest(endpoint, method: "POST")
         request.setValue(clientID, forHTTPHeaderField: "X-Advisor-Client-ID")
         request.setValue(ticketID, forHTTPHeaderField: "X-Advisor-Queue-Ticket")
         return request
+    }
+
+    private func reacquireAdvisorRealtime(deadline: Date) async throws -> AdvisorRTCConfiguration {
+        var ticket: AdvisorRTCQueueTicket?
+        var retryIndex = 0
+        while !Task.isCancelled, Date() < deadline {
+            do {
+                let current = try await (ticket == nil ? enqueueAdvisorRTCQueue() : advisorRTCQueueStatus())
+                ticket = current
+                retryIndex = 0
+                if current.status == "granted" || current.status == "active" {
+                    if let ticketID = current.ticketID { advisorQueueTicketID = ticketID }
+                    return try await startAdvisorRealtime()
+                }
+                if current.status == "unavailable" {
+                    throw RemoteAnalysisError.server(code: "advisor_queue_required", status: 409)
+                }
+                let wait = max(250, min(5_000, current.pollAfterMilliseconds ?? 2_000))
+                try await sleepBeforeRetry(milliseconds: wait, deadline: deadline)
+            } catch let RemoteAnalysisError.server(code, status)
+                where status == 410 || code == "advisor_queue_expired" {
+                ticket = nil
+            } catch let RemoteAnalysisError.server(code, status)
+                where status == 409 || code == "advisor_queue_required" {
+                throw RemoteAnalysisError.server(code: code, status: status)
+            } catch {
+                let seconds = NativeAdvisorLeaseRecoveryPolicy.retryDelaySeconds(attempt: retryIndex)
+                retryIndex += 1
+                try await sleepBeforeRetry(seconds: seconds, deadline: deadline)
+            }
+        }
+        throw RemoteAnalysisError.timedOut
+    }
+
+    private func enqueueAdvisorRTCQueue() async throws -> AdvisorRTCQueueTicket {
+        guard let sessionID = requestContext.advisorSessionID,
+              let clientID = advisorClientInstanceID else {
+            throw RemoteAnalysisError.server(code: "advisor_queue_required", status: 409)
+        }
+        let endpoint = try roomEndpoint(suffix: "advisor/sessions/\(sessionID)/rtc-queue")
+        var request = authorizedRequest(endpoint, method: "POST")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "client_instance_id": clientID, "mode": "audio_video",
+        ])
+        let data = try await perform(request)
+        let ticket = try JSONDecoder().decode(AdvisorRTCQueueTicket.self, from: data)
+        if let ticketID = ticket.ticketID { advisorQueueTicketID = ticketID }
+        return ticket
+    }
+
+    private func advisorRTCQueueStatus() async throws -> AdvisorRTCQueueTicket {
+        guard let sessionID = requestContext.advisorSessionID,
+              let clientID = advisorClientInstanceID,
+              let ticketID = advisorQueueTicketID else {
+            throw RemoteAnalysisError.server(code: "advisor_queue_required", status: 409)
+        }
+        let endpoint = try roomEndpoint(suffix: "advisor/sessions/\(sessionID)/rtc-queue/\(ticketID)")
+        var request = authorizedRequest(endpoint, method: "GET")
+        request.setValue(clientID, forHTTPHeaderField: "X-Advisor-Client-ID")
+        let data = try await perform(request)
+        return try JSONDecoder().decode(AdvisorRTCQueueTicket.self, from: data)
+    }
+
+    private func sleepBeforeRetry(seconds: UInt64, deadline: Date) async throws {
+        let remaining = deadline.timeIntervalSinceNow
+        guard remaining > 0 else { throw RemoteAnalysisError.timedOut }
+        let duration = min(Double(seconds), remaining)
+        try await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
+    }
+
+    private func sleepBeforeRetry(milliseconds: Int, deadline: Date) async throws {
+        let remaining = deadline.timeIntervalSinceNow
+        guard remaining > 0 else { throw RemoteAnalysisError.timedOut }
+        let duration = min(Double(milliseconds) / 1_000, remaining)
+        try await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
     }
 
     private func imageDimensions(_ data: Data) -> (width: Int, height: Int) {

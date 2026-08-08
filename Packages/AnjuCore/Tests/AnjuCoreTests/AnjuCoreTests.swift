@@ -86,6 +86,35 @@ final class AnjuCoreTests: XCTestCase {
         XCTAssertEqual(NativeRTCVideoProfile.degraded.maximumBitrateKbps, 500)
     }
 
+    func testNativeAdvisorLeaseRecoveryPolicyCoversLifecycleAndFallback() {
+        XCTAssertEqual(
+            NativeAdvisorLeaseRecoveryPolicy.action(for: .enteredBackground),
+            .pauseRealtime
+        )
+        XCTAssertEqual(
+            NativeAdvisorLeaseRecoveryPolicy.action(for: .leaseStillValid),
+            .resumeRealtime
+        )
+        XCTAssertEqual(
+            NativeAdvisorLeaseRecoveryPolicy.action(for: .leaseExpired),
+            .requeue
+        )
+        XCTAssertEqual(
+            NativeAdvisorLeaseRecoveryPolicy.action(for: .capacityUnavailable),
+            .useHTTPFallback
+        )
+        XCTAssertEqual(
+            NativeAdvisorLeaseRecoveryPolicy.action(for: .finished),
+            .cancelLease
+        )
+        XCTAssertEqual(NativeAdvisorLeaseRecoveryPolicy.heartbeatIntervalSeconds, 20)
+        XCTAssertEqual(NativeAdvisorLeaseRecoveryPolicy.recoveryTimeoutSeconds, 30)
+        XCTAssertEqual(
+            (0...5).map(NativeAdvisorLeaseRecoveryPolicy.retryDelaySeconds),
+            [1, 2, 4, 8, 8, 8]
+        )
+    }
+
     func testRTCVideoAdaptiveStateDegradesForEachPressureSignal() {
         var network = NativeRTCVideoAdaptiveState()
         XCTAssertEqual(network.updateNetwork(quality: 4, timestamp: 1)?.profile, .degraded)
