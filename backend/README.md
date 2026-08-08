@@ -109,7 +109,7 @@ ANJU_MOCK_ANALYSIS=1 .venv/bin/python -m backend.app.server
 - iOS 代表帧以 `ios_camera_frame` 上传；扫描结束后只完成 camera session 并返回照片页，由用户点击“开始 AI 检查”发起正式分析，`ios_ar_frame` 只做历史可读兼容。
 - H5 与 iOS `WKWebView` 共用 `/advisor/:roomId` 文字/语音顾问页；临时提示和正式风险分阶段展示，业务写操作需确认卡，原始音频不入库。
 - RTC 启动前必须调用 `POST .../rtc-queue` 取得席位，再以 `X-Advisor-Client-ID` 和 `X-Advisor-Queue-Ticket` 调用 `/voice` 或 `/realtime`；获席后每 20 秒心跳，退出时删除票据。
-- 顾问事件断线后通过 `POST .../events-token` 重签两分钟、单次消费的 WebSocket token；写操作确认按 `pending → processing → approved/rejected` 原子领取，失败标记为 `failed`。
+- 顾问事件断线后通过 `POST .../events-token` 重签两分钟、单次消费的 WebSocket token；访问日志会统一遮蔽 token 查询参数。写操作确认按 `pending → processing → approved/rejected` 原子领取，失败标记为 `failed`。
 - 新数据库不再创建 fair 表，旧数据库历史表不做破坏性删除，`/api/v2/fair-scans` 固定返回 404。
 
 整改复查对比和 PDF 导出仍不在本次范围；移动浏览器和 LiDAR 真机效果以外部验收记录为准。本地视频关键帧能力不进入后续验收。

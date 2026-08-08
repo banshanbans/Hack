@@ -19,12 +19,14 @@ from starlette.concurrency import run_in_threadpool
 
 from .assessment_service import AssessmentError, AssessmentService
 from .environment import load_environment
+from .logging_safety import install_sensitive_log_filter
 from .providers import ProviderError, VisionProvider, VolcengineVoiceProvider
 from .repositories import SQLiteRepository
 from .service import SessionService, demo_analysis, empty_analysis
 
 
 load_environment()
+install_sensitive_log_filter()
 
 
 LOGGER = logging.getLogger("anjuguard.backend")
