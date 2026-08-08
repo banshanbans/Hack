@@ -22,42 +22,132 @@ describe('P01 entry and route recovery', () => {
 
     render(<App />);
     expect(screen.getByRole('heading', {name: /给父母的家/})).toBeVisible();
+    expect(screen.getByText('居家安全检查')).toBeVisible();
+    expect(screen.getByRole('heading', {name: '本次检查进度'})).toBeVisible();
+    expect(screen.getByRole('progressbar', {name: '检查完成进度'})).toHaveAttribute('aria-valuenow', '0');
+    expect(screen.getByText('从一张清晰的房间照片开始')).toBeVisible();
+    expect(screen.getByRole('navigation', {name: '主导航'})).toBeVisible();
+    expect(screen.getByRole('button', {name: '检查'})).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('button', {name: '中央相机'})).toBeVisible();
+    expect(screen.getByRole('button', {name: '我的'})).toBeVisible();
     fireEvent.click(screen.getByRole('button', {name: /上传家中照片/}));
     await waitFor(() => expect(window.location.hash).toBe('#/profile'));
     expect(fetchMock).toHaveBeenCalledWith('/api/v2/assessments', expect.objectContaining({method: 'POST'}));
     await waitFor(() => expect(JSON.parse(localStorage.getItem('anju_h5_session_v2') || '{}')).toMatchObject({assessment_id: 'a-1', access_token: 't-1'}));
   });
 
-  it('shows the shared camera introduction before entering from the video entry', async () => {
+  it('shows the shared camera introduction before entering the realtime camera', async () => {
     const jsonResponse = (body: unknown, status = 200) => new Response(JSON.stringify(body), {status, headers: {'Content-Type': 'application/json'}});
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
-      if (String(input).endsWith('/health')) return jsonResponse({analysis: 'ark', capabilities: {h5_camera: true, h5_video: true}});
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/health')) return jsonResponse({analysis: 'ark', capabilities: {h5_camera: true, h5_video: true}});
+      if (url.endsWith('/api/v2/assessments') && init?.method === 'POST') return jsonResponse({assessment_id: 'a-camera', access_token: 't-camera'}, 201);
+      if (url.endsWith('/api/v2/assessments/a-camera')) return jsonResponse({assessment_id: 'a-camera', profile: {}, rooms: [{room_id: 'room-camera', room_type: 'bathroom', status: 'collecting_media', media: []}]});
+      if (url.endsWith('/api/v2/assessments/a-camera/rooms') && init?.method === 'POST') return jsonResponse({room_id: 'room-camera', room_type: 'bathroom', status: 'collecting_media', media: []}, 201);
       return jsonResponse({code: 'not_found', message: 'not found'}, 404);
     });
 
     render(<App />);
-    fireEvent.click(await screen.findByRole('button', {name: '从视频画面开始检查'}));
+    fireEvent.click(await screen.findByRole('button', {name: '使用实时相机检查'}));
 
-    const dialog = screen.getByRole('dialog', {name: '来游园会现场，解锁 iPhone AR 体验'});
+    const dialog = screen.getByRole('dialog', {name: '开始家庭实时检查'});
     expect(dialog).toBeVisible();
-    expect(dialog).toHaveTextContent('实时相机为了保证流畅体验，完善的报告仍然建议通过上传家中照片体验。');
+    expect(dialog).toHaveTextContent('扫描结束只保存代表画面');
+    expect(dialog).toHaveTextContent('直接开始正式分析');
     expect(window.location.hash).toBe('#/home');
-    fireEvent.click(screen.getByRole('button', {name: /进入网页相机/}));
-    await waitFor(() => expect(window.location.hash).toBe('#/camera'));
-    expect(screen.getByRole('button', {name: '开启后置相机'})).toBeVisible();
-    expect(screen.getByRole('heading', {name: '实时相机检查'})).toBeVisible();
-    expect(screen.getByRole('heading', {name: '结构化建议'})).toBeVisible();
-    expect(screen.getByText('模型会流式输出改进建议，实时相机会优先保证流畅的用户体验，仍然推荐使用上传照片的形式，或在实时相机结束后，使用实时相机保存的关键帧更进一步。')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', {name: /选择房间/}));
+    fireEvent.click(screen.getByRole('button', {name: /卫生间/}));
+    await waitFor(() => expect(window.location.hash).toBe('#/camera?room_id=room-camera&auto_start=1'));
+    expect(await screen.findByRole('button', {name: '开启后置相机'})).toBeVisible();
+    expect(screen.getByRole('heading', {name: '实时扫描'})).toBeVisible();
+    expect(screen.getByRole('button', {name: '打开 AI 适老顾问对话'})).toBeVisible();
+    expect(screen.getByRole('button', {name: '结束扫描并分析'})).toBeDisabled();
+    expect(screen.getByText('顾问会边看边提醒，扫描结束后直接进入正式分析。')).toBeVisible();
     expect(screen.getByRole('button', {name: '改用照片'})).toBeVisible();
-    expect(screen.queryByText(/不计分|三维锚点|连续视频|当前区域/)).not.toBeInTheDocument();
-    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/v2/assessments'))).toBe(false);
+    expect(screen.queryByText(/三维锚点|连续视频|当前区域/)).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([input, init]) => String(input).endsWith('/api/v2/assessments') && init?.method === 'POST')).toBe(true);
   });
 
-  it('offers the saved route when an assessment exists', () => {
+  it('offers and restores the saved route when an assessment exists', async () => {
     localStorage.setItem('anju_h5_session_v2', JSON.stringify({assessment_id: 'a-1', access_token: 't-1', last_route: 'rooms'}));
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({analysis: 'ark'}), {status: 200, headers: {'Content-Type': 'application/json'}}));
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      const url = String(input);
+      if (url.endsWith('/health')) return new Response(JSON.stringify({analysis: 'ark'}), {status: 200, headers: {'Content-Type': 'application/json'}});
+      if (url.endsWith('/api/v2/assessments/a-1')) return new Response(JSON.stringify({assessment_id: 'a-1', planned_rooms: [], rooms: []}), {status: 200, headers: {'Content-Type': 'application/json'}});
+      return new Response(JSON.stringify({code: 'not_found', message: 'not found'}), {status: 404, headers: {'Content-Type': 'application/json'}});
+    });
     render(<App />);
-    expect(screen.getByRole('button', {name: '继续上次检查'})).toBeEnabled();
+    expect(screen.getByRole('progressbar', {name: '检查完成进度'})).toHaveAttribute('aria-valuenow', '2');
+    expect(screen.getByText('进行到：选择房间')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', {name: '继续上次检查'}));
+    await waitFor(() => expect(window.location.hash).toBe('#/rooms'));
+  });
+
+  it.each([
+    ['profile', '1', '家人情况'],
+    ['rooms', '2', '选择房间'],
+    ['upload/room-1', '3', '上传照片'],
+    ['analyzing/room-1', '4', 'AI 检查'],
+    ['risk/room-1/risk-1', '5', '查看结果'],
+    ['report', '6', '改造清单'],
+  ])('maps the saved route %s to home progress step %s', async (lastRoute, step, label) => {
+    localStorage.setItem('anju_h5_session_v2', JSON.stringify({assessment_id: 'a-1', access_token: 't-1', last_route: lastRoute}));
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      const url = String(input);
+      if (url.endsWith('/health')) return new Response(JSON.stringify({analysis: 'ark'}), {status: 200, headers: {'Content-Type': 'application/json'}});
+      if (url.endsWith('/api/v2/assessments/a-1')) return new Response(JSON.stringify({assessment_id: 'a-1', planned_rooms: [], rooms: []}), {status: 200, headers: {'Content-Type': 'application/json'}});
+      return new Response(JSON.stringify({code: 'not_found', message: 'not found'}), {status: 404, headers: {'Content-Type': 'application/json'}});
+    });
+
+    render(<App />);
+
+    expect(screen.getByRole('progressbar', {name: '检查完成进度'})).toHaveAttribute('aria-valuenow', step);
+    expect(screen.getByText(`进行到：${label}`)).toBeVisible();
+  });
+
+  it('keeps the primary action disabled while a new assessment is being created', async () => {
+    let resolveAssessment: ((value: Response) => void) | undefined;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      const url = String(input);
+      if (url.endsWith('/health')) return new Response(JSON.stringify({analysis: 'ark'}), {status: 200, headers: {'Content-Type': 'application/json'}});
+      if (url.endsWith('/api/v2/assessments')) return new Promise<Response>(resolve => { resolveAssessment = resolve; });
+      return new Response(JSON.stringify({code: 'not_found', message: 'not found'}), {status: 404, headers: {'Content-Type': 'application/json'}});
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', {name: '上传家中照片'}));
+
+    expect(screen.getByRole('button', {name: '正在开始…'})).toBeDisabled();
+    resolveAssessment?.(new Response(JSON.stringify({assessment_id: 'a-1', access_token: 't-1'}), {status: 201, headers: {'Content-Type': 'application/json'}}));
+    await waitFor(() => expect(window.location.hash).toBe('#/profile'));
+  });
+
+  it('hides the home camera entry and disables the camera tab when the capability is unavailable', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({analysis: 'ark', capabilities: {h5_camera: false, h5_video: true}}), {status: 200, headers: {'Content-Type': 'application/json'}}));
+    render(<App />);
+    expect(await screen.findByRole('button', {name: '中央相机暂未开放'})).toBeDisabled();
+    expect(screen.queryByRole('button', {name: '使用实时相机检查'})).not.toBeInTheDocument();
+  });
+
+  it('keeps legacy video sessions on the supported photo upload experience', async () => {
+    localStorage.setItem('anju_h5_session_v2', JSON.stringify({assessment_id: 'a-1', access_token: 't-1', last_route: 'upload/room-1'}));
+    window.location.hash = '#/upload/room-1';
+    const jsonResponse = (body: unknown, status = 200) => new Response(JSON.stringify(body), {status, headers: {'Content-Type': 'application/json'}});
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      const url = String(input);
+      if (url.endsWith('/health')) return jsonResponse({analysis: 'ark', capabilities: {h5_camera: true, h5_video: true}});
+      if (url.endsWith('/api/v2/assessments/a-1')) return jsonResponse({
+        assessment_id: 'a-1', input_mode: 'video_frame', planned_rooms: ['bathroom'],
+        rooms: [{room_id: 'room-1', room_type: 'bathroom', status: 'created', media: []}],
+      });
+      return jsonResponse({code: 'not_found', message: 'not found'}, 404);
+    });
+
+    const {container} = render(<App />);
+
+    expect(await screen.findByRole('heading', {name: '上传卫生间照片'})).toBeVisible();
+    expect(container.querySelector('input[accept="video/*"]')).toBeNull();
+    expect(screen.queryByText('选择本地视频')).not.toBeInTheDocument();
   });
 
   it('opens a risk detail with only the solution action', async () => {

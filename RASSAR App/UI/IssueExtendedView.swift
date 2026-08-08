@@ -119,19 +119,11 @@ class IssueExtendedView:UIView{
     }
     
     @IBAction func didTapReturnButton(){
-        //Remove this view
-        //self.accessibilityIssue.cancel()
-        parent.extendedViewIsOut=false
         self.removeFromSuperview()
     }
     @IBAction func didTapCancelButton(){
-        //Remove this view and cancel this issue
-        //print("Cancel!")
-        parent.extendedViewIsOut=false
-        //self.accessibilityIssue.cancel()
-        parent.replicator.cancel(id:self.accessibilityIssue.identifier)
-        //self.accessibilityIssue.cancel()
-        //self.accessibilityIssue.cancel()
+        // The legacy report flow no longer owns scan state. Native collection
+        // exits through the H5 bridge, so this deprecated view only dismisses.
         self.removeFromSuperview()
     }
 }

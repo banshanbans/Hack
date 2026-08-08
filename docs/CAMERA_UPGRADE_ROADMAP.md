@@ -1,517 +1,107 @@
-# 安居守护视频、H5 相机与 iPhone AR 升级路线
+# H5 / iOS 统一居家相机路线
 
-> 文档状态：P0—P2 已实现；Safari/Chrome 与 LiDAR 真机现场验收待执行
-> 适用范围：H5 视频抽帧、H5 实时相机、游园会 iPhone AR 演示
-> 依赖：根目录 `PRD.md`、`AGENTS.md` 及当前 v2 Assessment API
-> 更新时间：2026-07-26
-> 当前工作区的 iOS 实时帧已切换为 `anju_ios_fair_camera_direct_v3` 和 `doubao-seed-2-1-turbo-260628`；误合并、可观测性和正式 Pro 复核收口见 `IOS_CAMERA_REJECTION_REMEDIATION_PLAN.md`，尚未部署生产。
+> 2026-08-07 生效。本文替代历史活动现场原生相机方案。
 
----
+## 1. 产品边界
 
-## 1. 目标与结论
+- H5 是唯一主旅程；iOS 是线上 H5 的原生采集容器。
+- 原生仅提供单张拍照和实时扫描，不提供原生评分、方案、预算或报告。
+- 不提供账号、注册、跨设备或 App/Safari assessment 同步。
+- H5 本地视频文件自动抽帧仍然取消。
 
-按以下顺序升级现有产品：
-
-1. P0：H5 在浏览器本地解码视频，选出 3—6 张代表帧，只上传图片；
-2. P1：H5 增加实时相机入口，以本地门控和临时检查接口持续输出结构化建议；
-3. P2：iPhone 在游园会现场使用 Turbo 模型实时发现关键帧候选、ARKit 定位，并在正式评分前完成可追溯的空间归并和 Pro 复核。
-
-实施前先补齐跨帧媒体来源、重复风险合并和图像方向转换。否则视频和连续相机帧可能把同一物理风险重复计分，iPhone 的 bbox 也可能无法正确映射到深度图。
-
-本路线不改变以下边界：
-
-- 模型只发现、定位和解释候选，不决定最终等级、分数或价格；
-- H5 不伪造三维 AR 锚点；
-- 浏览器和 iPhone 均不保存模型厂商永久密钥；
-- 未拍摄区域不视为安全；
-- 游园会 iPhone 演示不宣称完成场馆验收或认证。
-
----
-
-## 2. 当前代码基线
-
-### 已可复用
-
-- v2 assessment 已支持 `photo` 和 `video_frame` 输入模式；
-- 每个房间可上传 1—6 张 JPEG、PNG 或 WebP；
-- 上传媒体后执行质量检查，房间分析时一次向 Pro 提交全部合格图片；
-- 风险候选使用白名单 `risk_code`、归一化 bbox/polygon 和置信度；
-- 后端确定性计算评分、覆盖度、A/B/C 方案和预算；
-- iPhone 已能保存 ARFrame 的深度、相机内参和位姿，并把 bbox 中心反投影到世界坐标；
-- iPhone 已有世界锚点、屏幕标签、空间距离去重和扫描报告。
-
-### 实现后仍需外部验证
-
-- Safari 与 Chrome 移动端对横竖屏、旋转元数据和长视频的真实设备矩阵；
-- H5 相机权限撤销、前后台切换和弱网的多设备人工验收；
-- iPhone 旋转 JPEG、bbox、深度图和世界坐标的 LiDAR 真机现场记录；
-- 游园会四 Zone 连续三次完整演示和真实风险效果评测；
-- 已获授权的照片、视频与游园会评测集及召回/误报指标。
-
-### 2026-07-25 实施记录
-
-- P0：`frontend/src/video.ts` 完成本地解码、8—16 帧候选、本地亮度/清晰度/感知哈希筛选和 3—6 帧确认上传；服务端保存来源元数据并在评分前合并同源相邻重复证据；
-- P1：新增 `/api/v2/assessments/{assessment_id}/camera/frames:inspect`，当前使用 `anju_h5_camera_discovery_v2` 和独立可见问题规则，响应后删除临时帧；H5 完成三栏导航、活动弹窗、后置相机、2 秒候选门控、单请求、退避和离页停轨；
-- P2：新增 `/api/v2/fair-scans`、Zone 关键帧分析和 v2 游园会报告；当前工作区的 iOS 实时帧使用 `anju_ios_fair_camera_direct_v3`，四 Zone 共用独立规则、静止画面门控和 ARKit 历史深度定位；Pro 正式复核回归列入收口计划；
-- 模型：H5 实时相机通过 `ANJU_ARK_H5_CAMERA_MODEL` 独立使用 `doubao-seed-2-1-turbo-260628`；iPhone 游园会实时帧通过 `ANJU_ARK_IOS_CAMERA_MODEL` 使用同一 Turbo 模型；`ANJU_ARK_TURBO_MODEL` 仅作兼容回退，`ANJU_ARK_PRO_MODEL` 保留给正式分析/复核；
-- 自动验证：Python 33 项、React 22 项、Swift 18 项通过，React 生产构建与 iOS generic 无签名构建通过。
-
----
-
-## 3. 目标架构
+## 2. 旅程
 
 ```text
-H5 视频文件
-  -> 浏览器解码
-  -> 本地质量/相似度门控
-  -> 3—6 张代表帧
-  -> v2 正式媒体
-  -> Pro 多图分析
-  -> 跨帧合并
-  -> 规则评分 / A/B/C / 预算
-
-H5 实时相机
-  -> getUserMedia
-  -> 每 2 秒产生候选帧
-  -> 本地质量 + 场景变化 + 单请求门控
-  -> 临时相机检查 API
-  -> 结构化建议文本
-  -> 用户确认保存的代表帧才进入 v2 正式媒体
-
-iPhone 游园会
-  -> Turbo 模型实时候选：risk_code + bbox + confidence
-  -> 历史 ARFrame 深度/内参/位姿
-  -> 世界坐标与 Zone 内合并
-  -> 扫描结束后由服务端确定性归并候选
-  -> 服务端规则确定等级
-  -> v2 评分 / A/B/C / 预算
+App 启动
+  -> WKWebView 线上 H5
+  -> 中央相机
+  -> H5 创建/恢复 photo assessment
+  -> 选择六类房间
+  -> 创建/复用 room
+  -> iOS: start_live_scan / Safari: H5 camera
+  -> 代表帧写入该 room
+  -> /upload/{room_id}
+  -> 用户删除/补拍
+  -> 档案门禁
+  -> 用户手动开始正式分析
 ```
 
----
+未填档案时允许扫描。点击正式分析时，H5 导向档案页并以受控 `return_to` 回到房间；后端同时返回 `409 profile_incomplete` 防止绕过。
 
-## 4. 共享数据契约先行
+## 3. Native Bridge v1
 
-### 4.1 MediaAsset 扩展
+只接受受信 HTTPS 主框架的 `window.webkit.messageHandlers.anjuNative`。
 
-在不破坏现有字段的前提下新增可选字段：
+命令：
+
+- `capture_photo`
+- `start_live_scan`
+- `cancel_native_capture`
+
+请求必须包含 `bridge_version=1`、`request_id`、`assessment_id`、`access_token`、`room_id`、`room_type` 和 `remaining_slots`。token 仅在当次原生操作内存中保留。
+
+完成事件：
 
 ```json
 {
-  "source_kind": "photo | video_frame | h5_camera_frame | ios_ar_frame",
-  "source_id": "string",
-  "frame_index": 12,
-  "captured_at_ms": 8420,
-  "orientation": "up | right | down | left",
-  "perceptual_hash": "string",
-  "zone_id": "string | null"
+  "request_id": "uuid",
+  "status": "completed | partial | cancelled | failed",
+  "room_id": "uuid",
+  "capture_mode": "spatial_ar | camera_2d | photo",
+  "uploaded_media_ids": ["uuid"],
+  "failed_count": 0,
+  "error_code": null
 }
 ```
 
-要求：
+H5 收到事件后重新拉取 assessment，不接收 Base64 图片。
 
-- `source_id` 标识一次视频或相机扫描，不使用原始文件名；
-- `captured_at_ms` 是相对本次媒体源的时间，不泄露设备相册时间；
-- 浏览器哈希只用于候选筛选，后端不得盲目信任；
-- iPhone 必须记录模型实际收到的图像方向和尺寸；
-- 正式风险必须能追溯到 `media_id`，游园会 AR 风险还应追溯到 `frame_id` 和 `zone_id`。
+## 4. 原生帧筛选与资源约束
 
-### 4.2 跨帧风险合并
+- 每 2 秒执行本地候选检查；亮度 28—232，清晰度至少 5。
+- `spatial_ar` 相对上一接受帧平移至少 0.15m 或旋转至少 0.14rad。
+- `camera_2d` 感知哈希距离至少 6。
+- 模型单请求，间隔至少 5 秒，每次扫描最多 30 次。
+- 代表帧数不超过 `6 - 房间已有媒体数`，保存不依赖是否发现风险。
+- JPEG 旋正为 `up`，最长边 1280，质量 0.72。
+- 扫描临时文件有界，深度上下文最多 4 个；取消、上传结束或下次启动时清理。
+- 结束时顺序上传，单帧失败不回滚已成功媒体。
 
-正式评分前增加 `RiskNormalizationSkill`：
+## 5. 空间与二维降级
 
-1. 同一 `risk_code` 且来自高度相似帧时优先合并；
-2. iPhone 有世界坐标时，使用风险类型和空间距离合并；
-3. H5 无世界坐标时，使用 `source_id`、时间邻近、图像相似度、bbox 特征和模型复核结果合并；
-4. 合并后保留一个 canonical risk 和多个 evidence references；
-5. 同一物理风险只能扣分一次，但可展示多个证据视角；
-6. 合并不确定时保持独立并标记待确认，不得静默吞掉高置信度证据。
+- RoomPlan/LiDAR 可用：临时建议 bbox 先映射回 captured image/depth，有可靠深度时才创建世界锚点。
+- 不可用：原生 ARKit 相机使用二维 bbox，明确提示“当前设备暂不支持空间定位功能”。
+- 锚点仅在扫描期间存在。退出后只保留代表帧与正式分析生成的二维风险区域。
 
-建议新增：
-
-```text
-RiskEvidenceGroup
-  canonical_risk_id
-  evidence_media_ids[]
-  source_id
-  merge_reason
-  merge_confidence
-  normalization_version
-```
-
-### 4.3 临时建议与正式风险分离
-
-H5 实时相机返回 `CameraSuggestion`，不得直接写入正式风险表：
-
-```json
-{
-  "suggestion_id": "string",
-  "risk_code": "string",
-  "title": "string",
-  "evidence": "string",
-  "confidence": 0.82,
-  "region": {"type": "bbox", "x": 0.1, "y": 0.2, "width": 0.3, "height": 0.2},
-  "temporary": true,
-  "save_as_evidence_recommended": true
-}
-```
-
-临时建议不进入评分、预算和正式报告。只有用户保存代表帧并完成正式分析后，才生成正式风险。
-
----
-
-## 5. P0：H5 上传视频分析
-
-### 5.1 用户路径
-
-1. 用户从现有“从视频画面开始检查”入口创建 `video_frame` assessment；
-2. 选择本地视频，不把完整视频发送到服务端；
-3. 浏览器显示解码与筛选进度；
-4. 自动产生 3—6 张代表帧供用户预览、删除或补选；
-5. 用户确认后按现有图片接口上传；
-6. 服务端一次对所有合格帧做 Pro 多图风险分析；
-7. 跨帧合并后进入现有评分、方案和预算页面。
-
-### 5.2 浏览器抽帧策略
-
-第一版使用浏览器原生能力，不新增 ffmpeg.wasm：
-
-- 读取视频时长和尺寸；
-- 均匀采样形成候选池，建议 8—16 个候选；
-- 过滤严重模糊、过暗、过曝和黑帧；
-- 使用缩略图差异或感知哈希删除近重复帧；
-- 优先保留场景发生明显变化且地面/通道较清楚的帧；
-- 最终选择 3—6 帧，少于 3 帧时允许继续，但必须提示覆盖有限；
-- 将选中帧规范化为现有 JPEG 上传格式并去除 EXIF；
-- 视频解码失败时允许退回“上传截图/照片”。
-
-浏览器初筛只是减少无效上传和模型调用，不能代替服务端格式校验与正式质量判断。
-
-### 5.3 模型调用预算
-
-当前风险分析已是一次多图 Pro 调用。P0 需要减少的是逐帧质量调用：
-
-- 第一版：本地初筛后上传 3—6 帧，仍复用现有单图服务端质量检查；
-- 第二版：增加批量质量检查，或仅对边界帧调用服务端质量模型；
-- 无论哪一版，正式风险分析保持一次提交全部合格帧；
-- 埋点记录候选帧数、接受帧数、质量调用数、Pro 调用数、输入 token、延迟和失败类型。
-
-### 5.4 验收门禁
-
-- 服务端未收到原始视频；
-- 横屏、竖屏和带旋转元数据的视频均能正确显示；
-- 3—6 张代表帧具有不同视角，明显重复帧会被移除；
-- 刷新后能恢复 assessment，不要求恢复未确认的本地原始视频；
-- 同一风险出现在多个关键帧中时只扣分一次；
-- Safari 和 Chrome 移动端均有成功、失败和降级路径；
-- 视频相关测试使用无个人信息、可入库的 fixture。
-
----
-
-## 6. P1：H5 实时相机分析
-
-### 6.1 导航与进入方式
-
-主导航调整为：
+## 6. API
 
 ```text
-检查｜中央相机｜我的
+POST /api/v2/assessments/{assessment_id}/rooms/{room_id}/camera/frames:inspect
 ```
 
-- 中央相机使用仓库内独立 SVG 资产，不运行模型生成的 SVG；
-- 点击后先展示活动引导弹窗；
-- 用户再次主动确认后才请求浏览器相机权限；
-- 权限拒绝、设备无摄像头或浏览器不支持时，回退到照片/视频上传；
-- 相机页退出、切后台、路由变化或页面卸载时必须停止媒体轨道。
+服务端验证 token 与 room 归属，根据 room 获取房型，返回不计分的 `CameraSuggestion`。旧 assessment 级 H5 相机接口暂作缓存兼容。
 
-活动弹窗和按钮文字进入集中式 Web 文案配置，不散落在组件中。
-
-### 6.2 本地门控
-
-浏览器可以每 2 秒生成一次候选，但只有同时满足以下条件才请求服务端：
-
-- 页面可见、相机轨道正常且使用后置摄像头；
-- 清晰度、亮度和曝光达到本地阈值；
-- 与上一张已接受帧相比发生足够场景变化；
-- 当前没有未完成请求；
-- 距离上一次模型调用达到最小间隔；
-- 未超过单次会话的调用上限；
-- 失败后满足指数退避时间。
-
-不得把“每 2 秒检查候选”实现成“每 2 秒固定调用一次 Pro”。
-
-### 6.3 临时相机检查 API
-
-建议新增：
+代表帧使用现有媒体接口：
 
 ```text
-POST /api/v2/camera/frames:inspect
+source_kind = ios_camera_frame
+source_id = 扫描 UUID
+frame_index
+captured_at_ms
+orientation = up
 ```
 
-请求包含临时 frame、房间类型、assessment context 和前一接受帧摘要。响应只返回质量状态、结构化临时建议和是否值得保存。接口要求：
+`ios_ar_frame` 只保持历史可读。开关为 `ANJU_ENABLE_IOS_HOME_CAMERA`，健康检查能力名为 `ios_home_camera`，H5/iOS 共用 `anju_home_camera_discovery_v1` 与 `ANJU_ARK_HOME_CAMERA_MODEL`。
 
-- 不创建 analysis job；
-- 默认不保存图片，确需短期缓存时必须设置分钟级 TTL；
-- 不改写房间正式风险；
-- 不触发评分和预算；
-- 同一会话最多一个进行中的模型请求；
-- 返回严格 schema，并记录 prompt/model/version；
-- 客户端取消后服务端应尽量取消上游请求。
+## 7. 移除项
 
-### 6.4 H5 相机适配提示词
+- 不再存在 fair API、Provider 方法、Zone DTO、规则/方案/价格文件、原生 Zone UI 和原生报告入口。
+- 新建数据库不创建 fair 表，现有生产数据库不执行破坏性 DROP。
+- 旧 App 无兼容周期，fair API 返回 404。
 
-H5 相机用于一般家庭检查，提示词必须根据结构化上下文适配，而不是写死单一房间。建议版本名：
+## 8. 发布门禁
 
-```text
-anju_h5_camera_discovery_v2
-```
-
-输入：
-
-- `assessment_context`，当前为 `home_live_camera`；
-- `room_type`，仅作为 `scene_hint`；
-- 独立实时相机规则允许的 `risk_code`、直观证据条件和场景要素提示；
-- 家人档案的非敏感结构化摘要；
-- 本帧 `media_id`；
-- 上一接受帧的场景要素摘要，仅用于减少重复提示；
-- `prompt_version` 和规则版本。
-
-固定提示词约束：
-
-```text
-你正在使用独立的实时相机发现规则，对老人家庭候选帧做环境安全辅助筛查。
-场景类型只帮助理解画面，不限制发现其他可见问题；允许风险代码和可见条件由结构化规则提供。
-只描述本帧中可直接观察且有图像证据的内容，不推断画面外或遮挡区域。
-相机帧可能不完整；不得把未看到的区域描述为安全，也不得声称完成房间或全屋检查。
-只从允许的 risk_code 中选择。输出 media_id、risk_code、证据、置信度、
-needs_manual_check 和归一化 bbox/polygon；无法可靠定位时 region 为 null。
-输出是临时建议，不给最终等级、分数、价格、施工结论、HTML、SVG 或医疗结论。
-若与上一帧摘要可能是同一问题，应设置 possible_repeat=true。
-```
-
-适配层负责把 `room_type` 映射到版本化的风险和场景白名单。不得把规则 JSON 全量拼接成不可审计的自由文本，也不得由前端自行构造最终系统提示词。
-
-### 6.5 验收门禁
-
-- 后置摄像头优先，权限拒绝和设备不支持有明确回退；
-- 相机开启后不出现重叠请求；
-- 静止画面不会持续产生模型费用；
-- 页面离开后摄像头指示立即关闭；
-- 建议始终标记为临时，不影响正式分数；
-- H5 不显示或声称存在世界坐标、空间锚点或三维测量；
-- 提示词分别覆盖至少三种房间类型、重复帧、低质量帧和无风险帧测试。
-
----
-
-## 7. P2：游园会 iPhone 大模型结合 AR
-
-### 7.1 产品边界
-
-iPhone 版本只在游园会现场展示，提示词和 Zone 不需要泛化为家庭场景。固定上下文：
-
-```text
-assessment_context = venue_fair
-```
-
-第一版 Zone：
-
-- `entrance`：入口区；
-- `main_aisle`：主通道区；
-- `booth`：展位区；
-- `rest_area`：休息区。
-
-不得把上述 Zone 映射成现有卫生间、卧室等家庭 `room_type`。场馆风险白名单、覆盖规则和方案需要独立版本。
-
-### 7.2 两阶段模型编排
-
-#### Turbo 实时发现
-
-- 风险发现完全使用云端 Turbo，iOS target 不再包含 YOLO / Core ML 风险模型；
-- 场景稳定且满足本地质量门控时触发；
-- 同时只允许一个请求；
-- 最小 Turbo 间隔 5 秒，位移至少 0.15m 或旋转至少 0.14rad；
-- 本地只校验 AR tracking、亮度 28—232 和清晰度至少 5，不合格时只提示用户，不生成风险；
-- 输出风险代码、受控 `evidence_codes`、bbox、置信度、证据短句和待确认标记；
-- 不输出最终等级、分数、价格或整改方案；
-- 返回结果先经过 schema、风险白名单和置信度校验。
-
-#### ARKit 空间定位
-
-- 为每个发送帧生成稳定 `frame_id`；
-- 保存模型所见图像的方向、尺寸及其到 captured image 的变换；
-- 保存对应相机内参、位姿和深度；
-- 将 bbox/polygon 的代表点逆变换到原始深度坐标；
-- 使用深度中位数或局部平面拟合反投影；
-- 无可靠深度时降级为二维证据卡，不创建世界锚点；
-- 使用 `risk_code + zone_id + world_distance` 合并相邻候选。
-
-#### Pro 扫描后复核
-
-- 每个 Zone 选取有限代表帧；
-- 一并提交 Turbo 候选、候选证据引用和 Zone 类型；
-- Pro 只能确认、拒绝、合并、修正位置或标为待确认；
-- Pro 不改变规则等级，不生成价格；
-- 复核完成后再进入 v2 正式风险、评分、A/B/C 和预算；
-- Pro 失败时保留 Turbo 候选为待确认部分报告，不给参考分，不把 Turbo 输出冒充已复核结果。
-
-### 7.3 iPhone 游园会提示词
-
-iPhone 只需保证游园会现场，不实现家庭房型适配提示词。
-
-Turbo 建议版本名：
-
-```text
-anju_ios_fair_turbo_v2
-```
-
-固定约束：
-
-```text
-你正在游园会活动现场对 iPhone 相机关键帧做临时环境安全辅助筛查。
-当前 Zone 只能从 entrance、main_aisle、booth、rest_area 中选择；Zone 只记录位置，
-四个 Zone 使用同一套独立可见问题规则和服务端结构化 risk_code 白名单。
-只报告本帧中清楚可见、可定位、与人员通行或现场使用直接相关的候选风险。
-不得推断画面外、遮挡区域、承重、消防合规、施工质量或活动整体安全状态。
-输出 frame_id、zone_id、risk_code、受控 evidence_codes、简短证据、置信度、needs_manual_check
-和 0—1 归一化 bbox；无法可靠定位时不得编造坐标。
-不要输出风险等级、分数、价格、整改方案、HTML、SVG、医疗结论或“场馆安全/通过验收”等表述。
-```
-
-Pro 建议版本名：
-
-```text
-anju_ios_fair_review_pro_v1
-```
-
-固定约束：
-
-```text
-你正在复核一次游园会 Zone 扫描的代表帧和 Turbo 候选。
-逐个候选返回 confirmed、rejected、merged、region_corrected 或 manual_check，
-并保留可追溯的 candidate_id、frame_id、zone_id 和 media_id。
-只依据提供的图片和候选证据，不补充画面外事实。
-只能使用允许的 risk_code；不得决定最终等级、分数、价格或工程结论。
-```
-
-两套提示词均由后端保存和版本化，iPhone 只发送结构化上下文，不在客户端拼装厂商提示词。
-
-### 7.4 iOS 与 v2 整合
-
-当前 v1 正式分析不会调用真实 provider。P2 必须新增明确通路：
-
-- 推荐新增 iOS 扫描 session/Zone API，并在扫描完成时转换为 v2 assessment；
-- 保留 v1 字段语义，不静默把 v1 替换成不同响应；
-- iOS 报告消费 v2 的正式评分、覆盖度、方案和预算；
-- Turbo 候选和 Pro 正式风险使用不同状态与 DTO；
-- 每个 AI 调用记录 provider、model、prompt version、规则版本、延迟、token 和错误类型。
-
-### 7.5 帧缓存
-
-扫描期间使用有界缓存，不无限保留 ARFrame：
-
-- 每个 Zone 保留少量代表帧 JPEG；
-- 只为仍待定位或待 Pro 复核的帧保留深度上下文；
-- 达到内存阈值时优先淘汰低质量、重复且无候选的帧；
-- 扫描结束或取消后清理未纳入正式证据的临时数据；
-- 不把完整连续视频上传到服务器。
-
-### 7.6 验收门禁
-
-- 真机验证旋转 JPEG、bbox、深度图和世界坐标转换；
-- 静止场景不会持续调用 Turbo；
-- 相同物理风险跨帧只生成一个 canonical risk；
-- 无深度和深度异常时不会创建错误锚点；
-- Pro 可确认、拒绝、合并和修正 Turbo 候选；
-- iPhone 最终展示的等级、评分和价格均来自规则/v2；
-- 游园会四类 Zone 能分别开始、暂停、结束和生成结果；
-- 一次 Turbo 都未成功时不生成空报告，提供重新扫描和退出；
-- UI 和文案只声称游园会现场辅助筛查，不声称场馆验收。
-
----
-
-## 8. 实施阶段与建议工期
-
-| 阶段 | 主要交付 | 建议工期 |
-|---|---|---:|
-| M0 数据基础 | MediaAsset 来源字段、迁移、跨帧合并、测试 | 1.5—2.5 天 |
-| P0 视频 | 浏览器解码、抽帧、预览、上传与降级 | 2—3 天 |
-| P1 H5 相机 | 三栏导航、权限、门控、临时 API、自适应提示词 | 3—4 天 |
-| P2A iOS 正确性 | 图像方向转换、帧缓存、真机坐标测试 | 2—3 天 |
-| P2B 模型编排 | Turbo DTO/provider、Pro 复核、版本化游园会提示词 | 3—5 天 |
-| P2C v2 与 Zone | Zone session、v2 报告、评分、方案和预算接入 | 3—5 天 |
-| 现场验收 | 弱网、权限、模型超时、四 Zone 连续演示 | 1—2 天 |
-
-工期不包含真实模型效果评测集采集和外部模型服务审批。若只为游园会演示压缩范围，应优先完成入口区、主通道区两个 Zone，但数据契约仍保留四类枚举。
-
----
-
-## 9. 测试矩阵
-
-### H5 视频
-
-- 横屏、竖屏、旋转元数据；
-- 3 秒、30 秒和较长视频；
-- 全黑、严重抖动、重复画面、解码失败；
-- Safari/Chrome 权限和内存回收；
-- 同一风险跨关键帧合并；
-- 原视频未进入网络请求和服务端目录。
-
-### H5 相机
-
-- 权限允许、拒绝、撤销和无摄像头；
-- 前后台切换、路由退出和网络中断；
-- 单请求门控、失败退避和调用上限；
-- 三种房间的提示词白名单适配；
-- 临时建议不影响正式分数；
-- VoiceOver、44pt 触控区和状态播报。
-
-### iPhone 游园会
-
-- 四种设备方向和前后移动；
-- 有深度、无深度、深度空洞和边缘 bbox；
-- Turbo 超时、Pro 超时、取消与重试；
-- Zone 切换和跨 Zone 候选隔离；
-- 候选合并、用户忽略和扫描结束清理；
-- 真机连续演示至少三次。
-
----
-
-## 10. 发布、开关与回滚
-
-新增能力默认关闭，建议使用服务端能力开关：
-
-```text
-ANJU_ENABLE_H5_VIDEO=0
-ANJU_ENABLE_H5_CAMERA=0
-ANJU_ENABLE_IOS_FAIR_AR=0
-ANJU_ARK_TURBO_MODEL=<validated-model-id>
-ANJU_ARK_PRO_MODEL=<validated-model-id>
-ANJU_TURBO_MAX_CONCURRENCY=2
-ANJU_PRO_MAX_CONCURRENCY=1
-```
-
-要求：
-
-- `/health` 只公开能力是否可用，不公开模型密钥和供应商错误；
-- H5 根据服务端 capability 决定是否展示入口；
-- iPhone 游园会入口必须同时满足 Debug/活动配置和服务端 capability；
-- 任一新链路失败时可独立关闭，不影响现有照片 P01—P09；
-- 不允许失败后自动回退到 Demo 数据；
-- 所有同步模型调用必须在线程池执行；H5/iOS Turbo 共享进程内并发上限 2，质量检查、正式分析和 Pro 复核共享上限 1；
-- 生产开启前必须走现有部署门禁，并记录提示词、规则和模型版本。
-
----
-
-## 11. 完成定义
-
-每个阶段只有同时满足以下条件才算完成：
-
-- 数据契约和数据库迁移已评审；
-- 模型、规则、编排和 UI 职责没有混淆；
-- 提示词进入服务端版本管理且有 schema 测试；
-- 主路径、失败、取消、空状态和刷新恢复可运行；
-- 跨帧重复不会重复扣分；
-- 图片方向和坐标转换有自动测试，iPhone 路径有真机记录；
-- 临时相机建议不会污染正式报告；
-- Mock 默认关闭且有明显 Demo 标识；
-- 文档和 `docs/IMPLEMENTATION_STATUS.md` 如实更新；
-- 相关 Swift、Python、React、文案和无签名 iOS 编译检查通过。
+1. 后端与 H5 先发布，`ios_home_camera` 保持关闭。
+2. 发布新 iOS，在一台 LiDAR 和一台非 LiDAR iPhone 完成 P01—P09 冒烟。
+3. 开启 `ANJU_ENABLE_IOS_HOME_CAMERA=1`，再完成权限拒绝、前后台、弱网、超时、上传中断、媒体已满和连续三次完整旅程。
+4. 未完成真机与授权评测集验证前，不声称空间定位或模型效果已验证。

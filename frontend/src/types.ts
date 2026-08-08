@@ -35,7 +35,7 @@ export interface MediaAsset {
   height: number;
   content_path: string;
   quality: MediaQuality;
-  source_kind?: 'photo' | 'video_frame' | 'h5_camera_frame' | 'ios_ar_frame';
+  source_kind?: 'photo' | 'video_frame' | 'h5_camera_frame' | 'ios_camera_frame' | 'ios_ar_frame';
   source_id?: string | null;
   frame_index?: number | null;
   captured_at_ms?: number | null;
@@ -45,7 +45,7 @@ export interface MediaAsset {
 }
 
 export interface MediaUploadMetadata {
-  sourceKind: 'photo' | 'video_frame' | 'h5_camera_frame' | 'ios_ar_frame';
+  sourceKind: 'photo' | 'video_frame' | 'h5_camera_frame' | 'ios_camera_frame' | 'ios_ar_frame';
   sourceId?: string;
   frameIndex?: number;
   capturedAtMs?: number;
@@ -174,6 +174,71 @@ export interface SolutionPackage {
   expected_score_gain_min: number;
   expected_score_gain_max: number;
   price: PriceRule;
+  visualizable_actions?: {action_code: string; label: string}[];
+}
+
+export interface RenovationSelectedSolution {
+  risk_id: string;
+  risk_title: string;
+  solution_package_id: string;
+  tier: 'A' | 'B' | 'C';
+  title: string;
+  summary: string;
+  actions: string[];
+  visualizable_actions: RenovationAction[];
+}
+
+export interface RenovationAction {
+  action_code: string;
+  label: string;
+  risk_id?: string;
+  risk_title?: string;
+  target_evidence?: string;
+  region?: BBoxRegion | null;
+  confidence?: number;
+}
+
+export interface RenovationPreview {
+  preview_id: string;
+  assessment_id: string;
+  room_id: string;
+  source_media_id: string;
+  selection_hash: string;
+  selected_solutions: RenovationSelectedSolution[];
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  stage: string;
+  error: string | null;
+  provider: string | null;
+  model: string | null;
+  prompt_version: string;
+  rule_set_version: string;
+  visualized_actions: RenovationAction[];
+  skipped_actions: string[];
+  before_content_path: string;
+  after_content_path: string | null;
+  selected_for_report: boolean;
+  stale: boolean;
+  created_at: string;
+  updated_at: string;
+  disclaimer: string;
+}
+
+export interface RenovationPreviewContext {
+  room_id: string;
+  room_type: RoomType;
+  selection_hash: string;
+  selected_solutions: RenovationSelectedSolution[];
+  eligible_media: Array<{
+    media_id: string;
+    mime_type: string;
+    width: number;
+    height: number;
+    content_path: string;
+    recommended: boolean;
+    selected_risk_evidence_count: number;
+  }>;
+  previews: RenovationPreview[];
+  disclaimer: string;
 }
 
 export interface SolutionsResult {
@@ -226,6 +291,7 @@ export interface AssessmentReport {
   recommendations?: ReportRecommendation[];
   budget: Budget;
   projected_score: {current: number; min: number; max: number; display: number} | null;
+  renovation_previews?: RenovationPreview[];
   price_disclaimer: string;
   rule_set_version?: string;
   price_rule_version?: string;
@@ -239,7 +305,10 @@ export interface ApiFailure extends Error {
 export interface ServerCapabilities {
   h5_video: boolean;
   h5_camera: boolean;
-  ios_fair_ar: boolean;
+  ios_home_camera: boolean;
+  voice_advisor?: boolean;
+  rtc_video_advisor?: boolean;
+  renovation_preview?: boolean;
 }
 
 export interface CameraSuggestion {
@@ -254,6 +323,7 @@ export interface CameraSuggestion {
   region: RiskRegion | null;
   temporary: true;
   save_as_evidence_recommended: boolean;
+  frame_id?: string;
 }
 
 export interface CameraInspectionResult {
@@ -265,4 +335,130 @@ export interface CameraInspectionResult {
   save_as_evidence_recommended: boolean;
   prompt_version: 'anju_h5_camera_discovery_v3' | string;
   rule_version?: string;
+}
+
+export interface PreparedCameraInspection {
+  inspection_id: string;
+  frame_id: string;
+  group_id: number;
+  rtc_message: string;
+  expires_at: string;
+  max_chunk_bytes: number;
+}
+
+export interface CameraFrameQuality {
+  brightness: number;
+  sharpness: number;
+  motion: number;
+}
+
+export type AdvisorPhase = 'draft' | 'analyzing' | 'formal';
+
+export interface AdvisorContextRef {
+  room_id?: string;
+  media_id?: string;
+  risk_id?: string;
+  solution_package_id?: string;
+  camera_session_id?: string;
+  camera_suggestion_id?: string;
+  frame_id?: string;
+}
+
+export interface AdvisorRiskSummaryCard {
+  type: 'risk_summary';
+  risks: Array<SafetyRisk & {severity_label?: string}>;
+}
+
+export interface AdvisorTemporarySuggestionsCard {
+  type: 'temporary_suggestions';
+  suggestions: CameraSuggestion[];
+  disclaimer: string;
+}
+
+export interface AdvisorSolutionOptionsCard {
+  type: 'solution_options';
+  risk_id: string;
+  risk_title: string;
+  solutions: SolutionPackage[];
+  selected_solution_package_id: string | null;
+  price_disclaimer: string;
+}
+
+export interface AdvisorBudgetCard extends Budget {
+  type: 'budget';
+  disclaimer: string;
+}
+
+export interface AdvisorConfirmationCard {
+  type: 'confirmation';
+  confirmation_id: string;
+  tool_name: 'select_solution' | 'remove_solution' | 'start_formal_analysis';
+  label: string;
+  status: 'pending' | 'approved' | 'rejected';
+}
+
+export type AdvisorCard =
+  | AdvisorRiskSummaryCard
+  | AdvisorTemporarySuggestionsCard
+  | AdvisorSolutionOptionsCard
+  | AdvisorBudgetCard
+  | AdvisorConfirmationCard
+  | {type: 'risk_evidence'; risk: SafetyRisk}
+  | {type: 'system_state'; state: string; label: string; media_count?: number};
+
+export interface AdvisorTurn {
+  turn_id: string;
+  role: 'user' | 'assistant';
+  kind: 'message' | 'transcript' | 'confirmation' | 'system';
+  text: string;
+  status: 'partial' | 'final' | 'failed';
+  context_refs: AdvisorContextRef;
+  cards: AdvisorCard[];
+  created_at: string;
+}
+
+export interface AdvisorRTCConfig {
+  available: boolean;
+  reason?: 'not_configured' | 'provider_unavailable';
+  provider?: 'volcengine';
+  app_id?: string;
+  room_id?: string;
+  user_id?: string;
+  bot_user_id?: string;
+  token?: string;
+  expires_at?: string;
+  requires_start?: boolean;
+  media_mode?: 'audio' | 'audio_video';
+  video_available?: boolean;
+  vision_mode?: 'rtc_snapshot' | null;
+  snapshot_interval_ms?: number | null;
+  snapshot_height?: number | null;
+  image_detail?: 'low' | 'high' | null;
+}
+
+export interface AdvisorRTCQueueTicket {
+  ticket_id: string;
+  status: 'unavailable' | 'queued' | 'granted' | 'active' | 'draining';
+  position: number;
+  expires_at: string;
+  poll_after_ms: number;
+  mode?: 'audio' | 'audio_video';
+  reason?: 'not_configured';
+}
+
+export interface AdvisorBootstrap {
+  session_id: string;
+  phase: AdvisorPhase;
+  room: {room_id: string; room_type: RoomType; room_name: string; status: string};
+  current_media: MediaAsset | null;
+  media: MediaAsset[];
+  suggestions: CameraSuggestion[];
+  camera_session_id: string | null;
+  risks: SafetyRisk[];
+  quick_prompts: string[];
+  turns: AdvisorTurn[];
+  context_refs: AdvisorContextRef;
+  rtc: AdvisorRTCConfig;
+  events?: {websocket_path: string; token: string; expires_at: string};
+  prompt_version: string;
 }

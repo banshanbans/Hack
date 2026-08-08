@@ -29,16 +29,16 @@ Manifest 必须是 UTF-8 JSON：
 
 ### 枚举
 
-- `input_mode`: `photo` 或 `video_frame`
+- `input_mode`: 当前只允许 `photo`
 - `room_type`: `bathroom`, `bedroom`, `living_room`, `kitchen`, `corridor`, `balcony`
 - `mobility`: `normal`, `limited`, `cane`, `walker`, `wheelchair`
 - `fall_history`: `none`, `once`, `multiple`
 - `living_status`: `alone`, `with_family`
 - 每个房间 1–6 张图片
 
-### 视频帧元数据
+### 历史 `video_frame` 兼容说明
 
-`input_mode` 为 `video_frame` 时，每张图片还应包含：
+服务端和编排脚本可能暂时保留 `video_frame` 字段与以下旧元数据，以便读取历史记录：
 
 ```json
 {
@@ -52,7 +52,7 @@ Manifest 必须是 UTF-8 JSON：
 }
 ```
 
-`source_id` 只是不含个人信息的本地关联 ID。同一视频的代表帧使用相同 ID，以便评分前合并同一物理风险。
+该结构不属于当前 Skill 的可用输入，调用方不得新建 `video_frame` manifest，也不得把本 Skill 描述为支持本地视频选择、自动抽帧或视频帧识别。若素材来自视频，用户应自行截图，并以 `input_mode: photo` 和普通照片媒体项提交。旧结构仅说明兼容数据为何仍可能出现在代码或历史记录中。
 
 ## Choices
 
@@ -80,4 +80,3 @@ Manifest 必须是 UTF-8 JSON：
 - `recommendations[].solutions`: A/B/C 候选方案和结构化参考价
 - `budget`: 用户已选方案按预算分组去重后的代码汇总
 - `rule_set_version`, `price_rule_version`: 复现评估所需的规则版本
-

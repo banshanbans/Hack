@@ -1,0 +1,48 @@
+{
+  "version": "renovation_visualization_rules_v1",
+  "solutions": {
+    "SOL_BAR_A": {"visualizable_actions":[{"action_code":"stable_anti_slip_mat","label":"铺设稳定防滑垫","prompt":"在淋浴区地面增加一张边缘平整、可靠防滑、不会翘起的适老防滑垫"}]},
+    "SOL_BAR_B": {"visualizable_actions":[{"action_code":"shower_fixed_grab_bars","label":"安装固定扶手","prompt":"在淋浴区入口与内部可见的实体墙面安装两到三根尺度合理、可靠固定的适老扶手，不安装在玻璃上且不影响门体开合"}]},
+    "SOL_BAR_C": {"visualizable_actions":[{"action_code":"continuous_shower_support","label":"连续扶手与坐浴设施","prompt":"在淋浴区实体墙增加连续适老扶手，并在不阻碍通行的位置增加固定或上翻式坐浴设施"}]},
+
+    "SOL_WET_A": {"visualizable_actions":[]},
+    "SOL_WET_B": {"visualizable_actions":[{"action_code":"bathroom_anti_slip_surface","label":"防滑地面处理","prompt":"仅在现有湿区地面增加与原材质协调的连续哑光防滑表面处理，保持排水口和地面结构不变"}]},
+    "SOL_WET_C": {"visualizable_actions":[{"action_code":"bathroom_continuous_anti_slip_floor","label":"整体防滑铺装","prompt":"将卫生间可见地面表现为连续、平整、哑光的专业防滑铺装，保持原有房间边界、排水位置和所有设施不变"}]},
+
+    "SOL_GLASS_A": {"visualizable_actions":[]},
+    "SOL_GLASS_B": {"visualizable_actions":[{"action_code":"glass_area_fixed_grab_bar","label":"玻璃区固定扶手","prompt":"在玻璃隔断旁可见的实体墙面安装一根尺度合理的固定适老扶手，不把任何设施固定在玻璃上"}]},
+    "SOL_GLASS_C": {"visualizable_actions":[{"action_code":"shower_entry_support_system","label":"淋浴入口连续支撑","prompt":"在淋浴入口可见实体墙面增加连续适老支撑扶手，保持玻璃隔断位置和房间结构不变"}]},
+
+    "SOL_THRESHOLD_A": {"visualizable_actions":[{"action_code":"threshold_contrast_strip","label":"高对比提示条","prompt":"沿现有门槛边缘增加一条耐磨、平整、不翘边的高对比提示条"}]},
+    "SOL_THRESHOLD_B": {"visualizable_actions":[{"action_code":"threshold_ramp_transition","label":"缓坡过渡","prompt":"在现有门槛处增加一段稳固、低坡度、带防滑表面的过渡缓坡，不妨碍门体开合"}]},
+    "SOL_THRESHOLD_C": {"visualizable_actions":[{"action_code":"flush_threshold_transition","label":"入口降差与防滑收口","prompt":"把可见入口高差表现为平缓、连续、防滑的专业过渡收口，保持门洞和墙体结构不变"}]},
+
+    "SOL_MAT_A": {"visualizable_actions":[{"action_code":"remove_loose_mat","label":"移除松动地垫","prompt":"移除通行动线中可见的松动活动地垫，并自然补全其下方原有地面"}]},
+    "SOL_MAT_B": {"visualizable_actions":[{"action_code":"fixed_anti_slip_area","label":"固定防滑区域","prompt":"用边缘完全贴合地面、不会翘起的固定式防滑区域替代可见的活动地垫"}]},
+    "SOL_MAT_C": {"visualizable_actions":[{"action_code":"continuous_anti_slip_floor","label":"连续防滑地面","prompt":"将原活动地垫所在通行区域表现为连续平整的专业防滑地面材料，保持空间结构不变"}]},
+
+    "SOL_LIGHT_A": {"visualizable_actions":[{"action_code":"motion_night_light","label":"感应夜灯","prompt":"在靠近通行动线且远离潮湿水源的位置增加一盏小型、柔和、无眩光的感应夜灯"}]},
+    "SOL_LIGHT_B": {"visualizable_actions":[{"action_code":"moisture_resistant_sensor_light","label":"防潮感应照明","prompt":"在合理位置增加与房间风格协调的防潮感应灯具，呈现柔和均匀且不眩光的照明"}]},
+    "SOL_LIGHT_C": {"visualizable_actions":[{"action_code":"zoned_safety_lighting","label":"分区安全照明","prompt":"增加与现有空间协调的分区安全照明和低位引导光，保持现有线路、墙体与天花结构视觉不变"}]},
+
+    "SOL_BED_SUPPORT_A": {"visualizable_actions":[{"action_code":"clear_bedside_path","label":"清理床边并调整稳固家具","prompt":"清除床边通行动线上的小件杂物，并把现有稳固床头柜调整到方便起身借力且不阻碍通行的位置"}]},
+    "SOL_BED_SUPPORT_B": {"visualizable_actions":[{"action_code":"fixed_bedside_rail","label":"固定床边扶手","prompt":"在常用起身侧增加一套与床架匹配、尺度合理、可靠固定的适老床边扶手"}]},
+    "SOL_BED_SUPPORT_C": {"visualizable_actions":[{"action_code":"bed_transfer_support_system","label":"床边支撑系统","prompt":"在常用起身侧增加完整可靠的床边支撑系统，并保持连续、无障碍的床边通道"}]},
+
+    "SOL_LIVING_PATH_A": {"visualizable_actions":[{"action_code":"clear_living_path","label":"清理通道并收纳线缆","prompt":"移除通行动线中的可见小件障碍，并把裸露线缆沿墙边整齐固定收纳"}]},
+    "SOL_LIVING_PATH_B": {"visualizable_actions":[{"action_code":"living_room_path_relayout","label":"家具重排与固定收纳","prompt":"仅重新摆放现有沙发和茶几以形成宽阔连续通道，并在墙边增加与风格协调的固定收纳"}]},
+    "SOL_LIVING_PATH_C": {"visualizable_actions":[{"action_code":"living_room_accessible_layout","label":"连续通行布局","prompt":"调整现有家具布局形成清晰连续的适老通行区，并把电器线缆隐藏在贴墙固定收口中"}]},
+
+    "SOL_KITCHEN_REACH_A": {"visualizable_actions":[{"action_code":"kitchen_reachable_storage","label":"常用物品下移","prompt":"把可见的常用厨房物品整齐移动到腰部至肩部高度的现有开放收纳或台面区域，并移除垫高物"}]},
+    "SOL_KITCHEN_REACH_B": {"visualizable_actions":[{"action_code":"kitchen_pull_down_storage","label":"下拉收纳","prompt":"在可见高柜内增加一套尺度合理的下拉式收纳篮，并把常用物品放在易取高度"}]},
+    "SOL_KITCHEN_REACH_C": {"visualizable_actions":[{"action_code":"accessible_kitchen_storage","label":"适老储物与操作面","prompt":"把可见厨房储物表现为更多腰部至肩部高度的抽屉和易取收纳，并保持水电、墙体与整体橱柜布局不变"}]},
+
+    "SOL_CORRIDOR_PATH_A": {"visualizable_actions":[{"action_code":"clear_corridor_path","label":"清空主通道","prompt":"移除主通道中可见的鞋物和零散小件，并将其整齐收纳到通道外"}]},
+    "SOL_CORRIDOR_PATH_B": {"visualizable_actions":[{"action_code":"slim_shoe_cabinet_seat","label":"窄型鞋柜与换鞋座椅","prompt":"沿墙增加不侵占通行净宽的窄型固定鞋柜和稳固换鞋座椅，保持门体开合空间"}]},
+    "SOL_CORRIDOR_PATH_C": {"visualizable_actions":[{"action_code":"accessible_entry_storage","label":"玄关收纳与通行区","prompt":"沿墙增加整体化薄型玄关收纳和稳固换鞋支撑，形成连续清晰的通行区，并增加柔和引导照明"}]},
+
+    "SOL_BALCONY_REACH_A": {"visualizable_actions":[{"action_code":"remove_step_stool_add_pole","label":"移除垫高物并使用长柄工具","prompt":"移除阳台可见的临时垫高物，并在合理位置放置一根轻便可控的长柄晾衣工具"}]},
+    "SOL_BALCONY_REACH_B": {"visualizable_actions":[{"action_code":"lowering_drying_rack","label":"升降晾衣架","prompt":"在阳台顶部合理位置增加一套尺度真实的手摇或电动升降晾衣架，并保持通行区清晰"}]},
+    "SOL_BALCONY_REACH_C": {"visualizable_actions":[{"action_code":"accessible_balcony_layout","label":"适老晾衣与通行布局","prompt":"增加易操作的升降晾衣系统和贴墙收纳，形成连续清晰的阳台通行区，并保持栏杆、防水和墙体结构不变"}]}
+  }
+}

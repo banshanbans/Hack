@@ -14,6 +14,7 @@
     "@fontsource-variable/noto-sans-sc": "5.3.0",
     "@fontsource-variable/plus-jakarta-sans": "5.3.0",
     "@material-symbols/font-400": "0.45.9",
+    "@volcengine/rtc": "^4.66.20",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "react-router-dom": "7.18.1"

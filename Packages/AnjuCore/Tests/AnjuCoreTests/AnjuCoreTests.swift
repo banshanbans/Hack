@@ -2,6 +2,166 @@ import XCTest
 @testable import AnjuCore
 
 final class AnjuCoreTests: XCTestCase {
+    func testFrameContextStoreKeepsEightAndNeverEvictsLockedFrames() async throws {
+        let store = FrameContextStore()
+        var frameIDs: [UUID] = []
+        for index in 0..<8 {
+            let value = try makeStoredFrameContext(timestamp: Double(index))
+            frameIDs.append(value.context.frameID)
+            let inserted = await store.insert(value)
+            XCTAssertTrue(inserted)
+        }
+        let initialCount = await store.count
+        let locked = await store.lock(frameID: frameIDs[0], inspectionID: "inspection-1")
+        XCTAssertEqual(initialCount, 8)
+        XCTAssertTrue(locked)
+
+        let ninth = try makeStoredFrameContext(timestamp: 9)
+        let insertedNinth = await store.insert(ninth)
+        let lockedValue = await store.value(for: frameIDs[0])
+        let evictedValue = await store.value(for: frameIDs[1])
+        let finalCount = await store.count
+        XCTAssertTrue(insertedNinth)
+        XCTAssertNotNil(lockedValue)
+        XCTAssertNil(evictedValue)
+        XCTAssertEqual(finalCount, 8)
+    }
+
+    func testFrameContextStoreRejectsNinthWhenAllContextsAreLocked() async throws {
+        let store = FrameContextStore()
+        for index in 0..<8 {
+            let value = try makeStoredFrameContext(timestamp: Double(index))
+            let inserted = await store.insert(value)
+            let locked = await store.lock(
+                frameID: value.context.frameID,
+                inspectionID: "inspection-\(index)"
+            )
+            XCTAssertTrue(inserted)
+            XCTAssertTrue(locked)
+        }
+
+        let ninth = try makeStoredFrameContext(timestamp: 9)
+        let insertedNinth = await store.insert(ninth)
+        let count = await store.count
+        let lockedCount = await store.lockedCount
+        XCTAssertFalse(insertedNinth)
+        XCTAssertEqual(count, 8)
+        XCTAssertEqual(lockedCount, 8)
+    }
+
+    func testFrameContextStoreRequiresInspectionAndFrameMatch() async throws {
+        let store = FrameContextStore()
+        let first = try makeStoredFrameContext(timestamp: 1)
+        let second = try makeStoredFrameContext(timestamp: 2)
+        let insertedFirst = await store.insert(first)
+        let insertedSecond = await store.insert(second)
+        let locked = await store.lock(frameID: first.context.frameID, inspectionID: "inspection-1")
+        let matching = await store.value(
+            inspectionID: "inspection-1",
+            expectedFrameID: first.context.frameID
+        )
+        let mismatching = await store.value(
+            inspectionID: "inspection-1",
+            expectedFrameID: second.context.frameID
+        )
+        let unlocked = await store.unlock(inspectionID: "inspection-1", removeContext: true)
+        let removed = await store.value(for: first.context.frameID)
+        XCTAssertTrue(insertedFirst)
+        XCTAssertTrue(insertedSecond)
+        XCTAssertTrue(locked)
+        XCTAssertNotNil(matching)
+        XCTAssertNil(mismatching)
+        XCTAssertTrue(unlocked)
+        XCTAssertNil(removed)
+    }
+
+    func testNativeRealtimeVideoPolicyThrottlesAndDowngradesWeakNetwork() {
+        XCTAssertFalse(NativeRealtimeVideoPolicy.permitsVideoFrame(previousTimestamp: 1, timestamp: 1.03))
+        XCTAssertTrue(NativeRealtimeVideoPolicy.permitsVideoFrame(previousTimestamp: 1, timestamp: 1.08))
+        XCTAssertEqual(NativeRealtimeVideoPolicy.encoderLongEdge(uplinkQualityRawValue: 3), 720)
+        XCTAssertEqual(NativeRealtimeVideoPolicy.encoderLongEdge(uplinkQualityRawValue: 4), 540)
+        XCTAssertEqual(NativeRealtimeVideoPolicy.maximumCachedFrames, 8)
+        XCTAssertEqual(NativeRealtimeVideoPolicy.maximumCacheBytes, 24 * 1024 * 1024)
+        XCTAssertEqual(NativeRTCVideoProfile.degraded.framesPerSecond, 10)
+        XCTAssertEqual(NativeRTCVideoProfile.degraded.maximumBitrateKbps, 500)
+    }
+
+    func testRTCVideoAdaptiveStateDegradesForEachPressureSignal() {
+        var network = NativeRTCVideoAdaptiveState()
+        XCTAssertEqual(network.updateNetwork(quality: 4, timestamp: 1)?.profile, .degraded)
+
+        var thermal = NativeRTCVideoAdaptiveState()
+        let thermalTransition = thermal.updateThermal(level: .serious, timestamp: 1)
+        XCTAssertEqual(thermalTransition?.profile, .degraded)
+        XCTAssertTrue(thermalTransition?.reasons.contains(.thermal) == true)
+
+        var frameRate = NativeRTCVideoAdaptiveState()
+        XCTAssertNil(frameRate.updateARFrameRate(average: 23, timestamp: 3))
+        XCTAssertEqual(frameRate.updateARFrameRate(average: 22, timestamp: 6)?.profile, .degraded)
+    }
+
+    func testRTCVideoAdaptiveStateNeedsAllSignalsHealthyForTenSeconds() {
+        var state = NativeRTCVideoAdaptiveState()
+        _ = state.updateNetwork(quality: 4, timestamp: 0)
+        _ = state.updateARFrameRate(average: 28, timestamp: 1)
+        XCTAssertNil(state.updateNetwork(quality: 2, timestamp: 2))
+        XCTAssertNil(state.updateARFrameRate(average: 28, timestamp: 9))
+        XCTAssertEqual(state.updateARFrameRate(average: 28, timestamp: 11)?.profile, .normal)
+
+        _ = state.updateThermal(level: .critical, timestamp: 12)
+        XCTAssertEqual(state.profile, .degraded)
+        XCTAssertNil(state.updateARFrameRate(average: 30, timestamp: 25))
+        XCTAssertEqual(state.updateThermal(level: .fair, timestamp: 26)?.profile, .normal)
+    }
+
+    private func makeStoredFrameContext(timestamp: TimeInterval) throws -> StoredFrameContext {
+        let transform = try XCTUnwrap(Matrix4x4Codable(values: [
+            1, 0, 0, 0,
+            0, 1, 0, 0,
+            0, 0, 1, 0,
+            0, 0, 0, 1,
+        ]))
+        return StoredFrameContext(
+            context: CapturedFrameContext(
+                frameID: UUID(),
+                timestamp: timestamp,
+                cameraTransform: transform,
+                intrinsics: .init(fx: 1, fy: 1, cx: 0, cy: 0),
+                imageWidth: 2,
+                imageHeight: 2,
+                orientationRawValue: 1
+            ),
+            depth: DepthGrid(width: 1, height: 1, values: [1])
+        )
+    }
+
+    func testNativeRepresentativeSelectionPinsDeduplicatesAndCapsAtSix() {
+        let values = [
+            NativeRepresentativeCandidate(
+                id: "normal", perceptualHash: 0b11110000, pinned: false,
+                confidence: 0.9, brightness: 128, sharpness: 20
+            ),
+            NativeRepresentativeCandidate(
+                id: "pinned", perceptualHash: 0b00001111, pinned: true,
+                confidence: 0.7, brightness: 120, sharpness: 16
+            ),
+            NativeRepresentativeCandidate(
+                id: "duplicate-of-pinned", perceptualHash: 0b00001110, pinned: false,
+                confidence: 0.95, brightness: 128, sharpness: 30
+            ),
+            NativeRepresentativeCandidate(
+                id: "third", perceptualHash: 0b11111111, pinned: false,
+                confidence: 0.4, brightness: 130, sharpness: 12
+            ),
+        ]
+        XCTAssertEqual(
+            NativeRealtimeVideoPolicy.selectRepresentativeIDs(values, limit: 6),
+            ["pinned", "normal", "third"]
+        )
+        XCTAssertEqual(NativeRealtimeVideoPolicy.selectRepresentativeIDs(values, limit: 1), ["pinned"])
+        XCTAssertEqual(NativeRealtimeVideoPolicy.selectRepresentativeIDs(values, limit: 0), [])
+    }
+
     func testRuleParsingAndRoomFiltering() throws {
         let data = try JSONEncoder().encode([makeRule(type: .looseRug, severity: .high)])
         let store = try SafetyRuleStore(data: data)
@@ -31,75 +191,6 @@ final class AnjuCoreTests: XCTestCase {
 
         XCTAssertNil(unknown.validatedCandidate(frameID: UUID()))
         XCTAssertNil(badBox.validatedCandidate(frameID: UUID()))
-    }
-
-    func testFairDirectCandidateCarriesDeterministicCameraCopy() throws {
-        let data = Data(#"""
-        {
-          "candidate_id":"00000000-0000-0000-0000-000000000001",
-          "frame_id":"00000000-0000-0000-0000-000000000002",
-          "zone_id":"entrance",
-          "risk_code":"wet_floor",
-          "title":"地面有明显湿滑处",
-          "short_advice":"先擦干地面并提醒绕行",
-          "evidence_codes":["wet_surface_visible"],
-          "bbox":[0.1,0.2,0.7,0.8],
-          "evidence":"入口地面可见积水",
-          "confidence":0.91,
-          "needs_manual_check":false
-        }
-        """#.utf8)
-        let dto = try JSONDecoder().decode(FairDirectCandidateDTO.self, from: data)
-        let candidate = try XCTUnwrap(dto.validatedCandidate())
-
-        XCTAssertEqual(candidate.type, .wetFloor)
-        XCTAssertEqual(candidate.title, "地面有明显湿滑处")
-        XCTAssertEqual(candidate.recommendation, "先擦干地面并提醒绕行")
-        let issue = try XCTUnwrap(FairDirectAdapter().temporaryIssue(from: candidate, sessionID: UUID()))
-        XCTAssertEqual(issue.severity, .check)
-        XCTAssertEqual(issue.state, .tentative)
-        XCTAssertTrue(issue.needsManualCheck)
-    }
-
-    func testFairReportAdapterPreservesServerCopyAndValidatesFormalRisk() throws {
-        let report = try decodeFairReport(riskCode: "marked_exit_obstruction")
-        let issues = try FairReportAdapter().validatedIssues(report: report, sessionID: UUID(), preserving: [])
-
-        XCTAssertEqual(issues.count, 1)
-        XCTAssertEqual(issues[0].type, .markedExitObstruction)
-        XCTAssertEqual(issues[0].severity, .high)
-        XCTAssertEqual(issues[0].title, "服务端出口标题")
-        XCTAssertEqual(issues[0].recommendation, "服务端短建议")
-    }
-
-    func testFairReportAdapterRejectsUnknownRiskCode() throws {
-        let report = try decodeFairReport(riskCode: "invented_fair_risk")
-        XCTAssertThrowsError(try FairReportAdapter().validatedIssues(report: report, sessionID: UUID(), preserving: []))
-    }
-
-    private func decodeFairReport(riskCode: String) throws -> FairScanReportDTO {
-        let json = #"""
-        {
-          "scan_id":"00000000-0000-0000-0000-000000000010","status":"reviewed",
-          "assessed_area_score":84,"coverage_percent":25,"prompt_version":"pro-v1",
-          "rule_version":"venue-fair-rules-v1",
-          "budget":{"currency":"CNY","total_min":80,"total_max":500},
-          "zones":[{"zone_id":"entrance","score":84,"risks":[{
-            "candidate_id":"00000000-0000-0000-0000-000000000011",
-            "frame_id":"00000000-0000-0000-0000-000000000012",
-            "risk_code":"\#(riskCode)","status":"confirmed","severity":"high",
-            "title":"服务端出口标题","short_advice":"服务端短建议","evidence":"出口标识和障碍均清晰可见",
-            "evidence_frame_ids":["00000000-0000-0000-0000-000000000012"],
-            "rule_version":"venue-fair-rules-v1","score_eligible":true,"bbox":[0.1,0.2,0.7,0.8],
-            "solutions":[
-              {"tier":"A","title":"A","total_min":0,"total_max":80,"currency":"CNY","price_rule_id":"A"},
-              {"tier":"B","title":"B","total_min":80,"total_max":500,"currency":"CNY","price_rule_id":"B"},
-              {"tier":"C","title":"C","total_min":500,"total_max":3000,"currency":"CNY","price_rule_id":"C"}
-            ]
-          }]}]
-        }
-        """#
-        return try JSONDecoder().decode(FairScanReportDTO.self, from: Data(json.utf8))
     }
 
     func testSeverityComesFromRuleAndWeakEvidenceDowngradesHigh() throws {
@@ -186,20 +277,6 @@ final class AnjuCoreTests: XCTestCase {
         store.observe(second)
 
         XCTAssertEqual(store.issues.count, 1)
-    }
-
-    func testVenueZonesKeepSceneWideCandidatesIsolated() {
-        var store = IssueStore()
-        let sessionID = UUID()
-        for zone in ["entrance", "booth"] {
-            store.observe(SafetyIssue(
-                sessionID: sessionID, type: .lowLighting, state: .tentative, severity: .check,
-                title: "照明待确认", observation: "区域较暗", recommendation: "补充照明",
-                needsManualCheck: true, source: .remoteVision,
-                evidence: .init(frameID: UUID(), boundingBox: NormalizedBoundingBox(array: [0, 0, 1, 1]), zoneID: zone)
-            ))
-        }
-        XCTAssertEqual(store.issues.count, 2)
     }
 
     func testDismissedIssueDoesNotReappearInSession() {
@@ -323,6 +400,84 @@ final class AnjuCoreTests: XCTestCase {
         XCTAssertEqual(response.frameID, frameID)
         XCTAssertEqual(response.issues.count, 1)
         XCTAssertNotNil(response.issues[0].validatedCandidate(frameID: frameID))
+    }
+
+    func testNativeBridgeRequestValidatesVersionRoomAndSlots() throws {
+        let requestID = UUID().uuidString
+        let assessmentID = UUID().uuidString
+        let roomID = UUID().uuidString
+        let cameraSessionID = UUID().uuidString
+        let advisorSessionID = UUID().uuidString
+        let valid = """
+        {
+          "bridge_version": 1,
+          "command": "start_live_scan",
+          "request_id": "\(requestID)",
+          "assessment_id": "\(assessmentID)",
+          "access_token": "memory-only-token",
+          "room_id": "\(roomID)",
+          "room_type": "bathroom",
+          "remaining_slots": 4,
+          "camera_session_id": "\(cameraSessionID)",
+          "advisor_session_id": "\(advisorSessionID)",
+          "advisor_events": {
+            "websocket_path": "/api/v2/assessments/\(assessmentID)/rooms/\(roomID)/advisor/sessions/\(advisorSessionID)/events",
+            "token": "one-time-event-token",
+            "expires_at": "2026-08-08T10:02:00Z"
+          }
+        }
+        """
+        let decoded = try JSONDecoder().decode(NativeCaptureRequest.self, from: Data(valid.utf8))
+
+        XCTAssertTrue(decoded.isValid)
+        XCTAssertEqual(decoded.command, .startLiveScan)
+        XCTAssertEqual(decoded.cameraSessionID, cameraSessionID)
+        XCTAssertEqual(decoded.advisorSessionID, advisorSessionID)
+        XCTAssertTrue(decoded.advisorEvents?.isValid == true)
+
+        let invalidRoom = valid.replacingOccurrences(of: "bathroom", with: "venue_booth")
+        XCTAssertFalse(try JSONDecoder().decode(
+            NativeCaptureRequest.self,
+            from: Data(invalidRoom.utf8)
+        ).isValid)
+        let invalidVersion = valid.replacingOccurrences(of: "\"bridge_version\": 1", with: "\"bridge_version\": 2")
+        XCTAssertFalse(try JSONDecoder().decode(
+            NativeCaptureRequest.self,
+            from: Data(invalidVersion.utf8)
+        ).isValid)
+    }
+
+    func testNativeBridgeResultNeverEchoesAccessToken() throws {
+        let result = NativeCaptureResult(
+            requestID: UUID().uuidString,
+            status: "partial",
+            roomID: UUID().uuidString,
+            captureMode: "camera_2d",
+            uploadedMediaIDs: [UUID().uuidString],
+            failedCount: 1,
+            errorCode: "frame_upload_partial",
+            cameraSessionID: UUID().uuidString
+        )
+        let json = String(decoding: try JSONEncoder().encode(result), as: UTF8.self)
+
+        XCTAssertFalse(json.contains("access_token"))
+        XCTAssertFalse(json.contains("memory-only-token"))
+        XCTAssertTrue(json.contains("uploaded_media_ids"))
+        XCTAssertTrue(json.contains("camera_session_id"))
+    }
+
+    func testNativeFrameSelectionPolicyBoundariesAreStable() {
+        let policy = NativeFrameSelectionPolicy.homeCamera
+
+        XCTAssertTrue(policy.acceptsQuality(brightness: 28, sharpness: 5))
+        XCTAssertTrue(policy.acceptsQuality(brightness: 232, sharpness: 5))
+        XCTAssertFalse(policy.acceptsQuality(brightness: 27.99, sharpness: 5))
+        XCTAssertFalse(policy.acceptsQuality(brightness: 100, sharpness: 4.99))
+        XCTAssertFalse(policy.acceptsPerceptualHash(previous: 0, current: 0b1_1111))
+        XCTAssertTrue(policy.acceptsPerceptualHash(previous: 0, current: 0b11_1111))
+        XCTAssertTrue(policy.permitsModelRequest(elapsed: 5, completedRequests: 29))
+        XCTAssertFalse(policy.permitsModelRequest(elapsed: 4.99, completedRequests: 29))
+        XCTAssertFalse(policy.permitsModelRequest(elapsed: 5, completedRequests: 30))
     }
 
     private func makeRule(type: SafetyIssueType, severity: Severity) -> SafetyRule {

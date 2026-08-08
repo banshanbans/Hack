@@ -1,3 +1,4 @@
+import AnjuCore
 import CoreVideo
 import Foundation
 
@@ -6,7 +7,10 @@ struct FrameQualityResult: Equatable, Sendable {
     let sharpness: Double
 
     var isUsable: Bool {
-        (28...232).contains(brightness) && sharpness >= 5
+        NativeFrameSelectionPolicy.homeCamera.acceptsQuality(
+            brightness: brightness,
+            sharpness: sharpness
+        )
     }
 }
 

@@ -41,7 +41,7 @@ class VisionProvider(Protocol):
     def quality(self, assessment_id: str, media: dict) -> tuple[dict, dict]: ...
     def analyze(self, assessment_id: str, room_type: str, media: list[dict], allowed_risks: list[str]) -> tuple[dict, dict]: ...
     def inspect_camera(self, assessment_id: str, room_type: str, media: dict, camera_rules: list[dict], profile_summary: dict, previous_summary: list[str]) -> tuple[dict, dict]: ...
-    def fair_analyze(self, scan_id: str, zone_id: str, media: dict, camera_rules: list[dict]) -> tuple[dict, dict]: ...
+    def ground_renovation_changes(self, assessment_id: str, before_media: dict, after_media: dict, actions: list[dict]) -> tuple[dict, dict]: ...
 
 
 QUALITY_SCHEMA = {
@@ -103,7 +103,7 @@ ANALYSIS_SCHEMA = {
     },
 }
 
-CAMERA_PROMPT_VERSION = "anju_h5_camera_discovery_v3"
+CAMERA_PROMPT_VERSION = "anju_home_camera_discovery_v1"
 CAMERA_SCHEMA = {
     "type": "object", "additionalProperties": False,
     "required": ["media_id", "quality_usable", "scene_elements", "suggestions", "save_as_evidence_recommended"],
@@ -124,23 +124,7 @@ CAMERA_SCHEMA = {
     },
 }
 
-FAIR_CAMERA_PROMPT_VERSION = "anju_ios_fair_camera_direct_v3"
-FAIR_DISCOVERY_SCHEMA = {
-    "type": "object", "additionalProperties": False, "required": ["frame_id", "zone_id", "candidates"],
-    "properties": {
-        "frame_id": {"type": "string"}, "zone_id": {"type": "string", "enum": ["entrance", "main_aisle", "booth", "rest_area"]},
-        "candidates": {"type": "array", "maxItems": 5, "items": {
-            "type": "object", "additionalProperties": False,
-            "required": ["risk_code", "evidence_codes", "evidence", "confidence", "needs_manual_check", "bbox"],
-            "properties": {
-                "risk_code": {"type": "string"}, "evidence": {"type": "string"},
-                "evidence_codes": {"type": "array", "minItems": 1, "uniqueItems": True, "items": {"type": "string"}},
-                "confidence": {"type": "number", "minimum": 0, "maximum": 1}, "needs_manual_check": {"type": "boolean"},
-                "bbox": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4},
-            },
-        }},
-    },
-}
+RENOVATION_GROUNDING_PROMPT_VERSION = "anju_renovation_region_grounding_v1"
 def schema_with_allowed_risks(schema: dict, allowed_risks: list[str]) -> dict:
     """Return a request-local schema whose risk codes are constrained by rules."""
     allowed = sorted({str(item) for item in allowed_risks if str(item)})
@@ -161,6 +145,33 @@ def schema_with_allowed_risks(schema: dict, allowed_risks: list[str]) -> dict:
 
     constrain(result)
     return result
+
+
+def renovation_grounding_schema(action_codes: list[str]) -> dict:
+    allowed = sorted({str(item) for item in action_codes if str(item)})
+    if not allowed:
+        raise ProviderError("provider_invalid_request", False)
+    return {
+        "type": "object", "additionalProperties": False, "required": ["action_regions"],
+        "properties": {
+            "action_regions": {
+                "type": "array", "maxItems": len(allowed),
+                "items": {
+                    "type": "object", "additionalProperties": False,
+                    "required": ["action_code", "label", "confidence", "bbox"],
+                    "properties": {
+                        "action_code": {"type": "string", "enum": allowed},
+                        "label": {"type": "string"},
+                        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                        "bbox": {
+                            "type": "array", "minItems": 4, "maxItems": 4,
+                            "items": {"type": "number", "minimum": 0, "maximum": 1},
+                        },
+                    },
+                },
+            },
+        },
+    }
 
 
 @dataclass
@@ -208,7 +219,8 @@ class OpenAIVisionProvider:
         allowed_elements = ROOM_SCENE_ELEMENTS.get(room_type, [])
         prompt = (
             "你正在使用独立的实时相机发现规则，对老人家庭候选帧做环境安全辅助筛查。"
-            f"结构化上下文: assessment_context=home_live_camera, scene_hint={room_type}, media_id={media['media_id']}, "
+            f"结构化上下文: assessment_context=home_live_camera, source_kind={media.get('source_kind', 'h5_camera_frame')}, "
+            f"scene_hint={room_type}, media_id={media['media_id']}, "
             f"camera_rules={rule_guidance}, scene_elements_hint={allowed_elements}, "
             f"profile_summary={profile_summary}, previous_accepted_summary={previous_summary[:5]}。"
             "只描述本帧中可直接观察且有图像证据的内容，不推断画面外或遮挡区域。"
@@ -226,51 +238,38 @@ class OpenAIVisionProvider:
         )
         schema = schema_with_allowed_risks(CAMERA_SCHEMA, allowed_risks)
         if self.provider_name == "ark":
-            model = os.environ.get("ANJU_ARK_H5_CAMERA_MODEL") or os.environ.get("ANJU_ARK_TURBO_MODEL", self.model_name)
+            model = os.environ.get("ANJU_ARK_HOME_CAMERA_MODEL") or os.environ.get("ANJU_ARK_H5_CAMERA_MODEL") or os.environ.get("ANJU_ARK_TURBO_MODEL", self.model_name)
         else:
-            model = os.environ.get("ANJU_OPENAI_H5_CAMERA_MODEL") or os.environ.get("ANJU_OPENAI_TURBO_MODEL", self.model_name)
+            model = os.environ.get("ANJU_OPENAI_HOME_CAMERA_MODEL") or os.environ.get("ANJU_OPENAI_H5_CAMERA_MODEL") or os.environ.get("ANJU_OPENAI_TURBO_MODEL", self.model_name)
         return self._request(
             assessment_id, prompt, [media], schema, "camera_suggestions", "high", CAMERA_PROMPT_VERSION,
             model_name=model, request_timeout=min(self.timeout_seconds, 15), max_attempts=1,
         )
 
-    def fair_analyze(self, scan_id: str, zone_id: str, media: dict, camera_rules: list[dict]) -> tuple[dict, dict]:
-        allowed_risks = [str(item["risk_code"]) for item in camera_rules]
-        rule_guidance = [{
-            "risk_code": item["risk_code"], "title": item["title"], "visible_when": item["visual_cue"],
-            "allowed_evidence_codes": item["evidence_codes"],
-            "required_evidence_codes": item["required_evidence_codes"],
-        } for item in camera_rules]
+    def ground_renovation_changes(self, assessment_id: str, before_media: dict, after_media: dict, actions: list[dict]) -> tuple[dict, dict]:
+        action_context = [{
+            "action_code": str(item["action_code"]),
+            "label": str(item.get("label", "")),
+            "risk_title": str(item.get("risk_title", "")),
+        } for item in actions]
+        action_codes = [item["action_code"] for item in action_context]
         prompt = (
-            "你正在使用低延迟视觉模型分析活动现场的 iPhone 关键帧。"
-            f"assessment_context=venue_fair, frame_id={media['media_id']}, zone_id={zone_id}, camera_rules={rule_guidance}。"
-            "只报告本帧中清楚可见、可定位、与人员通行或现场使用直接相关的候选风险。"
-            "四个 Zone 使用同一套可见问题规则；zone_id 只记录位置，不能缩窄候选类型。"
-            "先快速检查四类高频目标：豆包/懒人沙发/椅子等低位家具侵入路径；裸露线缆、延长线或插排进入路径；"
-            "舞台边缘、临时台阶或门槛形成高差；跨通道电缆保护槽形成凸起。"
-            "分类时，裸线或插排优先使用 cable_crossing，完全封闭线槽形成的凸起使用 level_change；"
-            "单个家具或杂物侵入路径使用 floor_clutter，只有连续摆放明显压缩通道才使用 narrow_path。"
-            "同一物理问题在同一帧只输出一个最具体的 risk_code；不同物体或独立危险可以分别输出。"
-            "仅看到物体存在不足以报告，必须同时清楚看到它与可行走路径重叠或侵入的空间关系。"
-            "不得推断画面外、遮挡区域、承重、消防合规、施工质量或活动整体安全状态。"
-            "bbox 使用左上角原点的 [x_min,y_min,x_max,y_max] 归一化坐标，无法可靠定位时不要输出候选。"
-            "evidence_codes 只能从该 risk_code 的 allowed_evidence_codes 选择，并必须包含全部 required_evidence_codes。"
-            "不要输出风险等级、分数、价格、整改方案、HTML、SVG、医疗结论或场馆验收表述。"
+            "对比两张同一房间图片：第一张是改造前原图，第二张是 AI 生成的改造后效果图。"
+            f"本次允许定位的已选动作仅为：{json.dumps(action_context, ensure_ascii=False)}。"
+            "只在第二张图片中定位相对第一张图片清楚新增或明显改变、且能与允许动作可靠对应的设施细节。"
+            "每个 action_code 最多返回一个框；同一动作有多个相邻部件时，用一个最小外接框覆盖它们。"
+            "bbox 必须使用第二张图片左上角为原点的 [x_min,y_min,x_max,y_max] 归一化坐标。"
+            "无法可靠确认、变化仅来自光线或纹理、或者动作实际上没有生成时，不要返回该动作。"
+            "不得返回未选动作，不要评估风险等级、分数、价格、承重、防水或施工可行性，不要输出 SVG、HTML 或自由标注。"
         )
         if self.provider_name == "ark":
-            model = (
-                os.environ.get("ANJU_ARK_IOS_CAMERA_MODEL")
-                or os.environ.get("ANJU_ARK_TURBO_MODEL")
-                or "doubao-seed-2-1-turbo-260628"
-            )
+            model = os.environ.get("ANJU_ARK_RENOVATION_GROUNDING_MODEL") or os.environ.get("ANJU_ARK_MODEL", self.model_name)
         else:
-            model = os.environ.get("ANJU_OPENAI_IOS_CAMERA_MODEL") or os.environ.get("ANJU_OPENAI_TURBO_MODEL", self.model_name)
-        schema = schema_with_allowed_risks(FAIR_DISCOVERY_SCHEMA, allowed_risks)
-        allowed_evidence_codes = sorted({str(code) for rule in camera_rules for code in rule.get("evidence_codes", [])})
-        schema["properties"]["candidates"]["items"]["properties"]["evidence_codes"]["items"]["enum"] = allowed_evidence_codes
+            model = os.environ.get("ANJU_OPENAI_RENOVATION_GROUNDING_MODEL") or os.environ.get("ANJU_OPENAI_MODEL", self.model_name)
         return self._request(
-            scan_id, prompt, [media], schema, "fair_camera_candidates", "high", FAIR_CAMERA_PROMPT_VERSION, model,
-            request_timeout=min(self.timeout_seconds, 20), max_attempts=1,
+            assessment_id, prompt, [before_media, after_media], renovation_grounding_schema(action_codes),
+            "renovation_change_regions", "high", RENOVATION_GROUNDING_PROMPT_VERSION,
+            model_name=model, request_timeout=min(self.timeout_seconds, 45), max_attempts=1,
         )
 
     def _request(
@@ -409,12 +408,18 @@ class MockVisionProvider:
         usage["prompt_version"] = CAMERA_PROMPT_VERSION
         return {"media_id": media["media_id"], "quality_usable": True, "scene_elements": ROOM_SCENE_ELEMENTS.get(room_type, []), "suggestions": suggestions, "save_as_evidence_recommended": bool(suggestions)}, usage
 
-    def fair_analyze(self, scan_id: str, zone_id: str, media: dict, camera_rules: list[dict]) -> tuple[dict, dict]:
-        allowed_risks = [str(item["risk_code"]) for item in camera_rules]
-        code = next(iter(allowed_risks), "floor_clutter")
-        usage = self._usage(); usage["prompt_version"] = FAIR_CAMERA_PROMPT_VERSION
-        rule = next((item for item in camera_rules if item["risk_code"] == code), camera_rules[0])
-        return {"frame_id": media["media_id"], "zone_id": zone_id, "candidates": [{"risk_code": code, "evidence_codes": list(rule["required_evidence_codes"]), "evidence": "通行区域可见需要确认的低位障碍", "confidence": .88, "needs_manual_check": False, "bbox": [.2, .5, .6, .85]}]}, usage
+    def ground_renovation_changes(self, assessment_id: str, before_media: dict, after_media: dict, actions: list[dict]) -> tuple[dict, dict]:
+        regions = []
+        for index, action in enumerate(actions[:6]):
+            column, row = index % 2, index // 2
+            x_min = .12 + column * .48
+            y_min = .16 + row * .25
+            regions.append({
+                "action_code": action["action_code"], "label": action.get("label", "改造细节"),
+                "confidence": .9, "bbox": [x_min, y_min, min(x_min + .26, .96), min(y_min + .18, .96)],
+            })
+        usage = self._usage(); usage["prompt_version"] = RENOVATION_GROUNDING_PROMPT_VERSION
+        return {"action_regions": regions}, usage
 
     def _usage(self) -> dict:
         return {"model_name": self.model_name, "prompt_version": self.prompt_version, "input_tokens": 0, "output_tokens": 0, "latency_ms": 0, "schema_valid": True, "retry_count": 0, "fallback_used": False, "error_type": None}

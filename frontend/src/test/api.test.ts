@@ -26,4 +26,18 @@ describe('API session recovery', () => {
   it('uses a retryable message when the shared Turbo lane is full', () => {
     expect(friendlyError({code: 'provider_capacity_busy', message: 'internal'})).toBe('当前实时检查较多，正在等待下一次画面');
   });
+
+  it('uses authenticated room-level renovation preview contracts', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({preview_id: 'preview-1'}));
+    await api.createRenovationPreview('room-1', 'media-1');
+    const [path, options] = fetchMock.mock.calls[0];
+    expect(String(path)).toContain('/rooms/room-1/renovation-previews');
+    expect(options?.method).toBe('POST');
+    expect(JSON.parse(String(options?.body))).toEqual({source_media_id: 'media-1'});
+    expect(new Headers(options?.headers).get('Authorization')).toBe('Bearer old-token');
+  });
 });
+
+function jsonResponse(body: unknown) {
+  return new Response(JSON.stringify(body), {status: 200, headers: {'Content-Type': 'application/json'}});
+}

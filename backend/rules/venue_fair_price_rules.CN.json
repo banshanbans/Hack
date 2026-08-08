@@ -1,8 +1,0 @@
-{
-  "version": "venue-fair-price-2026-07-26-v1",
-  "prices": [
-    {"price_rule_id":"FAIR_PRICE_A","tier":"A","region":"CN_DEFAULT","currency":"CNY","unit":"yuan","material_min":0,"material_max":80,"labor_min":0,"labor_max":0,"other_min":0,"other_max":0,"total_min":0,"total_max":80,"includes":["临时固定、提示或现场整理所需的小额物料"],"excludes":["专业施工与结构改造"],"updated_at":"2026-07-26","disclaimer":"费用为游园会现场常见处理的参考区间，实际以现场需求和服务方报价为准。"},
-    {"price_rule_id":"FAIR_PRICE_B","tier":"B","region":"CN_DEFAULT","currency":"CNY","unit":"yuan","material_min":80,"material_max":400,"labor_min":0,"labor_max":100,"other_min":0,"other_max":0,"total_min":80,"total_max":500,"includes":["常规防护、收纳、照明或动线调整物料及基础人工"],"excludes":["结构、消防和大型电气工程"],"updated_at":"2026-07-26","disclaimer":"费用为游园会现场常见处理的参考区间，实际以现场需求和服务方报价为准。"},
-    {"price_rule_id":"FAIR_PRICE_C","tier":"C","region":"CN_DEFAULT","currency":"CNY","unit":"yuan","material_min":300,"material_max":2200,"labor_min":200,"labor_max":800,"other_min":0,"other_max":0,"total_min":500,"total_max":3000,"includes":["专业人员评估、较系统的现场调整和安装"],"excludes":["场馆改建、消防验收与大型工程"],"updated_at":"2026-07-26","disclaimer":"费用为游园会现场常见处理的参考区间，实际以现场需求和服务方报价为准。"}
-  ]
-}

@@ -82,26 +82,6 @@ final class ReportViewController: UIViewController, UITableViewDataSource, UITab
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "issue")
         tableView.rowHeight = UITableView.automaticDimension
         tableView.estimatedRowHeight = 88
-        if context.fairReviewIncomplete {
-            let summary = UILabel()
-            summary.text = "\(ProductCopy.partialReport)\n\(ProductCopy.fairPartialReportDetail)\n\(ProductCopy.fairDisclaimer)"
-            configureSummary(summary)
-        } else if let report = context.fairReport {
-            let summary = UILabel()
-            let score = report.assessedAreaScore.map(String.init) ?? "—"
-            summary.text = "已扫描区域参考分：\(score)\n覆盖度：\(report.coveragePercent)%\nB 档参考预算：¥\(report.budget.totalMin)—¥\(report.budget.totalMax)\n\(ProductCopy.fairDisclaimer)"
-            configureSummary(summary)
-        }
-    }
-
-    private func configureSummary(_ summary: UILabel) {
-        summary.numberOfLines = 0
-        summary.font = .preferredFont(forTextStyle: .body)
-        summary.adjustsFontForContentSizeCategory = true
-        summary.textColor = .secondaryLabel
-        summary.frame = CGRect(x: 20, y: 0, width: max(280, view.bounds.width - 40), height: 138)
-        summary.accessibilityLabel = summary.text
-        tableView.tableHeaderView = summary
     }
 
     private func configureEmptyView() {

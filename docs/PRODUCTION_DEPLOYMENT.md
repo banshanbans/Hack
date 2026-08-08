@@ -46,7 +46,8 @@ sudoedit /opt/anju/shared/.env.production
 - `ANJU_MOCK_ANALYSIS=0`；
 - `ANJU_VISION_PROVIDER=ark`；
 - `ANJU_ARK_MODEL=doubao-seed-2-1-pro-260628`；
-- `ANJU_ARK_IOS_CAMERA_MODEL=doubao-seed-2-1-turbo-260628`；
+- `ANJU_ARK_HOME_CAMERA_MODEL=doubao-seed-2-1-turbo-260628`；
+- `ANJU_ENABLE_IOS_HOME_CAMERA=0`（新 App 公网冒烟后再开启）；
 - `ANJU_ALLOWED_HOSTS` 只包含两个生产域名及容器健康检查需要的本机 Host；
 - `ANJU_FORWARDED_ALLOW_IPS=172.30.25.2`；
 - `.env.production` 未进入 release、镜像或 Git。

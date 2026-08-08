@@ -129,6 +129,48 @@ describe('recoverable product states', () => {
     expect(screen.queryByText('参考总预算')).not.toBeInTheDocument();
   });
 
+  it('restores a completed room-level renovation preview with accessible before and after controls', async () => {
+    restoreAt('/renovation-preview/room-1');
+    const selectedSolution = {
+      risk_id: 'risk-1', risk_title: '淋浴区缺少稳定支撑', solution_package_id: 'SOL_BAR_B', tier: 'B', title: '推荐改造',
+      summary: '在淋浴区入口和内部安装可靠固定扶手', actions: ['确认借力位置', '安装2—3个扶手'],
+      visualizable_actions: [{action_code: 'shower_fixed_grab_bars', label: '安装固定扶手', risk_id: 'risk-1', risk_title: '淋浴区缺少稳定支撑', region: {type: 'bbox', x: .55, y: .2, width: .25, height: .45}, confidence: .92}],
+    };
+    const preview = {
+      preview_id: 'preview-1', assessment_id: 'a-1', room_id: 'room-1', source_media_id: 'media-1', selection_hash: 'hash-1',
+      selected_solutions: [selectedSolution], status: 'completed', stage: 'ready', error: null, provider: 'ark', model: 'seedream',
+      prompt_version: 'v1', rule_set_version: 'rules-v1', visualized_actions: selectedSolution.visualizable_actions, skipped_actions: [],
+      before_content_path: '/media/before', after_content_path: '/media/after', selected_for_report: false, stale: false,
+      created_at: '2026-08-07T00:00:00Z', updated_at: '2026-08-07T00:00:01Z', disclaimer: 'AI 改造效果示意，仅用于方案沟通。',
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      const url = String(input);
+      if (url.endsWith('/health')) return json({analysis: 'ark', capabilities: {h5_video: false, h5_camera: true, ios_home_camera: false, renovation_preview: true}});
+      if (url.endsWith('/renovation-preview-context')) return json({
+        room_id: 'room-1', room_type: 'bathroom', selection_hash: 'hash-1', selected_solutions: [selectedSolution],
+        eligible_media: [{media_id: 'media-1', mime_type: 'image/jpeg', width: 1200, height: 900, content_path: '/media/before', recommended: true, selected_risk_evidence_count: 1}],
+        previews: [preview], disclaimer: preview.disclaimer,
+      });
+      if (url === '/media/before' || url === '/media/after') return new Response(new Blob(['image'], {type: 'image/jpeg'}), {status: 200, headers: {'Content-Type': 'image/jpeg'}});
+      return json({code: 'not_found', message: 'not found'}, 404);
+    });
+    render(<App />);
+    expect(await screen.findByRole('heading', {name: '看看改造后的样子'})).toBeVisible();
+    expect(screen.getAllByText('安装固定扶手')).toHaveLength(2);
+    expect(screen.getByLabelText('显示改造前照片的比例')).toBeVisible();
+    const detailOverlay = screen.getByRole('img', {name: 'AI 改造细节位置，共 1 处'});
+    expect(detailOverlay).toBeVisible();
+    expect(screen.getByRole('list', {name: '已定位的改造细节'})).toBeVisible();
+    expect(screen.getByRole('button', {name: '查看改造前'})).toBeEnabled();
+    expect(screen.getByRole('button', {name: '查看改造后'})).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', {name: '查看改造前'}));
+    expect(detailOverlay).toHaveStyle({clipPath: 'inset(0 0 0 100%)'});
+    fireEvent.click(screen.getByRole('button', {name: '查看改造后'}));
+    expect(detailOverlay).toHaveStyle({clipPath: 'inset(0 0 0 0%)'});
+    expect(screen.getByRole('button', {name: /保存到报告/})).toBeEnabled();
+    expect(screen.getByText(/仅用于方案沟通/)).toBeVisible();
+  });
+
   it('saves profile edits from My and returns to My instead of entering the check flow', async () => {
     restoreAt('/my');
     const assessment = {assessment_id: 'a-1', rooms: [], profile: {mobility: 'cane', fall_history: 'once', living_status: 'alone'}};
@@ -267,22 +309,28 @@ describe('recoverable product states', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/result') || String(input).includes('/solutions'))).toBe(false);
   });
 
-  it('requires the fair invitation before entering the temporary H5 camera', async () => {
+  it('requires room selection before entering the temporary H5 camera', async () => {
     window.location.hash = '#/home';
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
-      if (String(input).endsWith('/health')) return json({analysis: 'ark', capabilities: {h5_video: true, h5_camera: true, ios_fair_ar: true}});
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/health')) return json({analysis: 'ark', capabilities: {h5_video: true, h5_camera: true, ios_home_camera: true}});
+      if (url.endsWith('/api/v2/assessments') && init?.method === 'POST') return json({assessment_id: 'camera-assessment', access_token: 'camera-token'}, 201);
+      if (url.endsWith('/api/v2/assessments/camera-assessment')) return json({assessment_id: 'camera-assessment', profile: {}, rooms: [{room_id: 'camera-room', room_type: 'living_room', status: 'collecting_media', media: []}]});
+      if (url.endsWith('/api/v2/assessments/camera-assessment/rooms') && init?.method === 'POST') return json({room_id: 'camera-room', room_type: 'living_room', status: 'collecting_media', media: []}, 201);
       return json({code: 'not_found', message: 'not found'}, 404);
     });
     render(<App />);
-    fireEvent.click(await screen.findByRole('button', {name: '相机'}));
-    const dialog = screen.getByRole('dialog', {name: '来游园会现场，解锁 iPhone AR 体验'});
+    fireEvent.click(await screen.findByRole('button', {name: '中央相机'}));
+    const dialog = screen.getByRole('dialog', {name: '开始家庭实时检查'});
     expect(dialog).toBeVisible();
-    expect(dialog).toHaveTextContent('网页相机会提供实时的结构化建议');
-    expect(dialog).toHaveTextContent('实时相机为了保证流畅体验，完善的报告仍然建议通过上传家中照片体验。');
-    expect(dialog).not.toHaveTextContent('网页端不会显示虚假的三维锚点');
+    expect(dialog).toHaveTextContent('iPhone App 会调用原生扫描');
+    expect(dialog).toHaveTextContent('扫描结束只保存代表画面');
+    expect(dialog).toHaveTextContent('直接开始正式分析');
     expect(window.location.hash).toBe('#/home');
-    fireEvent.click(screen.getByRole('button', {name: /进入网页相机/}));
-    await waitFor(() => expect(window.location.hash).toBe('#/camera'));
-    expect(await screen.findByRole('heading', {name: '实时相机检查'})).toBeVisible();
+    fireEvent.click(screen.getByRole('button', {name: /选择房间/}));
+    fireEvent.click(screen.getByRole('button', {name: /客厅/}));
+    await waitFor(() => expect(window.location.hash).toBe('#/camera?room_id=camera-room&auto_start=1'));
+    expect(await screen.findByRole('heading', {name: '实时扫描'})).toBeVisible();
+    expect(screen.getByRole('button', {name: '结束扫描并分析'})).toBeDisabled();
   });
 });

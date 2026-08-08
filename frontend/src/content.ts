@@ -1,13 +1,13 @@
 import type {RoomType, Severity} from './types';
 
-export const PRODUCT_NAME = '长者友好家';
+export const PRODUCT_NAME = '安心家 AI';
 
 export const CAMERA_COPY = {
-  invitationTitle: '来游园会现场，解锁 iPhone AR 体验',
-  invitationBody: '网页相机会提供实时的结构化建议；现场 iPhone 版本还可结合空间定位呈现风险位置。',
-  enter: '进入网页相机',
+  invitationTitle: '开始家庭实时检查',
+  invitationBody: '先选择房间。iPhone App 会调用原生扫描，外部浏览器会使用网页相机。',
+  enter: '选择房间',
   privacy: '只有通过本地质量与场景变化检查的候选画面才会发送；离开页面后摄像头会立即关闭。',
-  reportTip: '实时相机为了保证流畅体验，完善的报告仍然建议通过上传家中照片体验。',
+  reportTip: '扫描结束只保存代表画面；档案完整时会直接开始正式分析，未完成则先引导补齐。',
   regionOverlayLabel: '最近分析画面的临时建议位置',
   regionOverlayDescription: '标注仅对应最近一张已分析画面，不会固定在现实物体上。',
   positionLeft: '左侧',
@@ -20,10 +20,87 @@ export const CAMERA_COPY = {
     `临时建议 ${number}，${title}，位于画面${position}，模型把握度 ${Math.round(confidence * 100)}%${needsManualCheck ? '，需要人工确认' : ''}`,
 };
 
+export const ADVISOR_COPY = {
+  title: 'AI适老顾问',
+  draftLabel: '待确认提示',
+  formalLabel: '正式检查结果',
+  privacy: '仅保存本次检查的文字对话，不保存原始音频。',
+  draftDisclaimer: '以下是扫描中的临时提示，不计分、不显示风险等级或预算；结束扫描后会基于代表画面重新正式分析。',
+  formalDisclaimer: '风险等级、评分和预算由已校验的规则与价格数据生成；顾问只负责解释和引导操作。',
+  inputPlaceholder: '输入问题，或点击麦克风说话…',
+  states: {
+    idle: '点击开始说话',
+    connecting: '正在连接',
+    listening: '正在听',
+    thinking: '正在理解',
+    speaking: '正在回答·点击打断',
+    reconnecting: '重连中',
+    error: '语音不可用，可继续文字咨询',
+  },
+};
+
 export const HOME_HERO_COPY = {
   rugCallout: '留意地毯边缘',
   handrailCallout: '建议增设扶手',
-  cameraEntry: '从视频画面开始检查',
+  cameraEntry: '使用实时相机检查',
+  eyebrow: '居家安全检查',
+  progressTitle: '本次检查进度',
+  progressIdle: '从一张清晰的房间照片开始',
+  progressActive: (stage: string) => `进行到：${stage}`,
+};
+
+export const ONBOARDING_COPY = {
+  replay: '重新体验新手引导',
+  steps: {
+    start: {
+      title: '开始一次居家安全检查',
+      body: '先开始本次检查，接下来会了解家人情况、选择房间并采集环境画面。',
+    },
+    profile: {
+      title: '先了解家人情况',
+      body: '行动能力、跌倒史和居住状态会影响居家风险的规则判断。完成后会继续选择房间。',
+    },
+    rooms: {
+      title: '选择需要检查的房间',
+      body: '建议先从老人最常活动、也最容易跌倒的区域开始。',
+    },
+    capture: {
+      title: '任选一种采集方式',
+      body: '上传 1—3 张清晰照片，或使用中央相机边扫描边获得临时提示。两种方式都会保存代表画面，用于之后的正式分析。',
+    },
+    analyze: {
+      title: '画面已准备好',
+      body: '点击开始 AI 检查。正式分析前会再次校验家人档案和照片质量。',
+    },
+    result: {
+      title: '查看有证据的风险',
+      body: '参考分与覆盖度分开显示。点击图片标注或问题列表，可以查看证据位置和风险等级。',
+    },
+    risk: {
+      title: '从风险进入整改方案',
+      body: '确认证据后，查看这个问题可以怎样处理。',
+    },
+    solutions: {
+      title: '比较 A/B/C 整改方案',
+      body: 'A 是临时止险，B 是推荐改造，C 是专业改造。金额来自结构化价格规则，不会由 AI 自由编造。',
+    },
+    report: {
+      title: '在报告中查看预算与进度',
+      body: '报告汇总已检查区域、整改清单和参考预算，也可以保存或分享给家人。',
+    },
+  },
+} as const;
+
+export const UPLOAD_COPY = {
+  eyebrow: '房间影像',
+};
+
+export const RENOVATION_PREVIEW_COPY = {
+  title: '看看改造后的样子',
+  intro: '把这个房间已经加入清单的方案，合并成一张 AI 效果示意图。',
+  generate: '生成改造效果',
+  save: '保存到报告',
+  disclaimer: 'AI 改造效果示意，仅用于方案沟通。安装位置、尺寸、墙体、防水与施工可行性须现场确认；实际安全改善需整改后重新拍摄复查。',
 };
 
 export const ROOM_COPY: Record<RoomType, {name: string; icon: string; hint: string; supported: boolean; priority?: boolean}> = {

@@ -1,0 +1,16 @@
+PODS:
+  - VolcEngineRTC/Core (3.60.15.8550)
+
+DEPENDENCIES:
+  - VolcEngineRTC/Core (= 3.60.15.8550)
+
+SPEC REPOS:
+  https://github.com/volcengine/volcengine-specs.git:
+    - VolcEngineRTC
+
+SPEC CHECKSUMS:
+  VolcEngineRTC: 2ed363df138a0632f7461df1df101e1154ebcd63
+
+PODFILE CHECKSUM: a0246a887f8cc92e22ec81752ffbae638051aff3
+
+COCOAPODS: 1.17.0

@@ -1,5 +1,6 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import socket
 import tempfile
@@ -7,7 +8,104 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from backend.app.providers.vision import CAMERA_SCHEMA, ArkVisionProvider, OpenAIVisionProvider, ProviderError, provider_from_environment, schema_with_allowed_risks
+from backend.app.providers.vision import CAMERA_SCHEMA, ArkVisionProvider, OpenAIVisionProvider, ProviderError, provider_from_environment, renovation_grounding_schema, schema_with_allowed_risks
+from backend.app.providers.renovation import ArkRenovationProvider, renovation_provider_from_environment
+from backend.app.providers.voice import VolcengineVoiceProvider, build_rtc_token
+
+
+class VoiceProviderTests(unittest.TestCase):
+    def test_rtc_token_is_short_lived_and_voice_is_off_by_default(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(VolcengineVoiceProvider.configured())
+        token = build_rtc_token(
+            "123456789012345678901234", "test-app-key", "advisor-room", "advisor-user", 2_000_000_000,
+        )
+        self.assertTrue(token.startswith("001"))
+        self.assertNotIn("test-app-key", token)
+
+    def test_voice_requires_every_server_side_credential(self) -> None:
+        environment = {
+            "ANJU_ENABLE_VOICE_ADVISOR": "1",
+            "ANJU_VOLC_RTC_APP_ID": "app",
+            "ANJU_VOLC_RTC_APP_KEY": "key",
+            "ANJU_VOLC_ACCESS_KEY": "ak",
+            "ANJU_VOLC_SECRET_KEY": "sk",
+            "ANJU_VOLC_VOICE_CONFIG_JSON": "{}",
+        }
+        with patch.dict(os.environ, environment, clear=True):
+            self.assertTrue(VolcengineVoiceProvider.configured())
+            del os.environ["ANJU_VOLC_SECRET_KEY"]
+            self.assertFalse(VolcengineVoiceProvider.configured())
+
+    def test_video_advisor_requires_https_callback_signature_and_llm_config(self) -> None:
+        environment = {
+            "ANJU_ENABLE_VOICE_ADVISOR": "1",
+            "ANJU_ENABLE_RTC_VIDEO_ADVISOR": "1",
+            "ANJU_VOLC_RTC_APP_ID": "123456789012345678901234",
+            "ANJU_VOLC_RTC_APP_KEY": "key",
+            "ANJU_VOLC_ACCESS_KEY": "ak",
+            "ANJU_VOLC_SECRET_KEY": "sk",
+            "ANJU_VOLC_VOICE_CONFIG_JSON": json.dumps({"Config": {"LLMConfig": {}}}),
+            "ANJU_VOLC_FC_CALLBACK_URL": "https://example.test/api/internal/rtc/function-calls",
+            "ANJU_VOLC_FC_CALLBACK_SIGNATURE": "an-independent-signature-value",
+        }
+        with patch.dict(os.environ, environment, clear=True):
+            with patch.object(VolcengineVoiceProvider, "_video_probe_succeeded_at", 0.0):
+                self.assertTrue(VolcengineVoiceProvider.video_configured())
+                self.assertFalse(VolcengineVoiceProvider.video_healthy())
+                VolcengineVoiceProvider.mark_video_probe_success()
+                self.assertTrue(VolcengineVoiceProvider.video_healthy())
+            os.environ["ANJU_VOLC_FC_CALLBACK_URL"] = "http://example.test/callback"
+            self.assertFalse(VolcengineVoiceProvider.video_configured())
+            os.environ["ANJU_VOLC_FC_CALLBACK_URL"] = "https://example.test/callback"
+            os.environ["ANJU_VOLC_FC_CALLBACK_SIGNATURE"] = "short"
+            self.assertFalse(VolcengineVoiceProvider.video_configured())
+
+    def test_video_start_sets_snapshot_tools_and_function_callback(self) -> None:
+        environment = {
+            "ANJU_ENABLE_VOICE_ADVISOR": "1",
+            "ANJU_ENABLE_RTC_VIDEO_ADVISOR": "1",
+            "ANJU_VOLC_RTC_APP_ID": "123456789012345678901234",
+            "ANJU_VOLC_RTC_APP_KEY": "key",
+            "ANJU_VOLC_ACCESS_KEY": "ak",
+            "ANJU_VOLC_SECRET_KEY": "sk",
+            "ANJU_VOLC_VOICE_CONFIG_JSON": json.dumps({"Config": {"LLMConfig": {}}}),
+            "ANJU_VOLC_FC_CALLBACK_URL": "https://example.test/api/internal/rtc/function-calls",
+            "ANJU_VOLC_FC_CALLBACK_SIGNATURE": "an-independent-signature-value",
+        }
+        tools = [{"type": "function", "function": {"name": "record_camera_suggestions"}}]
+        with patch.dict(os.environ, environment, clear=True), patch.object(
+            VolcengineVoiceProvider, "_call", return_value={"Result": "ok"},
+        ) as request:
+            VolcengineVoiceProvider().start(
+                "session-id", "开始扫描", "当前房间是卫生间。", video_enabled=True, tools=tools,
+            )
+        action, body = request.call_args.args
+        self.assertEqual(action, "StartVoiceChat")
+        llm = body["Config"]["LLMConfig"]
+        self.assertEqual(llm["VisionConfig"]["SnapshotConfig"], {
+            "Interval": 900, "ImagesLimit": 1, "Height": 720, "ImageDetail": "low",
+        })
+        self.assertEqual(llm["Tools"], tools)
+        self.assertEqual(llm["ThinkingType"], "disabled")
+        self.assertEqual(body["Config"]["FunctionCallingConfig"], {
+            "ServerMessageUrl": environment["ANJU_VOLC_FC_CALLBACK_URL"],
+            "ServerMessageSignature": environment["ANJU_VOLC_FC_CALLBACK_SIGNATURE"],
+        })
+        self.assertIn("风险等级", llm["SystemMessages"][-1])
+
+    def test_function_result_uses_provider_tool_call_envelope(self) -> None:
+        with patch.object(VolcengineVoiceProvider, "_call", return_value={"Result": "ok"}) as request:
+            VolcengineVoiceProvider().update_function_result(
+                app_id="app", room_id="room", task_id="task", tool_call_id="call-1",
+                result={"ok": True, "recorded": 1},
+            )
+        action, body = request.call_args.args
+        self.assertEqual(action, "UpdateVoiceChat")
+        self.assertEqual(body["Command"], "function")
+        message = json.loads(body["Message"])
+        self.assertEqual(message["ToolCallID"], "call-1")
+        self.assertEqual(json.loads(message["Content"]), {"ok": True, "recorded": 1})
 
 
 class OpenAIProviderTests(unittest.TestCase):
@@ -28,6 +126,23 @@ class OpenAIProviderTests(unittest.TestCase):
         with self.assertRaises(ProviderError) as raised:
             schema_with_allowed_risks(CAMERA_SCHEMA, [])
         self.assertEqual(raised.exception.code, "provider_invalid_request")
+
+    def test_renovation_grounding_constrains_actions_and_uses_after_image_coordinates(self) -> None:
+        schema = renovation_grounding_schema(["grab_bar", "night_light", "grab_bar"])
+        action_schema = schema["properties"]["action_regions"]["items"]["properties"]["action_code"]
+        self.assertEqual(action_schema["enum"], ["grab_bar", "night_light"])
+        with patch.object(self.provider, "_request", return_value=({"action_regions": []}, {})) as request:
+            self.provider.ground_renovation_changes(
+                "assessment-1",
+                {"media_id": "before", "path": "/tmp/before.jpg", "mime_type": "image/jpeg"},
+                {"media_id": "after", "path": "/tmp/after.jpg", "mime_type": "image/jpeg"},
+                [{"action_code": "grab_bar", "label": "安装扶手", "risk_title": "缺少支撑"}],
+            )
+        prompt = request.call_args.args[1]
+        self.assertIn("第二张图片左上角", prompt)
+        self.assertIn("不得返回未选动作", prompt)
+        self.assertEqual([item["media_id"] for item in request.call_args.args[2]], ["before", "after"])
+        self.assertEqual(request.call_args.kwargs["max_attempts"], 1)
 
     def test_refusal_is_explicit(self) -> None:
         with self.assertRaises(ProviderError) as raised:
@@ -96,6 +211,39 @@ class OpenAIProviderTests(unittest.TestCase):
         self.assertTrue(raised.exception.retryable)
         self.assertEqual(request.call_count, 2)
 
+    def test_ark_renovation_provider_sends_private_image_and_downloads_output(self) -> None:
+        class Handler(BaseHTTPRequestHandler):
+            payload = None
+
+            def do_POST(self):  # noqa: N802
+                length = int(self.headers["Content-Length"])
+                type(self).payload = json.loads(self.rfile.read(length))
+                body = json.dumps({"data": [{"b64_json": "/9j/cmVub3ZhdGlvbg=="}], "usage": {"generated_images": 1}}).encode()
+                self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+
+            def log_message(self, *_):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "source.jpg"; path.write_bytes(b"\xff\xd8\xffsource")
+                provider = ArkRenovationProvider("secret", endpoint=f"http://127.0.0.1:{server.server_address[1]}", timeout_seconds=1)
+                image = provider.edit("assessment", {"path": str(path), "mime_type": "image/jpeg"}, "只增加扶手")
+            self.assertEqual(image.mime_type, "image/jpeg")
+            self.assertTrue(Handler.payload["image"][0].startswith("data:image/jpeg;base64,"))
+            self.assertFalse(Handler.payload["watermark"])
+            self.assertNotIn("secret", json.dumps(Handler.payload))
+        finally:
+            server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+    def test_renovation_provider_requires_key_outside_mock(self) -> None:
+        with patch.dict(os.environ, {"ANJU_MOCK_ANALYSIS": "0", "ARK_API_KEY": ""}, clear=True):
+            with self.assertRaises(ProviderError) as raised:
+                renovation_provider_from_environment()
+        self.assertEqual(raised.exception.code, "provider_not_configured")
+
     def test_realtime_camera_timeout_does_not_start_a_second_model_call(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "camera.jpg"
@@ -140,66 +288,25 @@ class OpenAIProviderTests(unittest.TestCase):
 
         self.assertEqual(request.call_args.kwargs["model_name"], "shared-turbo-model")
 
-    def test_ios_camera_uses_dedicated_turbo_model_and_constrains_schema(self) -> None:
+    def test_home_camera_model_is_shared_by_h5_and_ios_sources(self) -> None:
         provider = ArkVisionProvider("ark-test-key", model_name="pro-model")
-        media = {"media_id": "fair-frame", "path": "/tmp/not-read.jpg", "mime_type": "image/jpeg"}
-        rules = [{
-            "risk_code": "marked_exit_obstruction", "title": "明确标识的出口通道被占用",
-            "visual_cue": "出口标识与障碍同时可见",
-            "evidence_codes": ["marked_exit_visible", "localized_obstruction_visible"],
-            "required_evidence_codes": ["marked_exit_visible", "localized_obstruction_visible"],
-        }]
+        media = {
+            "media_id": "native-frame", "path": "/tmp/not-read.jpg", "mime_type": "image/jpeg",
+            "source_kind": "ios_camera_frame",
+        }
+        rules = [{"risk_code": "floor_clutter", "visual_cue": "通道中有杂物"}]
         with patch.dict("os.environ", {
-            "ANJU_ARK_IOS_CAMERA_MODEL": "doubao-seed-2-1-turbo-260628",
-            "ANJU_ARK_PRO_MODEL": "pro-direct-model",
+            "ANJU_ARK_HOME_CAMERA_MODEL": "home-camera-model",
+            "ANJU_ARK_H5_CAMERA_MODEL": "legacy-h5-model",
         }), patch.object(
             provider, "_request", return_value=({}, {})
         ) as request:
-            provider.fair_analyze("scan-1", "entrance", media, rules)
+            provider.inspect_camera("assessment-1", "bathroom", media, rules, {}, [])
 
-        schema = request.call_args.args[3]
-        candidate = schema["properties"]["candidates"]["items"]
-        self.assertEqual(candidate["properties"]["risk_code"]["enum"], ["marked_exit_obstruction"])
-        self.assertEqual(candidate["properties"]["evidence_codes"]["items"]["enum"], ["localized_obstruction_visible", "marked_exit_visible"])
-        self.assertIn("evidence_codes", candidate["required"])
-        self.assertEqual(request.call_args.args[7], "doubao-seed-2-1-turbo-260628")
-        self.assertEqual(request.call_args.args[6], "anju_ios_fair_camera_direct_v3")
+        self.assertEqual(request.call_args.kwargs["model_name"], "home-camera-model")
+        self.assertEqual(request.call_args.kwargs["max_attempts"], 1)
         prompt = request.call_args.args[1]
-        self.assertIn("豆包/懒人沙发/椅子", prompt)
-        self.assertIn("裸露线缆、延长线或插排", prompt)
-        self.assertIn("舞台边缘、临时台阶或门槛", prompt)
-        self.assertIn("电缆保护槽", prompt)
-        self.assertIn("同一物理问题在同一帧只输出一个最具体的 risk_code", prompt)
-
-    def test_ios_camera_falls_back_to_shared_turbo_model(self) -> None:
-        provider = ArkVisionProvider("ark-test-key", model_name="pro-model")
-        media = {"media_id": "fair-frame", "path": "/tmp/not-read.jpg", "mime_type": "image/jpeg"}
-        rules = [{
-            "risk_code": "floor_clutter", "title": "低位物体侵入通行区域", "visual_cue": "通道中有杂物",
-            "evidence_codes": ["localized_obstruction_visible", "path_intrusion_visible"],
-            "required_evidence_codes": ["localized_obstruction_visible", "path_intrusion_visible"],
-        }]
-        with patch.dict("os.environ", {"ANJU_ARK_TURBO_MODEL": "shared-turbo-model"}, clear=True), patch.object(
-            provider, "_request", return_value=({}, {})
-        ) as request:
-            provider.fair_analyze("scan-1", "entrance", media, rules)
-
-        self.assertEqual(request.call_args.args[7], "shared-turbo-model")
-
-    def test_ios_camera_defaults_to_requested_turbo_model(self) -> None:
-        provider = ArkVisionProvider("ark-test-key", model_name="pro-model")
-        media = {"media_id": "fair-frame", "path": "/tmp/not-read.jpg", "mime_type": "image/jpeg"}
-        rules = [{
-            "risk_code": "floor_clutter", "title": "低位物体侵入通行区域", "visual_cue": "通道中有杂物",
-            "evidence_codes": ["localized_obstruction_visible", "path_intrusion_visible"],
-            "required_evidence_codes": ["localized_obstruction_visible", "path_intrusion_visible"],
-        }]
-        with patch.dict("os.environ", {}, clear=True), patch.object(
-            provider, "_request", return_value=({}, {})
-        ) as request:
-            provider.fair_analyze("scan-1", "entrance", media, rules)
-
-        self.assertEqual(request.call_args.args[7], "doubao-seed-2-1-turbo-260628")
+        self.assertIn("ios_camera_frame", prompt)
 
     def test_ark_request_disables_thinking(self) -> None:
         quality = {"usable": True, "clear": True, "floor_visible": True, "path_visible": True, "lighting_sufficient": True, "major_occlusion": False, "scene_elements": ["floor"], "missing_element_ids": []}

@@ -37,15 +37,10 @@ class BlockingTurboProvider(MockVisionProvider):
         self._wait()
         return super().inspect_camera(assessment_id, room_type, media, camera_rules, profile_summary, previous_summary)
 
-    def fair_analyze(self, scan_id, zone_id, media, camera_rules):
-        self._wait()
-        return super().fair_analyze(scan_id, zone_id, media, camera_rules)
-
-
 class ModelConcurrencyTests(unittest.TestCase):
     def setUp(self) -> None:
         self.flags = patch.dict(os.environ, {
-            "ANJU_ENABLE_H5_CAMERA": "1", "ANJU_ENABLE_IOS_FAIR_AR": "1",
+            "ANJU_ENABLE_H5_CAMERA": "1", "ANJU_ENABLE_IOS_HOME_CAMERA": "1",
             "ANJU_TURBO_MAX_CONCURRENCY": "2", "ANJU_PRO_MAX_CONCURRENCY": "1",
         })
         self.flags.start()

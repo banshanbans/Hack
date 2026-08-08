@@ -64,15 +64,37 @@ ANJU_MOCK_ANALYSIS=1 .venv/bin/python -m backend.app.server
 - `ANJU_ENABLE_API_DOCS=1`：仅在开发环境启用 Swagger、ReDoc 和 OpenAPI JSON。
 - `ANJU_ALLOWED_HOSTS`：受信 Host 白名单，生产需要加入实际域名。
 - `ANJU_FORWARDED_ALLOW_IPS`：允许提供转发头的边缘代理 IP，默认只信任本机。
-- `ANJU_ENABLE_H5_VIDEO` / `ANJU_ENABLE_H5_CAMERA` / `ANJU_ENABLE_IOS_FAIR_AR`：P0—P2 独立能力开关，默认关闭，本地 `.env` 可显式开启。
-- `ANJU_ARK_H5_CAMERA_MODEL`：H5 实时相机模型，当前值为 `doubao-seed-2-1-turbo-260628`；未设置时兼容回退到 `ANJU_ARK_TURBO_MODEL`。
-- `ANJU_ARK_IOS_CAMERA_MODEL`：iOS 游园会实时帧模型，当前本地配置为 `doubao-seed-2-1-turbo-260628`；未设置时回退到 `ANJU_ARK_TURBO_MODEL`。
+- `ANJU_ENABLE_H5_VIDEO`：历史兼容开关。2026-08-06 起本地视频关键帧能力已取消，必须保持关闭，不作为可启用产品能力。
+- `ANJU_ENABLE_H5_CAMERA` / `ANJU_ENABLE_IOS_HOME_CAMERA`：H5 和 iPhone 居家实时相机开关，均默认关闭，便于分阶段发布。
+- `ANJU_ENABLE_VOICE_ADVISOR`：房间级 AI 适老顾问实时语音开关，默认关闭；文字顾问不依赖此开关。
+- `ANJU_ENABLE_RTC_VIDEO_ADVISOR`：扫描页 RTC 视频与视觉 Function Calling 开关，默认关闭；关闭后继续使用 RTC 音频和 HTTP 临时检查。
+- `ANJU_ADVISOR_MAX_ACTIVE_RTC`：全局 RTC 席位上限，默认并强制最大为 8，为 10 路 TTS 并发保留 2 路余量。
+- `ANJU_ADVISOR_MAX_QUEUED`：有效 FIFO 排队票据上限，默认 50；超过后返回 `429 advisor_capacity_busy`。
+- `ANJU_ADVISOR_QUEUE_TTL_SECONDS` / `ANJU_ADVISOR_QUEUE_GRANT_SECONDS`：默认排队 180 秒、获席后保留 20 秒。
+- `ANJU_ADVISOR_DEVICE_LEASE_SECONDS`：同房间设备租约和无心跳回收周期，默认 90 秒。
+- `ANJU_VOLC_FC_CALLBACK_URL`：火山 Function Calling 公网 HTTPS 回调地址，生产建议为 `/api/internal/rtc/function-calls`。
+- `ANJU_VOLC_FC_CALLBACK_SIGNATURE`：独立高熵回调签名，只存服务端，不得复用 assessment token 或写入日志。
+- `/health` 的 `rtc_video_advisor` 只有在静态配置完整且最近 30 分钟内成功完成一次签名视觉帧 Function Calling 后才为 `true`；服务重启后需重新执行探测。
+- `ANJU_VOLC_RTC_APP_ID` / `ANJU_VOLC_RTC_APP_KEY`：火山 RTC 应用凭据；AppKey 仅限服务端，浏览器只领取 15 分钟房间 Token。
+- `ANJU_VOLC_ACCESS_KEY` / `ANJU_VOLC_SECRET_KEY`：服务端调用 `StartVoiceChat` / `StopVoiceChat` 的火山 OpenAPI 凭据。
+- `ANJU_DOUBAO_SPEECH_API_KEY`：新版豆包语音直连 API Key，仅用于 Speech API；RTC `StartVoiceChat` 使用账号下已绑定的 ASR/TTS 资源，不将该 Key 下发给客户端。
+- `ANJU_DOUBAO_ASR_RESOURCE_ID` / `ANJU_DOUBAO_TTS_RESOURCE_ID` / `ANJU_DOUBAO_TTS_VOICE`：直连语音资源与默认音色；当前默认为 ASR 2.0 小时版、TTS 2.0 和 Vivi 2.0。
+- `ANJU_VOLC_VOICE_CONFIG_JSON`：`StartVoiceChat` 的 ASR/TTS/LLM 模板 JSON，可能包含厂商密钥，禁止提交或下发到前端。
+- `ANJU_VOLC_VOICE_API_VERSION`：火山 AI 音视频互动 API 版本，当前默认 `2025-06-01`；必须使用“音视频互动智能体”应用 AppId。
+- `ANJU_VOLC_VOICE_MODEL_ID`：语音顾问实时 LLM 的日志标识，应与 `ANJU_VOLC_VOICE_CONFIG_JSON.Config.LLMConfig.ModelName` 一致。
+- `ANJU_ENABLE_RENOVATION_PREVIEW`：房间级 AI 改造效果预览开关，默认关闭；只在用户已选择方案并主动确认原图后调用。
+- `ANJU_ARK_IMAGE_EDIT_MODEL` / `ANJU_ARK_IMAGE_EDIT_ENDPOINT`：火山图片编辑模型和端点，默认使用 `doubao-seedream-4-5-251128`。
+- `ANJU_ARK_IMAGE_EDIT_SIZE`：图片编辑输出清晰度，默认 `2K`。
+- `ANJU_ARK_RENOVATION_GROUNDING_MODEL`：对比改造前后图片并返回生成细节归一化 bbox 的结构化视觉模型；未设置时使用 `ANJU_ARK_MODEL`。定位失败不会使效果图生成失败。
+- `ANJU_RENOVATION_PREVIEW_TIMEOUT_SECONDS`：图片编辑及临时结果下载超时，默认 90 秒。
+- `ANJU_RENOVATION_PREVIEW_DAILY_LIMIT`：每个房间滚动 24 小时内最多创建的效果版本数，默认 3。
+- `ANJU_ARK_HOME_CAMERA_MODEL`：H5 与 iOS 共用的 HTTP 临时检查模型；RTC 不可用或连续失败时回退使用，未设置时回退到 `ANJU_ARK_TURBO_MODEL`。
 - `ANJU_ARK_TURBO_MODEL`：H5/iOS 实时相机的兼容回退配置。
 - `ANJU_ARK_PRO_MODEL`：保留给正式照片或后续 iOS Pro 复核流程，不再决定 iOS 实时帧模型。
 
 不要把 `.env`、密钥、数据库或用户照片提交到仓库。对外部署时必须使用 HTTPS，并为数据目录配置备份和删除策略。
 
-## P0—P2 范围
+## 当前产品范围
 
 - React 19 + TypeScript + Vite 的 P01—P09 主流程；
 - 三项家人档案；
@@ -81,11 +103,15 @@ ANJU_MOCK_ANALYSIS=1 .venv/bin/python -m backend.app.server
 - 火山方舟或 OpenAI Responses API 结构化视觉候选；
 - 前端 SVG 风险标注、反馈与重新圈选；
 - A/B/C 方案、参考价格、清单和报告 PNG 长图下载；旧只读分享 API 仅保留兼容；
-- H5 视频只在浏览器解码，确认后上传 3—6 张代表帧，并保存来源字段用于跨帧合并；
-- H5 相机使用独立的版本化可见问题规则和 `anju_h5_camera_discovery_v2`；房型只作为场景提示，临时帧响应后删除，不进入分数；
-- iPhone 游园会四个 Zone 共用独立的 12 类版本化规则和 `anju_ios_fair_camera_direct_v3`，本地实时帧已切换到 Turbo 模型。误合并与正式复核的收口计划见 `docs/IOS_CAMERA_REJECTION_REMEDIATION_PLAN.md`；未完成真机验收前不视为生产可发布能力。
+- 房间级 AI 改造效果预览：按已选方案生成前后对比并可保存进报告；生成图不是风险证据、评分输入或整改后复查结果；
+- H5 正式评估只接收照片；本地视频选择、自动抽帧和 `video_frame` 正式识别已取消，既有字段与代码仅作历史兼容并保持关闭；
+- H5 与 iOS 使用房间绑定的临时检查接口与 `anju_home_camera_discovery_v1`；服务端从 `room_id` 获取房型，不信任客户端声明，临时建议不写入正式风险。
+- iOS 代表帧以 `ios_camera_frame` 上传；扫描结束后 H5 经档案门禁自动发起正式居家分析，`ios_ar_frame` 只做历史可读兼容。
+- H5 与 iOS `WKWebView` 共用 `/advisor/:roomId` 文字/语音顾问页；临时提示和正式风险分阶段展示，业务写操作需确认卡，原始音频不入库。
+- RTC 启动前必须调用 `POST .../rtc-queue` 取得席位，再以 `X-Advisor-Client-ID` 和 `X-Advisor-Queue-Ticket` 调用 `/voice` 或 `/realtime`；获席后每 20 秒心跳，退出时删除票据。
+- 新数据库不再创建 fair 表，旧数据库历史表不做破坏性删除，`/api/v2/fair-scans` 固定返回 404。
 
-整改复查对比和 PDF 导出仍不在本次范围；移动浏览器和 LiDAR 真机效果以外部验收记录为准。
+整改复查对比和 PDF 导出仍不在本次范围；移动浏览器和 LiDAR 真机效果以外部验收记录为准。本地视频关键帧能力不进入后续验收。
 
 ## 测试
 

@@ -3,24 +3,28 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import shutil
+import sqlite3
 import threading
 import uuid
 
-from .providers import ProviderError, VisionProvider, provider_from_environment
+from .advisor import AdvisorService
+from .providers import ProviderError, RenovationProvider, VisionProvider, provider_from_environment, renovation_provider_from_environment
+from .providers.renovation import RENOVATION_PROMPT_VERSION
 from .repositories import SQLiteRepository, decode_json_row, token_hash, utc_now
 from .rules import RuleStore
 from .scoring import calculate_coverage, score_risks
 
 
 ALLOWED_INPUT_MODES = {"photo", "video_frame"}
-ALLOWED_MEDIA_SOURCES = {"photo", "video_frame", "h5_camera_frame", "ios_ar_frame"}
+ALLOWED_MEDIA_SOURCES = {"photo", "video_frame", "h5_camera_frame", "ios_camera_frame", "ios_ar_frame"}
 ALLOWED_ORIENTATIONS = {"up", "right", "down", "left"}
-FAIR_ZONES = {"entrance", "main_aisle", "booth", "rest_area"}
 ALLOWED_ROOMS = {"bathroom", "bedroom", "living_room", "kitchen", "corridor", "balcony"}
 SUPPORTED_ROOMS = set(ALLOWED_ROOMS)
 ALLOWED_FEEDBACK = {"not_a_risk", "location_inaccurate", "photo_unclear", "already_resolved", "other", "confirmed"}
@@ -29,6 +33,10 @@ MIME_SIGNATURES = {
     "image/png": (b"\x89PNG\r\n\x1a\n",),
     "image/webp": (b"RIFF",),
 }
+UNVERIFIED_MEASUREMENT_PATTERN = re.compile(
+    r"(?:约|大约|仅|达到|为)?\s*\d+(?:\.\d+)?\s*(lux|lx|cm|mm|厘米|毫米)",
+    re.IGNORECASE,
+)
 
 
 class AssessmentError(RuntimeError):
@@ -39,25 +47,38 @@ class AssessmentError(RuntimeError):
 
 
 class AssessmentService:
-    def __init__(self, repository: SQLiteRepository, media_root: Path, rules: RuleStore | None = None, provider: VisionProvider | None = None) -> None:
+    def __init__(
+        self,
+        repository: SQLiteRepository,
+        media_root: Path,
+        rules: RuleStore | None = None,
+        provider: VisionProvider | None = None,
+        renovation_provider: RenovationProvider | None = None,
+    ) -> None:
         self.repository = repository
         self.media_root = media_root
         self.media_root.mkdir(parents=True, exist_ok=True)
         self.rules = rules or RuleStore()
         self._provider = provider
+        self._renovation_provider = renovation_provider
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="anju-assessment")
         self._camera_lock = threading.Lock()
         self._provider_lock = threading.Lock()
         self._camera_inflight: set[str] = set()
-        self._fair_inflight: set[str] = set()
         self.turbo_max_concurrency = self._positive_int_env("ANJU_TURBO_MAX_CONCURRENCY", 2)
         self.pro_max_concurrency = self._positive_int_env("ANJU_PRO_MAX_CONCURRENCY", 1)
         self._turbo_slots = threading.BoundedSemaphore(self.turbo_max_concurrency)
         self._pro_slots = threading.BoundedSemaphore(self.pro_max_concurrency)
+        self.advisor = AdvisorService(self)
         self._recover_interrupted_analyses()
+        self._recover_interrupted_renovation_previews()
 
     def close(self) -> None:
         self._executor.shutdown(wait=False, cancel_futures=True)
+
+    @staticmethod
+    def error(code: str, status: int = 400) -> AssessmentError:
+        return AssessmentError(code, status)
 
     def create_assessment(self, payload: dict) -> dict:
         input_mode = payload.get("input_mode", "photo")
@@ -194,6 +215,10 @@ class AssessmentService:
 
     def start_analysis(self, assessment_id: str, room_id: str) -> dict:
         room = self._owned_room(assessment_id, room_id)
+        assessment = self.repository.fetchone("SELECT profile_json FROM assessments WHERE id=?", (assessment_id,))
+        profile = json.loads(assessment["profile_json"] or "{}") if assessment else {}
+        if any(not profile.get(key) for key in ("mobility", "fall_history", "living_status")):
+            raise AssessmentError("profile_incomplete", 409)
         if room["room_type"] not in SUPPORTED_ROOMS:
             raise AssessmentError("room_rules_not_ready", 409)
         media = self._media(room_id)
@@ -277,6 +302,137 @@ class AssessmentService:
         self._owned_risk(assessment_id, risk_id)
         self.repository.execute("DELETE FROM selected_solutions WHERE risk_id=?", (risk_id,))
 
+    def renovation_preview_context(self, assessment_id: str, room_id: str) -> dict:
+        if os.environ.get("ANJU_ENABLE_RENOVATION_PREVIEW", "0") != "1":
+            raise AssessmentError("renovation_preview_not_enabled", 404)
+        room = self._owned_room(assessment_id, room_id)
+        snapshot, selection_hash = self._renovation_selection_snapshot(assessment_id, room_id)
+        media = [item for item in self._media(room_id) if item["quality"].get("usable") and item.get("source_kind") in {"photo", "h5_camera_frame", "ios_camera_frame"}]
+        selected_risks = {item["risk_id"]: item for item in snapshot}
+        evidence_counts: dict[str, int] = {item["media_id"]: 0 for item in media}
+        total_counts: dict[str, int] = {item["media_id"]: 0 for item in media}
+        for risk in self._risks(room_id):
+            evidence_ids = list(dict.fromkeys([risk["media_id"], *risk.get("evidence_media_ids", [])]))
+            for media_id in evidence_ids:
+                if media_id in total_counts:
+                    total_counts[media_id] += 1
+                    if risk["risk_id"] in selected_risks:
+                        evidence_counts[media_id] += 1
+        media.sort(key=lambda item: (
+            -evidence_counts[item["media_id"]], -total_counts[item["media_id"]],
+            -(int(item.get("width") or 0) * int(item.get("height") or 0)), item["media_id"],
+        ))
+        candidates = [{
+            "media_id": item["media_id"], "mime_type": item["mime_type"], "width": item["width"], "height": item["height"],
+            "content_path": item["content_path"], "recommended": index == 0,
+            "selected_risk_evidence_count": evidence_counts[item["media_id"]],
+        } for index, item in enumerate(media)]
+        previews = [self._serialize_renovation_preview(row, selection_hash) for row in self.repository.fetchall(
+            "SELECT * FROM renovation_previews WHERE assessment_id=? AND room_id=? ORDER BY created_at DESC LIMIT 3",
+            (assessment_id, room_id),
+        )]
+        return {
+            "room_id": room_id, "room_type": room["room_type"], "selection_hash": selection_hash,
+            "selected_solutions": self._public_renovation_snapshot(snapshot), "eligible_media": candidates, "previews": previews,
+            "disclaimer": self._renovation_disclaimer(),
+        }
+
+    def create_renovation_preview(self, assessment_id: str, room_id: str, source_media_id: str) -> dict:
+        if os.environ.get("ANJU_ENABLE_RENOVATION_PREVIEW", "0") != "1":
+            raise AssessmentError("renovation_preview_not_enabled", 404)
+        self._owned_room(assessment_id, room_id)
+        source = self.repository.fetchone(
+            "SELECT * FROM media WHERE id=? AND assessment_id=? AND room_id=?",
+            (source_media_id, assessment_id, room_id),
+        )
+        if not source:
+            raise AssessmentError("renovation_source_not_found", 404)
+        quality = json.loads(source["quality_json"] or "{}")
+        if not quality.get("usable") or source.get("source_kind") not in {"photo", "h5_camera_frame", "ios_camera_frame"}:
+            raise AssessmentError("renovation_source_not_usable", 422)
+        snapshot, selection_hash = self._renovation_selection_snapshot(assessment_id, room_id)
+        if not snapshot:
+            raise AssessmentError("renovation_no_selected_solutions", 409)
+        visualized = [action for item in snapshot for action in item["visualizable_actions"]]
+        if not visualized:
+            raise AssessmentError("renovation_no_visualizable_actions", 422)
+        active = self.repository.fetchone(
+            "SELECT id FROM renovation_previews WHERE room_id=? AND status IN ('queued','running') LIMIT 1",
+            (room_id,),
+        )
+        if active:
+            raise AssessmentError("renovation_preview_in_progress", 409)
+        daily_limit = self._positive_int_env("ANJU_RENOVATION_PREVIEW_DAILY_LIMIT", 3)
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+        recent = self.repository.fetchone(
+            "SELECT COUNT(*) AS value FROM renovation_previews WHERE room_id=? AND created_at>=?",
+            (room_id, cutoff),
+        )
+        if recent and int(recent["value"]) >= daily_limit:
+            raise AssessmentError("renovation_preview_daily_limit", 429)
+        self._trim_renovation_previews(assessment_id, room_id, keep=2)
+        preview_id = str(uuid.uuid4())
+        now = utc_now()
+        skipped = [action for item in snapshot if not item["visualizable_actions"] for action in item["actions"]]
+        try:
+            self.repository.insert("renovation_previews", {
+                "id": preview_id, "assessment_id": assessment_id, "room_id": room_id, "source_media_id": source_media_id,
+                "selection_snapshot_json": json.dumps(snapshot, ensure_ascii=False), "selection_hash": selection_hash,
+                "status": "queued", "stage": "preparing_source", "error": None, "provider": None, "model": None,
+                "prompt_version": RENOVATION_PROMPT_VERSION, "rule_set_version": self.rules.rule_set_version,
+                "visualized_actions_json": json.dumps(visualized, ensure_ascii=False), "skipped_actions_json": json.dumps(skipped, ensure_ascii=False),
+                "output_path": None, "output_mime_type": None, "selected_for_report": 0,
+                "created_at": now, "updated_at": now,
+            })
+        except sqlite3.IntegrityError as error:
+            raise AssessmentError("renovation_preview_in_progress", 409) from error
+        self._best_effort_event(assessment_id, room_id, "renovation_preview_started", {
+            "preview_id": preview_id, "source_media_id": source_media_id,
+            "action_codes": [item["action_code"] for item in visualized],
+        })
+        try:
+            self._executor.submit(self._generate_renovation_preview, preview_id)
+        except RuntimeError:
+            self._fail_renovation_preview(preview_id, "renovation_preview_start_failed")
+        row = self.repository.fetchone("SELECT * FROM renovation_previews WHERE id=?", (preview_id,))
+        return self._serialize_renovation_preview(row, selection_hash)
+
+    def renovation_preview(self, assessment_id: str, room_id: str, preview_id: str) -> dict:
+        if os.environ.get("ANJU_ENABLE_RENOVATION_PREVIEW", "0") != "1":
+            raise AssessmentError("renovation_preview_not_enabled", 404)
+        self._owned_room(assessment_id, room_id)
+        row = self.repository.fetchone(
+            "SELECT * FROM renovation_previews WHERE id=? AND assessment_id=? AND room_id=?",
+            (preview_id, assessment_id, room_id),
+        )
+        if not row:
+            raise AssessmentError("renovation_preview_not_found", 404)
+        _, current_hash = self._renovation_selection_snapshot(assessment_id, room_id)
+        return self._serialize_renovation_preview(row, current_hash)
+
+    def select_renovation_preview(self, assessment_id: str, room_id: str, preview_id: str) -> dict:
+        preview = self.renovation_preview(assessment_id, room_id, preview_id)
+        if preview["status"] != "completed":
+            raise AssessmentError("renovation_preview_not_ready", 409)
+        if preview["stale"]:
+            raise AssessmentError("renovation_preview_stale", 409)
+        with self.repository.transaction() as connection:
+            connection.execute("UPDATE renovation_previews SET selected_for_report=0,updated_at=? WHERE room_id=?", (utc_now(), room_id))
+            connection.execute("UPDATE renovation_previews SET selected_for_report=1,updated_at=? WHERE id=?", (utc_now(), preview_id))
+        self._best_effort_event(assessment_id, room_id, "renovation_preview_selected", {"preview_id": preview_id})
+        return self.renovation_preview(assessment_id, room_id, preview_id)
+
+    def renovation_preview_content(self, assessment_id: str, room_id: str, preview_id: str) -> tuple[Path, str]:
+        if os.environ.get("ANJU_ENABLE_RENOVATION_PREVIEW", "0") != "1":
+            raise AssessmentError("renovation_preview_not_enabled", 404)
+        row = self.repository.fetchone(
+            "SELECT output_path,output_mime_type,status FROM renovation_previews WHERE id=? AND assessment_id=? AND room_id=?",
+            (preview_id, assessment_id, room_id),
+        )
+        if not row or row["status"] != "completed" or not row["output_path"] or not Path(row["output_path"]).is_file():
+            raise AssessmentError("renovation_preview_not_found", 404)
+        return Path(row["output_path"]), str(row["output_mime_type"])
+
     def complete(self, assessment_id: str) -> dict:
         self.repository.execute("UPDATE assessments SET status='completed', updated_at=? WHERE id=?", (utc_now(), assessment_id))
         return self.report(assessment_id)
@@ -296,7 +452,7 @@ class AssessmentService:
         groups: dict[str, dict] = {}
         gain_groups: dict[str, tuple[int, int]] = {}
         for row in selections:
-            solution = dict(self.rules.solutions[row["solution_package_id"]])
+            solution = self.rules.solution_for_output(row["solution_package_id"])
             price = dict(self.rules.prices[solution["price_rule_id"]])
             item = {"selected_solution_id": row["id"], "risk_id": row["risk_id"], "risk_title": row["risk_title"], "severity": row["severity"], "status": row["status"], "solution": {**solution, "price": price}}
             selected_items.append(item)
@@ -329,6 +485,7 @@ class AssessmentService:
             "coverage_percent": coverage, "score_title": "家庭安全参考分" if coverage >= 80 else "当前已检查区域安全参考分",
             "assessed_area_score": assessed_score, "household_score": assessed_score if coverage >= 80 else None,
             "rooms": room_results, "selected_items": selected_items, "recommendations": recommendations, "budget": budget, "projected_score": projected,
+            "renovation_previews": self._report_renovation_previews(assessment_id),
             "price_disclaimer": self.rules.price_document["disclaimer"], "rule_set_version": self.rules.rule_set_version, "price_rule_version": self.rules.price_rule_version,
         }
 
@@ -345,7 +502,38 @@ class AssessmentService:
         if not row or datetime.fromisoformat(row["expires_at"]) <= datetime.now(timezone.utc):
             raise AssessmentError("share_expired", 404)
         report = self.report(row["assessment_id"])
-        return {key: report[key] for key in ("status", "checked_room_count", "planned_room_count", "coverage_percent", "score_title", "assessed_area_score", "household_score", "rooms", "selected_items", "recommendations", "budget", "projected_score", "price_disclaimer")}
+        value = {key: report[key] for key in ("status", "checked_room_count", "planned_room_count", "coverage_percent", "score_title", "assessed_area_score", "household_score", "rooms", "selected_items", "recommendations", "budget", "projected_score", "renovation_previews", "price_disclaimer")}
+        for preview in value["renovation_previews"]:
+            base = f"/api/v2/shared-reports/{token}/renovation-previews/{preview['preview_id']}"
+            preview["before_content_path"] = f"{base}/before"
+            preview["after_content_path"] = f"{base}/after"
+        return value
+
+    def shared_renovation_preview_content(self, token: str, preview_id: str, kind: str) -> tuple[Path, str]:
+        if os.environ.get("ANJU_ENABLE_RENOVATION_PREVIEW", "0") != "1":
+            raise AssessmentError("renovation_preview_not_enabled", 404)
+        share = self.repository.fetchone("SELECT * FROM shares WHERE token_hash=? AND revoked=0", (token_hash(token),))
+        if not share or datetime.fromisoformat(share["expires_at"]) <= datetime.now(timezone.utc):
+            raise AssessmentError("share_expired", 404)
+        preview = self.repository.fetchone(
+            "SELECT * FROM renovation_previews WHERE id=? AND assessment_id=? AND selected_for_report=1 AND status='completed'",
+            (preview_id, share["assessment_id"]),
+        )
+        if not preview:
+            raise AssessmentError("renovation_preview_not_found", 404)
+        _, current_hash = self._renovation_selection_snapshot(share["assessment_id"], preview["room_id"])
+        if preview["selection_hash"] != current_hash:
+            raise AssessmentError("renovation_preview_stale", 404)
+        if kind == "after":
+            path, mime_type = preview["output_path"], preview["output_mime_type"]
+        elif kind == "before":
+            source = self.repository.fetchone("SELECT path,mime_type FROM media WHERE id=? AND assessment_id=?", (preview["source_media_id"], share["assessment_id"]))
+            path, mime_type = (source["path"], source["mime_type"]) if source else (None, None)
+        else:
+            raise AssessmentError("renovation_preview_not_found", 404)
+        if not path or not Path(path).is_file():
+            raise AssessmentError("renovation_preview_not_found", 404)
+        return Path(path), str(mime_type)
 
     def delete_assessment(self, assessment_id: str) -> None:
         self.repository.execute("DELETE FROM assessments WHERE id=?", (assessment_id,))
@@ -369,6 +557,12 @@ class AssessmentService:
             if self._provider is None:
                 self._provider = provider_from_environment()
         return self._provider
+
+    def renovation_provider(self) -> RenovationProvider:
+        with self._provider_lock:
+            if self._renovation_provider is None:
+                self._renovation_provider = renovation_provider_from_environment()
+        return self._renovation_provider
 
     @staticmethod
     def _positive_int_env(name: str, default: int) -> int:
@@ -404,10 +598,17 @@ class AssessmentService:
             if acquired:
                 semaphore.release()
 
-    def inspect_camera_frame(self, assessment_id: str, body: bytes, mime_type: str, width: int, height: int, payload: dict) -> dict:
-        if os.environ.get("ANJU_ENABLE_H5_CAMERA", "0") != "1":
-            raise AssessmentError("camera_not_enabled", 404)
-        room_type = payload.get("room_type")
+    def inspect_camera_frame(
+        self, assessment_id: str, body: bytes, mime_type: str, width: int, height: int, payload: dict,
+        *, room_id: str | None = None, native: bool = False,
+    ) -> dict:
+        enabled_variable = "ANJU_ENABLE_IOS_HOME_CAMERA" if native else "ANJU_ENABLE_H5_CAMERA"
+        if os.environ.get(enabled_variable, "0") != "1":
+            raise AssessmentError("ios_home_camera_not_enabled" if native else "camera_not_enabled", 404)
+        if room_id:
+            room_type = self._owned_room(assessment_id, room_id)["room_type"]
+        else:
+            room_type = payload.get("room_type")
         if room_type not in ALLOWED_ROOMS:
             raise AssessmentError("invalid_room_type")
         if mime_type not in MIME_SIGNATURES or not any(body.startswith(signature) for signature in MIME_SIGNATURES[mime_type]):
@@ -428,16 +629,23 @@ class AssessmentService:
         try:
             assessment = self.repository.fetchone("SELECT profile_json FROM assessments WHERE id=?", (assessment_id,))
             profile = json.loads(assessment["profile_json"] or "{}") if assessment else {}
-            camera_rules = self.rules.live_camera_rules_for("h5_home")
+            camera_rules = self.rules.live_camera_rules_for("h5_home", room_type)
             rule_catalog = {item["risk_code"]: item for item in camera_rules}
-            media = {"media_id": frame_id, "path": str(temporary), "mime_type": mime_type, "room_type": room_type}
-            with self._model_slot("turbo", assessment_id, None, "camera_inspection"):
+            media = {
+                "media_id": frame_id, "path": str(temporary), "mime_type": mime_type, "room_type": room_type,
+                "source_kind": payload.get("source_kind", "ios_camera_frame" if native else "h5_camera_frame"),
+            }
+            with self._model_slot("turbo", assessment_id, room_id, "camera_inspection"):
                 response, usage = self.provider().inspect_camera(
                     assessment_id, room_type, media, camera_rules,
                     {key: profile.get(key) for key in ("mobility", "fall_history", "living_status") if profile.get(key)},
                     [str(item)[:80] for item in payload.get("previous_summary", []) if isinstance(item, str)][:5],
                 )
             suggestions = self._validate_camera_response(response, frame_id, rule_catalog)
+            if room_id:
+                self.advisor.record_camera_suggestions(
+                    assessment_id, room_id, payload.get("camera_session_id"), frame_id, suggestions,
+                )
             raw_suggestions = response.get("suggestions", []) if isinstance(response, dict) else []
             raw_count = len(raw_suggestions) if isinstance(raw_suggestions, list) else 0
             raw_region_count = sum(
@@ -445,8 +653,9 @@ class AssessmentService:
                 if isinstance(item, dict) and item.get("region") is not None
             ) if isinstance(raw_suggestions, list) else 0
             validated_region_count = sum(1 for item in suggestions if item.get("region") is not None)
-            self.event(assessment_id, None, "ai_call_completed", {
+            self.event(assessment_id, room_id, "ai_call_completed", {
                 "skill_name": "camera_inspection", **usage,
+                "source_kind": payload.get("source_kind", "ios_camera_frame" if native else "h5_camera_frame"),
                 "quality_usable": bool(response.get("quality_usable")),
                 "candidate_count_raw": raw_count,
                 "candidate_count_validated": len(suggestions),
@@ -463,261 +672,30 @@ class AssessmentService:
                     if item in {element["id"] for element in self.rules.coverage_document["rooms"][room_type]["elements"]}
                 ],
                 "suggestions": suggestions, "save_as_evidence_recommended": bool(response.get("save_as_evidence_recommended") and suggestions),
-                "prompt_version": usage.get("prompt_version", "anju_h5_camera_discovery_v3"),
+                "prompt_version": usage.get("prompt_version", "anju_home_camera_discovery_v1"),
                 "rule_version": self.rules.live_camera_rule_version,
             }
         except ProviderError as error:
-            self.event(assessment_id, None, "ai_call_failed", {"skill_name": "camera_inspection", "error_type": error.code})
+            self.event(assessment_id, room_id, "ai_call_failed", {"skill_name": "camera_inspection", "error_type": error.code})
             raise
         finally:
             temporary.unlink(missing_ok=True)
             with self._camera_lock:
                 self._camera_inflight.discard(assessment_id)
 
-    def create_fair_scan(self) -> dict:
-        if os.environ.get("ANJU_ENABLE_IOS_FAIR_AR", "0") != "1":
-            raise AssessmentError("fair_ar_not_enabled", 404)
-        scan_id = str(uuid.uuid4())
-        access_token = secrets.token_urlsafe(32)
-        now = utc_now()
-        self.repository.insert("fair_scans", {"id": scan_id, "token_hash": token_hash(access_token), "status": "scanning", "result_json": "{}", "created_at": now, "updated_at": now})
-        return {"scan_id": scan_id, "access_token": access_token, "assessment_context": "venue_fair", "zones": sorted(FAIR_ZONES), "status": "scanning"}
-
-    def authorize_fair_scan(self, scan_id: str, token: str) -> None:
-        row = self.repository.fetchone("SELECT token_hash FROM fair_scans WHERE id=?", (scan_id,))
-        if not row or not token or row["token_hash"] != token_hash(token):
-            raise AssessmentError("fair_scan_access_denied", 404)
-
-    def analyze_fair_frame(self, scan_id: str, zone_id: str, frame_id: str, body: bytes, mime_type: str, width: int, height: int, orientation: str) -> dict:
-        if zone_id not in FAIR_ZONES or orientation not in ALLOWED_ORIENTATIONS:
-            raise AssessmentError("invalid_fair_frame")
-        if not frame_id or len(frame_id) > 80 or mime_type not in MIME_SIGNATURES or not any(body.startswith(signature) for signature in MIME_SIGNATURES[mime_type]):
-            raise AssessmentError("invalid_fair_frame")
-        if not (1 <= width <= 1920 and 1 <= height <= 1920):
-            raise AssessmentError("invalid_image_dimensions")
-        with self._camera_lock:
-            if scan_id in self._fair_inflight:
-                raise AssessmentError("camera_request_in_progress", 409)
-            self._fair_inflight.add(scan_id)
-        directory = self.media_root / "fair" / scan_id
-        directory.mkdir(parents=True, exist_ok=True)
-        path = directory / f"{frame_id}.jpg"
-        path.write_bytes(body)
-        try:
-            media = {"media_id": frame_id, "path": str(path), "mime_type": mime_type, "zone_id": zone_id}
-            camera_rules = self.rules.fair_rules_for(zone_id)
-            rule_catalog = {item["risk_code"]: item for item in camera_rules}
-            with self._model_slot("pro", scan_id, None, "fair_camera_analysis"):
-                response, usage = self.provider().fair_analyze(scan_id, zone_id, media, camera_rules)
-            candidates = self._validate_fair_candidates(response, frame_id, zone_id, rule_catalog)
-            raw_candidates = response.get("candidates", []) if isinstance(response, dict) else []
-            raw_count = len(raw_candidates) if isinstance(raw_candidates, list) else 0
-            self.repository.insert("fair_frames", {
-                "id": frame_id, "scan_id": scan_id, "zone_id": zone_id, "path": str(path), "mime_type": mime_type,
-                "width": width, "height": height, "orientation": orientation, "candidates_json": json.dumps(candidates, ensure_ascii=False), "created_at": utc_now(),
-            })
-            self._prune_fair_frames(scan_id, zone_id)
-            self.event(scan_id, None, "ai_call_completed", {
-                "skill_name": "fair_camera_analysis", "zone_id": zone_id, **usage,
-                "candidate_count_raw": raw_count,
-                "candidate_count_validated": len(candidates),
-                "candidate_count_rejected": max(0, raw_count - len(candidates)),
-                "camera_rule_version": self.rules.fair_rule_version,
-            })
-            return {
-                "frame_id": frame_id, "zone_id": zone_id, "candidates": candidates, "temporary": True,
-                "prompt_version": usage.get("prompt_version", "anju_ios_fair_camera_direct_v3"),
-                "rule_version": self.rules.fair_rule_version,
-            }
-        except ProviderError as error:
-            self.event(scan_id, None, "ai_call_failed", {
-                "skill_name": "fair_camera_analysis", "zone_id": zone_id, "error_type": error.code,
-            })
-            if not self.repository.fetchone("SELECT id FROM fair_frames WHERE id=?", (frame_id,)):
-                path.unlink(missing_ok=True)
-            raise
-        except Exception:
-            if not self.repository.fetchone("SELECT id FROM fair_frames WHERE id=?", (frame_id,)):
-                path.unlink(missing_ok=True)
-            raise
-        finally:
-            with self._camera_lock:
-                self._fair_inflight.discard(scan_id)
-
-    def finalize_fair_zone(self, scan_id: str, zone_id: str) -> dict:
-        if zone_id not in FAIR_ZONES:
-            raise AssessmentError("invalid_fair_zone")
-        rows = self.repository.fetchall("SELECT * FROM fair_frames WHERE scan_id=? AND zone_id=? ORDER BY created_at", (scan_id, zone_id))
-        candidates = [
-            {**item, "captured_at": row["created_at"]}
-            for row in rows for item in json.loads(row["candidates_json"])
-        ]
-        if not candidates:
-            result = {
-                "zone_id": zone_id, "status": "reviewed", "score": 100,
-                "coverage_limited": len(rows) < 2, "risks": [],
-                "prompt_version": "anju_ios_fair_camera_direct_v3",
-                "rule_version": self.rules.fair_rule_version,
-            }
-        else:
-            reviews = self._direct_fair_reviews(candidates)
-            risks = self._fair_formal_risks(reviews, candidates)
-            deductions: dict[str, int] = {}
-            for risk in risks:
-                if not risk["score_eligible"]:
-                    continue
-                rule = self.rules.fair_risk_rules[risk["risk_code"]]
-                cap = rule["deduction"] if risk["risk_code"] == "crowded_path" else rule["deduction"] * 2
-                deductions[risk["risk_code"]] = min(cap, deductions.get(risk["risk_code"], 0) + rule["deduction"])
-            result = {
-                "zone_id": zone_id, "status": "reviewed",
-                "score": max(0, 100 - sum(deductions.values())),
-                "coverage_limited": len(rows) < 2, "risks": risks,
-                "prompt_version": "anju_ios_fair_camera_direct_v3", "rule_version": self.rules.fair_rule_version,
-            }
-        now = utc_now()
-        self.repository.execute("DELETE FROM fair_zones WHERE scan_id=? AND zone_id=?", (scan_id, zone_id))
-        self.repository.insert("fair_zones", {"id": str(uuid.uuid4()), "scan_id": scan_id, "zone_id": zone_id, "status": "reviewed", "result_json": json.dumps(result, ensure_ascii=False), "updated_at": now})
-        self.repository.execute("UPDATE fair_scans SET updated_at=? WHERE id=?", (now, scan_id))
-        return result
-
-    def review_fair_zone(self, scan_id: str, zone_id: str) -> dict:
-        """Compatibility alias for clients released before direct frame analysis."""
-        return self.finalize_fair_zone(scan_id, zone_id)
-
-    def fair_report(self, scan_id: str) -> dict:
-        rows = self.repository.fetchall("SELECT * FROM fair_zones WHERE scan_id=? AND status='reviewed' ORDER BY zone_id", (scan_id,))
-        zones = [json.loads(row["result_json"]) for row in rows]
-        scores = [item["score"] for item in zones if isinstance(item.get("score"), int)]
-        selected_prices = [
-            risk["solutions"][1] for zone in zones for risk in zone["risks"]
-            if risk.get("score_eligible") and len(risk["solutions"]) > 1
-        ]
-        review_failed = any(item.get("status") == "review_failed" for item in zones)
-        report = {
-            "scan_id": scan_id, "status": "partial_review_failed" if review_failed else ("reviewed" if zones else "scanning"),
-            "assessed_area_score": None if review_failed else (round(sum(scores) / len(scores)) if scores else None),
-            "coverage_percent": round(len({item["zone_id"] for item in zones}) / len(FAIR_ZONES) * 100),
-            "zones": zones,
-            "budget": {"currency": "CNY", "total_min": sum(item["total_min"] for item in selected_prices), "total_max": sum(item["total_max"] for item in selected_prices)},
-            "prompt_version": "anju_ios_fair_camera_direct_v3",
-            "rule_version": self.rules.fair_rule_version,
-            "disclaimer": "仅为游园会现场辅助筛查参考，不代表场馆验收或施工报价。",
-        }
-        self.repository.execute("UPDATE fair_scans SET status=?,result_json=?,updated_at=? WHERE id=?", (report["status"], json.dumps(report, ensure_ascii=False), utc_now(), scan_id))
-        return report
-
-    def _validate_fair_candidates(self, value: dict, frame_id: str, zone_id: str, rule_catalog: dict[str, dict]) -> list[dict]:
-        if not isinstance(value, dict) or value.get("frame_id") != frame_id or value.get("zone_id") != zone_id or not isinstance(value.get("candidates"), list):
-            raise ProviderError("provider_invalid_response")
-        accepted = []
-        for item in value["candidates"][:5]:
-            if not isinstance(item, dict) or item.get("risk_code") not in rule_catalog or not str(item.get("evidence", "")).strip():
-                continue
-            confidence, bbox = item.get("confidence"), item.get("bbox")
-            if not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1 or not self._valid_xyxy(bbox):
-                continue
-            rule = rule_catalog[item["risk_code"]]
-            evidence_codes = item.get("evidence_codes")
-            allowed_evidence = set(rule["evidence_codes"])
-            normalized_evidence_codes = list(dict.fromkeys(
-                code for code in evidence_codes
-                if isinstance(evidence_codes, list) and isinstance(code, str) and code in allowed_evidence
-            )) if isinstance(evidence_codes, list) else []
-            evidence_complete = set(rule["required_evidence_codes"]).issubset(normalized_evidence_codes)
-            accepted.append({
-                "candidate_id": str(uuid.uuid4()), "frame_id": frame_id, "zone_id": zone_id,
-                "risk_code": item["risk_code"], "title": rule["title"], "short_advice": rule["short_advice"],
-                "bbox": [float(number) for number in bbox], "evidence": str(item["evidence"])[:240],
-                "evidence_codes": normalized_evidence_codes,
-                "evidence_complete": evidence_complete,
-                "confidence": float(confidence),
-                "needs_manual_check": bool(item.get("needs_manual_check")) or not evidence_complete,
-            })
-        return accepted
-
-    def _direct_fair_reviews(self, candidates: list[dict]) -> list[dict]:
-        """Deterministically canonicalize direct camera findings without another model call."""
-        grouped: dict[str, list[dict]] = {}
-        for candidate in candidates:
-            grouped.setdefault(candidate["risk_code"], []).append(candidate)
-        reviews: list[dict] = []
-        for group in grouped.values():
-            canonical = next((item for item in group if item.get("evidence_complete") and not item.get("needs_manual_check")), group[0])
-            canonical_status = "confirmed" if canonical.get("evidence_complete") and not canonical.get("needs_manual_check") else "manual_check"
-            for candidate in group:
-                reviews.append({
-                    "candidate_id": candidate["candidate_id"],
-                    "status": canonical_status if candidate is canonical else "merged",
-                    "risk_code": candidate["risk_code"],
-                    "evidence": candidate["evidence"], "bbox": candidate["bbox"],
-                    "merged_into_candidate_id": None if candidate is canonical else canonical["candidate_id"],
-                })
-        return reviews
-
-    def _fair_formal_risks(self, reviews: list[dict], candidates: list[dict]) -> list[dict]:
-        source = {item["candidate_id"]: item for item in candidates}
-        merged_evidence: dict[str, list[str]] = {}
-        for review in reviews:
-            if review["status"] == "merged" and review.get("merged_into_candidate_id") in source:
-                merged_evidence.setdefault(review["merged_into_candidate_id"], []).append(source[review["candidate_id"]]["frame_id"])
-        risks: list[dict] = []
-        for review in reviews:
-            if review["status"] in {"rejected", "merged"}:
-                continue
-            candidate = source[review["candidate_id"]]
-            rule = self.rules.fair_risk_rules[review["risk_code"]]
-            frame_ids = list(dict.fromkeys([candidate["frame_id"], *merged_evidence.get(review["candidate_id"], [])]))
-            evidence_complete = bool(candidate.get("evidence_complete", True))
-            score_eligible = review["status"] in {"confirmed", "region_corrected"} and evidence_complete
-            status = review["status"] if evidence_complete else "manual_check"
-            risks.append({
-                "candidate_id": review["candidate_id"], "frame_id": candidate["frame_id"], "risk_code": review["risk_code"],
-                "status": status, "severity": rule["severity"], "title": rule["title"], "evidence": review["evidence"],
-                "short_advice": rule["short_advice"], "bbox": review.get("bbox") or candidate["bbox"],
-                "solutions": self.rules.fair_solutions_for(review["risk_code"]),
-                "evidence_frame_ids": frame_ids, "rule_version": self.rules.fair_rule_version,
-                "score_eligible": score_eligible,
-            })
-        return self._normalize_crowded_path(risks, source)
-
-    def _normalize_crowded_path(self, risks: list[dict], candidates: dict[str, dict]) -> list[dict]:
-        crowded = [item for item in risks if item["risk_code"] == "crowded_path"]
-        if not crowded:
-            return risks
-        others = [item for item in risks if item["risk_code"] != "crowded_path"]
-        confirmed = [item for item in crowded if item["score_eligible"]]
-        captured: list[tuple[datetime, str]] = []
-        eligible_frame_ids = {
-            frame_id for item in confirmed for frame_id in item.get("evidence_frame_ids", [item["frame_id"]])
-        }
-        for candidate in candidates.values():
-            if candidate.get("risk_code") != "crowded_path" or candidate.get("frame_id") not in eligible_frame_ids:
-                continue
-            raw = candidate.get("captured_at")
-            try:
-                captured.append((datetime.fromisoformat(str(raw).replace("Z", "+00:00")), candidate["frame_id"]))
-            except (TypeError, ValueError):
-                continue
-        captured.sort(key=lambda item: item[0])
-        sustained = any((later[0] - earlier[0]).total_seconds() >= 3 for index, earlier in enumerate(captured) for later in captured[index + 1:])
-        canonical = confirmed[0] if confirmed else crowded[0]
-        canonical["evidence_frame_ids"] = list(dict.fromkeys(frame_id for _, frame_id in captured)) or canonical["evidence_frame_ids"]
-        canonical["score_eligible"] = sustained
-        if not sustained:
-            canonical["status"] = "manual_check"
-            canonical["severity"] = self.rules.fair_risk_rules["crowded_path"]["severity"]
-        return [*others, canonical]
-
-    @staticmethod
-    def _valid_xyxy(value: object) -> bool:
-        return isinstance(value, list) and len(value) == 4 and all(isinstance(item, (int, float)) and 0 <= item <= 1 for item in value) and value[0] < value[2] and value[1] < value[3]
-
-    def _prune_fair_frames(self, scan_id: str, zone_id: str) -> None:
-        rows = self.repository.fetchall("SELECT id,path FROM fair_frames WHERE scan_id=? AND zone_id=? ORDER BY created_at DESC", (scan_id, zone_id))
-        for row in rows[6:]:
-            Path(row["path"]).unlink(missing_ok=True)
-            self.repository.execute("DELETE FROM fair_frames WHERE id=?", (row["id"],))
+    def inspect_room_camera_frame(
+        self, assessment_id: str, room_id: str, body: bytes, mime_type: str, width: int, height: int, payload: dict,
+    ) -> dict:
+        source_kind = str(payload.get("source_kind") or "h5_camera_frame")
+        if source_kind not in {"h5_camera_frame", "ios_camera_frame"}:
+            raise AssessmentError("invalid_camera_frame")
+        orientation = str(payload.get("orientation") or "up")
+        if orientation not in ALLOWED_ORIENTATIONS:
+            raise AssessmentError("invalid_camera_frame")
+        return self.inspect_camera_frame(
+            assessment_id, body, mime_type, width, height, payload,
+            room_id=room_id, native=source_kind == "ios_camera_frame",
+        )
 
     def _validate_camera_response(self, value: dict, frame_id: str, rule_catalog: dict[str, dict]) -> list[dict]:
         if not isinstance(value, dict) or value.get("media_id") != frame_id or not isinstance(value.get("suggestions"), list):
@@ -735,14 +713,23 @@ class AssessmentService:
             except AssessmentError:
                 region = None
             rule = rule_catalog[item["risk_code"]]
+            evidence = self._sanitize_unverified_measurements(str(item["evidence"]))[:240]
             accepted.append({
                 "suggestion_id": str(uuid.uuid4()), "risk_code": item["risk_code"], "title": rule["title"],
                 "short_advice": rule["short_advice"],
-                "evidence": str(item["evidence"])[:240], "confidence": float(confidence), "needs_manual_check": bool(item.get("needs_manual_check")),
+                "evidence": evidence, "confidence": float(confidence), "needs_manual_check": bool(item.get("needs_manual_check")),
                 "possible_repeat": bool(item.get("possible_repeat")), "region": region, "temporary": True,
                 "save_as_evidence_recommended": True,
             })
         return accepted
+
+    @staticmethod
+    def _sanitize_unverified_measurements(value: str) -> str:
+        def replacement(match: re.Match[str]) -> str:
+            unit = match.group(1).lower()
+            return "照度需现场测量" if unit in {"lux", "lx"} else "尺寸需现场测量"
+
+        return UNVERIFIED_MEASUREMENT_PATTERN.sub(replacement, value).strip()
 
     def _analyze(self, assessment_id: str, room_id: str, job_id: str) -> None:
         try:
@@ -815,6 +802,238 @@ class AssessmentService:
             code = error.code if isinstance(error, (ProviderError, AssessmentError)) else "analysis_failed"
             self._fail_analysis(assessment_id, room_id, job_id, code)
             self._best_effort_event(assessment_id, room_id, "ai_call_failed", {"skill_name": "risk_analysis", "error_type": code})
+
+    def _generate_renovation_preview(self, preview_id: str) -> None:
+        row = self.repository.fetchone("SELECT * FROM renovation_previews WHERE id=?", (preview_id,))
+        if not row:
+            return
+        assessment_id, room_id = row["assessment_id"], row["room_id"]
+        try:
+            self.repository.execute(
+                "UPDATE renovation_previews SET status='running',stage='editing_image',updated_at=? WHERE id=?",
+                (utc_now(), preview_id),
+            )
+            source = self.repository.fetchone("SELECT * FROM media WHERE id=? AND assessment_id=?", (row["source_media_id"], assessment_id))
+            if not source or not Path(source["path"]).is_file():
+                raise AssessmentError("renovation_source_not_found", 404)
+            snapshot = json.loads(row["selection_snapshot_json"])
+            visualized_actions = json.loads(row["visualized_actions_json"])
+            provider = self.renovation_provider()
+            prompt = self._renovation_prompt(self._owned_room(assessment_id, room_id)["room_type"], snapshot, visualized_actions)
+            with self._model_slot("pro", assessment_id, room_id, "renovation_visualization"):
+                generated = provider.edit(assessment_id, source, prompt)
+            extension = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}.get(generated.mime_type)
+            if not extension:
+                raise ProviderError("provider_invalid_response", False)
+            directory = self.media_root / assessment_id / "renovation-previews"
+            directory.mkdir(parents=True, exist_ok=True)
+            output_path = directory / f"{preview_id}{extension}"
+            temporary_path = directory / f".{preview_id}.tmp"
+            temporary_path.write_bytes(generated.body)
+            temporary_path.replace(output_path)
+            grounded_actions = visualized_actions
+            try:
+                self.repository.execute(
+                    "UPDATE renovation_previews SET stage='grounding_changes',updated_at=? WHERE id=?",
+                    (utc_now(), preview_id),
+                )
+                after_media = {
+                    "media_id": preview_id, "path": str(output_path), "mime_type": generated.mime_type,
+                }
+                with self._model_slot("pro", assessment_id, room_id, "renovation_region_grounding"):
+                    grounding, grounding_usage = self.provider().ground_renovation_changes(
+                        assessment_id, source, after_media, visualized_actions,
+                    )
+                grounded_actions = self._validated_renovation_action_regions(visualized_actions, grounding)
+                self._best_effort_event(assessment_id, room_id, "ai_call_completed", {
+                    "skill_name": "renovation_region_grounding", "preview_id": preview_id,
+                    "action_codes": [item["action_code"] for item in grounded_actions if item.get("region")],
+                    **grounding_usage,
+                })
+            except Exception as grounding_error:
+                error_code = grounding_error.code if isinstance(grounding_error, (ProviderError, AssessmentError)) else "provider_invalid_response"
+                self._best_effort_event(assessment_id, room_id, "ai_call_failed", {
+                    "skill_name": "renovation_region_grounding", "preview_id": preview_id, "error_type": error_code,
+                })
+            self.repository.execute(
+                "UPDATE renovation_previews SET status='completed',stage='ready',error=NULL,provider=?,model=?,prompt_version=?,visualized_actions_json=?,output_path=?,output_mime_type=?,updated_at=? WHERE id=?",
+                (provider.provider_name, provider.model_name, provider.prompt_version, json.dumps(grounded_actions, ensure_ascii=False), str(output_path), generated.mime_type, utc_now(), preview_id),
+            )
+            self._best_effort_event(assessment_id, room_id, "ai_call_completed", {
+                "skill_name": "renovation_visualization", "preview_id": preview_id,
+                "provider": provider.provider_name, "model": provider.model_name,
+                "prompt_version": provider.prompt_version, **generated.usage,
+            })
+        except AssessmentError as error:
+            self._fail_renovation_preview(preview_id, self._renovation_error_code(error.code))
+        except ProviderError as error:
+            self._best_effort_event(assessment_id, room_id, "ai_call_failed", {
+                "skill_name": "renovation_visualization", "preview_id": preview_id, "error_type": error.code,
+            })
+            self._fail_renovation_preview(preview_id, error.code)
+        except Exception:
+            self._fail_renovation_preview(preview_id, "renovation_preview_invalid_response")
+
+    def _renovation_selection_snapshot(self, assessment_id: str, room_id: str) -> tuple[list[dict], str]:
+        rows = self.repository.fetchall(
+            "SELECT ss.solution_package_id,r.id AS risk_id,r.title AS risk_title,r.evidence "
+            "FROM selected_solutions ss JOIN risks r ON r.id=ss.risk_id "
+            "WHERE ss.assessment_id=? AND r.room_id=? ORDER BY r.id,ss.solution_package_id",
+            (assessment_id, room_id),
+        )
+        snapshot: list[dict] = []
+        for row in rows:
+            solution = self.rules.solutions.get(row["solution_package_id"])
+            if not solution:
+                continue
+            visual_actions = [{
+                "action_code": action["action_code"], "label": action["label"], "prompt": action["prompt"],
+                "risk_id": row["risk_id"], "risk_title": row["risk_title"], "target_evidence": row["evidence"],
+            } for action in solution.get("visualizable_actions", [])]
+            snapshot.append({
+                "risk_id": row["risk_id"], "risk_title": row["risk_title"],
+                "solution_package_id": solution["solution_package_id"], "tier": solution["tier"],
+                "title": solution["title"], "summary": solution["summary"], "actions": list(solution.get("actions", [])),
+                "visualizable_actions": visual_actions,
+            })
+        hash_input = {
+            "rule_set_version": self.rules.rule_set_version,
+            "visualization_rule_version": self.rules.renovation_visualization_document["version"],
+            "selections": [{"risk_id": item["risk_id"], "solution_package_id": item["solution_package_id"]} for item in snapshot],
+        }
+        selection_hash = hashlib.sha256(json.dumps(hash_input, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+        return snapshot, selection_hash
+
+    @staticmethod
+    def _renovation_prompt(room_type: str, snapshot: list[dict], visualized_actions: list[dict]) -> str:
+        room_names = {"bathroom": "卫生间", "bedroom": "卧室", "living_room": "客厅", "kitchen": "厨房", "corridor": "玄关走廊", "balcony": "阳台"}
+        action_lines = "\n".join(
+            f"{index}. 针对“{action['risk_title']}”：{action['prompt']}。可见依据：{action['target_evidence']}"
+            for index, action in enumerate(visualized_actions, 1)
+        )
+        selected_titles = "、".join(f"{item['tier']}档 {item['title']}" for item in snapshot)
+        return (
+            f"以输入的{room_names.get(room_type, '房间')}照片为唯一视觉基准，生成同一空间完成已选适老化方案后的写实效果图。"
+            "严格保持原图的相机位置、焦距、透视、构图、房间尺寸、门窗、墙地面、固定设施、已有家具、光线、色温和画面风格不变。"
+            f"当前已选结构化方案为：{selected_titles}。只允许执行以下可视化动作：\n{action_lines}\n"
+            "新增设施必须尺度真实、位置合理、固定关系可信，并与原空间风格协调。若某项动作在原图中没有可靠可见的安装面或目标区域，宁可跳过该项，不要猜测画面外信息。"
+            "不要移动、删除或重绘无关物体；不要改变墙体、门窗、管线、防水、排水或空间结构；不要添加未列出的设施。"
+            "不要生成人物、文字、数字文案、标注、箭头、Logo 或施工结论，不要声称承重、防水、安装位置或工程可行性已经确认。"
+            "输出自然、真实、可直接与原图对比的室内摄影效果图；除明确列出的改造外，其余区域尽可能保持一致。"
+        )
+
+    def _serialize_renovation_preview(self, row: dict, current_selection_hash: str) -> dict:
+        stale = row["selection_hash"] != current_selection_hash
+        selected_solutions = self._public_renovation_snapshot(json.loads(row["selection_snapshot_json"] or "[]"))
+        visualized_actions = [{key: action[key] for key in ("action_code", "label", "risk_id", "risk_title", "region", "confidence") if key in action} for action in json.loads(row["visualized_actions_json"] or "[]")]
+        return {
+            "preview_id": row["id"], "assessment_id": row["assessment_id"], "room_id": row["room_id"],
+            "source_media_id": row["source_media_id"], "selection_hash": row["selection_hash"],
+            "selected_solutions": selected_solutions,
+            "status": row["status"], "stage": row["stage"], "error": row["error"],
+            "provider": row["provider"], "model": row["model"], "prompt_version": row["prompt_version"],
+            "rule_set_version": row["rule_set_version"],
+            "visualized_actions": visualized_actions,
+            "skipped_actions": json.loads(row["skipped_actions_json"] or "[]"),
+            "before_content_path": f"/api/v2/assessments/{row['assessment_id']}/media/{row['source_media_id']}/content",
+            "after_content_path": f"/api/v2/assessments/{row['assessment_id']}/rooms/{row['room_id']}/renovation-previews/{row['id']}/content" if row["status"] == "completed" else None,
+            "selected_for_report": bool(row["selected_for_report"]) and not stale,
+            "stale": stale, "created_at": row["created_at"], "updated_at": row["updated_at"],
+            "disclaimer": self._renovation_disclaimer(),
+        }
+
+    @staticmethod
+    def _validated_renovation_action_regions(actions: list[dict], response: dict) -> list[dict]:
+        if not isinstance(response, dict) or not isinstance(response.get("action_regions"), list):
+            raise ProviderError("provider_invalid_response", False)
+        allowed = {str(item.get("action_code")): item for item in actions if item.get("action_code")}
+        regions: dict[str, dict] = {}
+        for item in response["action_regions"]:
+            if not isinstance(item, dict):
+                raise ProviderError("provider_invalid_response", False)
+            action_code = str(item.get("action_code", ""))
+            bbox = item.get("bbox")
+            confidence = item.get("confidence")
+            if action_code not in allowed or action_code in regions:
+                continue
+            if not isinstance(bbox, list) or len(bbox) != 4 or not all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in bbox):
+                raise ProviderError("provider_invalid_response", False)
+            x_min, y_min, x_max, y_max = (float(value) for value in bbox)
+            if not (0 <= x_min < x_max <= 1 and 0 <= y_min < y_max <= 1):
+                raise ProviderError("provider_invalid_response", False)
+            if not isinstance(confidence, (int, float)) or isinstance(confidence, bool) or not 0 <= float(confidence) <= 1:
+                raise ProviderError("provider_invalid_response", False)
+            if float(confidence) < .55:
+                continue
+            regions[action_code] = {
+                "region": {"type": "bbox", "x": x_min, "y": y_min, "width": x_max - x_min, "height": y_max - y_min},
+                "confidence": round(float(confidence), 3),
+            }
+        return [{**action, **regions.get(str(action.get("action_code")), {})} for action in actions]
+
+    @staticmethod
+    def _public_renovation_snapshot(snapshot: list[dict]) -> list[dict]:
+        result: list[dict] = []
+        for item in snapshot:
+            value = {key: item[key] for key in ("risk_id", "risk_title", "solution_package_id", "tier", "title", "summary", "actions")}
+            value["visualizable_actions"] = [
+                {key: action[key] for key in ("action_code", "label", "risk_id", "risk_title") if key in action}
+                for action in item.get("visualizable_actions", [])
+            ]
+            result.append(value)
+        return result
+
+    def _report_renovation_previews(self, assessment_id: str) -> list[dict]:
+        if os.environ.get("ANJU_ENABLE_RENOVATION_PREVIEW", "0") != "1":
+            return []
+        rows = self.repository.fetchall(
+            "SELECT * FROM renovation_previews WHERE assessment_id=? AND selected_for_report=1 AND status='completed' ORDER BY created_at",
+            (assessment_id,),
+        )
+        values: list[dict] = []
+        for row in rows:
+            _, selection_hash = self._renovation_selection_snapshot(assessment_id, row["room_id"])
+            value = self._serialize_renovation_preview(row, selection_hash)
+            if not value["stale"]:
+                values.append(value)
+        return values
+
+    def _trim_renovation_previews(self, assessment_id: str, room_id: str, keep: int) -> None:
+        rows = self.repository.fetchall(
+            "SELECT id,output_path,selected_for_report,created_at FROM renovation_previews WHERE assessment_id=? AND room_id=? ORDER BY selected_for_report DESC,created_at DESC",
+            (assessment_id, room_id),
+        )
+        for row in rows[keep:]:
+            if row["output_path"]:
+                Path(row["output_path"]).unlink(missing_ok=True)
+            self.repository.execute("DELETE FROM renovation_previews WHERE id=?", (row["id"],))
+
+    def _fail_renovation_preview(self, preview_id: str, code: str) -> None:
+        self.repository.execute(
+            "UPDATE renovation_previews SET status='failed',stage='failed',error=?,updated_at=? WHERE id=?",
+            (code, utc_now(), preview_id),
+        )
+
+    @staticmethod
+    def _renovation_error_code(provider_code: str) -> str:
+        return {
+            "provider_timeout": "renovation_preview_timeout",
+            "provider_http_429": "renovation_preview_capacity_busy",
+            "provider_capacity_busy": "renovation_preview_capacity_busy",
+            "provider_refusal": "renovation_preview_refusal",
+            "provider_invalid_response": "renovation_preview_invalid_response",
+        }.get(provider_code, "renovation_preview_failed")
+
+    def _recover_interrupted_renovation_previews(self) -> None:
+        self.repository.execute(
+            "UPDATE renovation_previews SET status='failed',stage='interrupted',error='renovation_preview_interrupted',updated_at=? "
+            "WHERE status IN ('queued','running')",
+            (utc_now(),),
+        )
+
+    @staticmethod
+    def _renovation_disclaimer() -> str:
+        return "AI 改造效果示意，仅用于方案沟通。安装位置、尺寸、墙体、防水与施工可行性须现场确认；实际安全改善需整改后重新拍摄复查。"
 
     def _recover_interrupted_analyses(self) -> None:
         now = utc_now()

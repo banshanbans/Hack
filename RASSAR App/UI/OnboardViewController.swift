@@ -1,248 +1,396 @@
 import AVFoundation
+import AnjuCore
 import RoomPlan
 import UIKit
+import WebKit
+
+private final class WeakScriptMessageHandler: NSObject, WKScriptMessageHandler {
+    weak var target: WKScriptMessageHandler?
+
+    init(target: WKScriptMessageHandler) {
+        self.target = target
+    }
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        target?.userContentController(userContentController, didReceive: message)
+    }
+}
 
 final class OnboardViewController: UIViewController {
-    @IBOutlet private weak var BLVAssistanceToggle: UISwitch!
+    private static let productionWebURL = "https://shot.socialdog.cn"
+    private static let bridgeName = "anjuNative"
 
-    private enum Step {
-        case landing
-        case prepare
+    private var webView: WKWebView!
+    private let errorView = UIView()
+    private let errorLabel = UILabel()
+    private var activeRequest: NativeCaptureRequest?
+    private weak var activeScanner: ViewController?
+
+    private var webBaseURL: URL {
+        let configured = ProcessInfo.processInfo.environment["ANJU_WEB_BASE_URL"]
+            ?? Bundle.main.object(forInfoDictionaryKey: "AnjuWebBaseURL") as? String
+            ?? Self.productionWebURL
+        guard let url = URL(string: configured), url.scheme?.lowercased() == "https" else {
+            return URL(string: Self.productionWebURL)!
+        }
+        return url
     }
-
-    private struct RoomOption {
-        let title: String
-        let value: String
-    }
-
-    private let roomOptions = [
-        RoomOption(title: "入口区", value: "entrance"),
-        RoomOption(title: "主通道", value: "main_aisle"),
-        RoomOption(title: "展位区", value: "booth"),
-        RoomOption(title: "休息区", value: "rest_area")
-    ]
-
-    private let contentStack = UIStackView()
-    private let scrollView = UIScrollView()
-    private var step: Step = .landing
-    private var voiceGuidanceEnabled = false
-    private var selectedRoomType = "entrance"
-#if DEBUG
-    private var didOpenDemoReport = false
-#endif
 
     override func viewDidLoad() {
         super.viewDidLoad()
         UIApplication.shared.isIdleTimerDisabled = false
-        configureBaseView()
-        showLanding()
+        configureWebView()
+        configureErrorView()
+        loadHome()
     }
 
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
-#if DEBUG
-        openDemoReportIfRequested()
-#endif
+    deinit {
+        webView?.configuration.userContentController.removeScriptMessageHandler(forName: Self.bridgeName)
     }
 
-#if DEBUG
-    /// A local-only launch path for reviewing report UI without camera, LiDAR, or a model.
-    private func openDemoReportIfRequested() {
-        guard !didOpenDemoReport,
-              ProcessInfo.processInfo.arguments.contains("-AnjuOpenDemoReport") else { return }
-        didOpenDemoReport = true
-        let context = AnjuAppContext.makeDefault(profiles: [], roomType: "entrance")
-        DemoIssueFactory.populateIfRequested(context: context, force: true)
-        let report = ReportViewController(context: context)
-        report.modalPresentationStyle = .fullScreen
-        present(report, animated: false)
-    }
-#endif
-
-    private func configureBaseView() {
+    private func configureWebView() {
         view.subviews.forEach { $0.removeFromSuperview() }
-        view.backgroundColor = AnjuTheme.sand
+        view.backgroundColor = .systemBackground
+        let contentController = WKUserContentController()
+        contentController.add(WeakScriptMessageHandler(target: self), name: Self.bridgeName)
+        let spatial = RoomCaptureSession.isSupported ? "true" : "false"
+        let bridgeScript = """
+        Object.defineProperty(window, '__ANJU_NATIVE__', {
+          value: Object.freeze({
+            bridge_version: 1,
+            capabilities: Object.freeze({photo_capture: true, live_scan: true, spatial_tracking: \(spatial)})
+          }),
+          configurable: false,
+          writable: false
+        });
+        """
+        contentController.addUserScript(WKUserScript(
+            source: bridgeScript,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        ))
 
-        contentStack.axis = .vertical
-        contentStack.spacing = 18
-        contentStack.alignment = .fill
-        contentStack.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.alwaysBounceVertical = true
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(scrollView)
-        scrollView.addSubview(contentStack)
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .default()
+        configuration.userContentController = contentController
+        configuration.allowsInlineMediaPlayback = true
+        webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.navigationDelegate = self
+        webView.uiDelegate = self
+        webView.allowsBackForwardNavigationGestures = true
+        webView.scrollView.contentInsetAdjustmentBehavior = .automatic
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(webView)
         NSLayoutConstraint.activate([
-            scrollView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
-            scrollView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
-            contentStack.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor, constant: 24),
-            contentStack.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor, constant: -24),
-            contentStack.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor, constant: 40),
-            contentStack.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor, constant: -40),
-            contentStack.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor, constant: -48)
+            webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            webView.topAnchor.constraint(equalTo: view.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
     }
 
-    private func resetContent() {
-        contentStack.arrangedSubviews.forEach {
-            contentStack.removeArrangedSubview($0)
-            $0.removeFromSuperview()
-        }
+    private func configureErrorView() {
+        errorView.backgroundColor = .systemBackground
+        errorView.translatesAutoresizingMaskIntoConstraints = false
+        errorView.isHidden = true
+        view.addSubview(errorView)
+
+        let icon = UIImageView(image: UIImage(systemName: "wifi.exclamationmark"))
+        icon.tintColor = .secondaryLabel
+        icon.preferredSymbolConfiguration = .init(pointSize: 42, weight: .regular)
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        errorView.addSubview(icon)
+
+        errorLabel.text = "无法打开安心家 AI\n请检查网络后重试"
+        errorLabel.numberOfLines = 0
+        errorLabel.textAlignment = .center
+        errorLabel.font = .preferredFont(forTextStyle: .title3)
+        errorLabel.adjustsFontForContentSizeCategory = true
+        errorLabel.translatesAutoresizingMaskIntoConstraints = false
+        errorView.addSubview(errorLabel)
+
+        let retry = UIButton(type: .system)
+        var configuration = UIButton.Configuration.filled()
+        configuration.title = "重试"
+        configuration.cornerStyle = .large
+        configuration.contentInsets = .init(top: 16, leading: 36, bottom: 16, trailing: 36)
+        retry.configuration = configuration
+        retry.accessibilityHint = "重新加载线上页面"
+        retry.addTarget(self, action: #selector(retryLoad), for: .touchUpInside)
+        retry.translatesAutoresizingMaskIntoConstraints = false
+        errorView.addSubview(retry)
+
+        NSLayoutConstraint.activate([
+            errorView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            errorView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            errorView.topAnchor.constraint(equalTo: view.topAnchor),
+            errorView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            icon.centerXAnchor.constraint(equalTo: errorView.centerXAnchor),
+            icon.bottomAnchor.constraint(equalTo: errorLabel.topAnchor, constant: -20),
+            errorLabel.centerXAnchor.constraint(equalTo: errorView.centerXAnchor),
+            errorLabel.centerYAnchor.constraint(equalTo: errorView.centerYAnchor),
+            errorLabel.leadingAnchor.constraint(greaterThanOrEqualTo: errorView.leadingAnchor, constant: 28),
+            errorLabel.trailingAnchor.constraint(lessThanOrEqualTo: errorView.trailingAnchor, constant: -28),
+            retry.topAnchor.constraint(equalTo: errorLabel.bottomAnchor, constant: 28),
+            retry.centerXAnchor.constraint(equalTo: errorView.centerXAnchor),
+            retry.heightAnchor.constraint(greaterThanOrEqualToConstant: 56)
+        ])
     }
 
-    private func showLanding() {
-        step = .landing
-        resetContent()
-        contentStack.addArrangedSubview(makeEyebrow(ProductCopy.appName))
-        contentStack.addArrangedSubview(makeTitle(ProductCopy.homeTitle))
-        contentStack.addArrangedSubview(makeSubtitle(ProductCopy.homeSubtitle))
-        contentStack.setCustomSpacing(42, after: contentStack.arrangedSubviews.last!)
-
-        let button = AnjuTheme.primaryButton(title: ProductCopy.startRoom)
-        button.accessibilityHint = "进入扫描区域选择"
-        button.addTarget(self, action: #selector(showPreparation), for: .touchUpInside)
-        contentStack.addArrangedSubview(button)
+    private func loadHome() {
+        var components = URLComponents(url: webBaseURL, resolvingAgainstBaseURL: false)
+        components?.fragment = "/home"
+        guard let url = components?.url else { return }
+        errorView.isHidden = true
+        webView.load(URLRequest(url: url, cachePolicy: .useProtocolCachePolicy, timeoutInterval: 30))
     }
 
-    @objc private func showPreparation() {
-        step = .prepare
-        resetContent()
-        contentStack.addArrangedSubview(makeTitle(ProductCopy.prepareTitle))
-        let roomControl = UISegmentedControl(items: roomOptions.map(\.title))
-        roomControl.selectedSegmentIndex = roomOptions.firstIndex { $0.value == selectedRoomType } ?? 0
-        roomControl.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
-        roomControl.accessibilityLabel = "扫描区域"
-        roomControl.addAction(UIAction { [weak self] action in
-            guard let self,
-                  let control = action.sender as? UISegmentedControl,
-                  self.roomOptions.indices.contains(control.selectedSegmentIndex) else { return }
-            self.selectedRoomType = self.roomOptions[control.selectedSegmentIndex].value
-        }, for: .valueChanged)
-        contentStack.addArrangedSubview(roomControl)
-
-        for tip in ProductCopy.fairPreparationTips {
-            let label = makeSubtitle("• \(tip)")
-            label.textColor = AnjuTheme.ink
-            contentStack.addArrangedSubview(label)
-        }
-        let voiceRow = UIStackView()
-        voiceRow.axis = .horizontal
-        voiceRow.alignment = .center
-        voiceRow.spacing = 12
-        let voiceLabel = makeSubtitle("朗读扫描提示")
-        voiceRow.addArrangedSubview(voiceLabel)
-        let voiceSwitch = UISwitch()
-        voiceSwitch.isOn = voiceGuidanceEnabled
-        voiceSwitch.accessibilityLabel = "朗读扫描提示"
-        voiceSwitch.addAction(UIAction { [weak self] action in
-            guard let control = action.sender as? UISwitch else { return }
-            self?.voiceGuidanceEnabled = control.isOn
-        }, for: .valueChanged)
-        voiceRow.addArrangedSubview(voiceSwitch)
-        contentStack.addArrangedSubview(voiceRow)
-        contentStack.setCustomSpacing(30, after: contentStack.arrangedSubviews.last!)
-        let button = AnjuTheme.primaryButton(title: ProductCopy.beginScan)
-        button.addTarget(self, action: #selector(beginScan), for: .touchUpInside)
-        contentStack.addArrangedSubview(button)
+    @objc private func retryLoad() {
+        loadHome()
     }
 
-    @objc private func beginScan() {
-        let authorization = AVCaptureDevice.authorizationStatus(for: .video)
-        switch authorization {
-        case .notDetermined:
-            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
-                DispatchQueue.main.async {
-                    granted ? self?.openScanner() : self?.showPermissionHelp()
-                }
-            }
-        case .authorized:
-            openScanner()
-        case .denied, .restricted:
-            showPermissionHelp()
-        @unknown default:
-            showPermissionHelp()
-        }
-    }
-
-    private func openScanner() {
-        let context = AnjuAppContext.makeDefault(profiles: [], roomType: selectedRoomType)
-        Settings.instance.BLVAssistance = voiceGuidanceEnabled
-        guard RoomCaptureSession.isSupported else {
-            showUnsupported(context: context)
+    private func handleBridgeMessage(_ message: WKScriptMessage) {
+        guard message.frameInfo.isMainFrame,
+              message.frameInfo.securityOrigin.protocol.lowercased() == "https",
+              message.frameInfo.securityOrigin.host.lowercased() == webBaseURL.host?.lowercased(),
+              JSONSerialization.isValidJSONObject(message.body),
+              let data = try? JSONSerialization.data(withJSONObject: message.body),
+              let request = try? JSONDecoder().decode(NativeCaptureRequest.self, from: data),
+              request.isValid else {
             return
         }
-        guard let scanner = storyboard?.instantiateViewController(withIdentifier: "MainView") as? ViewController else { return }
-        scanner.appContext = context
-        scanner.onNoAIAction = { [weak self, weak scanner] action in
+
+        if request.command == .cancelNativeCapture {
+            cancelActiveCapture(requestID: request.requestID)
+            return
+        }
+        guard activeRequest == nil else {
+            sendResult(.init(
+                requestID: request.requestID, status: "failed", roomID: request.roomID,
+                captureMode: request.command == .capturePhoto ? "photo" : "camera_2d",
+                uploadedMediaIDs: [], failedCount: 0, errorCode: "native_capture_busy"
+            ))
+            return
+        }
+        activeRequest = request
+        switch request.command {
+        case .capturePhoto:
+            startPhotoCapture(request)
+        case .startLiveScan:
+            startLiveScan(request)
+        case .cancelNativeCapture:
+            break
+        }
+    }
+
+    private func startPhotoCapture(_ request: NativeCaptureRequest) {
+        guard request.remainingSlots > 0, UIImagePickerController.isSourceTypeAvailable(.camera) else {
+            finishActiveRequest(.init(
+                requestID: request.requestID, status: "failed", roomID: request.roomID,
+                captureMode: "photo", uploadedMediaIDs: [], failedCount: 1, errorCode: "camera_unavailable"
+            ))
+            return
+        }
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.cameraCaptureMode = .photo
+        picker.delegate = self
+        picker.modalPresentationStyle = .fullScreen
+        present(picker, animated: true)
+    }
+
+    private func startLiveScan(_ request: NativeCaptureRequest) {
+        guard request.remainingSlots > 0,
+              let scanner = storyboard?.instantiateViewController(withIdentifier: "MainView") as? ViewController else {
+            finishActiveRequest(.init(
+                requestID: request.requestID, status: "failed", roomID: request.roomID,
+                captureMode: "camera_2d", uploadedMediaIDs: [], failedCount: 0, errorCode: "media_limit_reached"
+            ))
+            return
+        }
+        scanner.captureRequest = request
+        scanner.spatialMode = RoomCaptureSession.isSupported
+        scanner.onCaptureFinished = { [weak self, weak scanner] result in
             scanner?.dismiss(animated: true) {
-                switch action {
-                case .rescan: self?.showPreparation()
-                case .exit: self?.showLanding()
-                }
+                self?.finishActiveRequest(result)
             }
         }
+        activeScanner = scanner
         scanner.modalPresentationStyle = .fullScreen
         present(scanner, animated: true)
     }
 
-    private func showPermissionHelp() {
-        let alert = UIAlertController(
-            title: ProductCopy.cameraPermissionTitle,
-            message: ProductCopy.cameraPermissionMessage,
-            preferredStyle: .alert
-        )
-        alert.addAction(UIAlertAction(title: ProductCopy.cancel, style: .cancel))
-        alert.addAction(UIAlertAction(title: ProductCopy.openSettings, style: .default) { _ in
-            guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
-            UIApplication.shared.open(url)
-        })
-        present(alert, animated: true)
+    private func cancelActiveCapture(requestID: String) {
+        guard let request = activeRequest, request.requestID == requestID else { return }
+        activeScanner?.cancelFromBridge()
+        if presentedViewController is UIImagePickerController {
+            dismiss(animated: true)
+            finishActiveRequest(.init(
+                requestID: request.requestID, status: "cancelled", roomID: request.roomID,
+                captureMode: "photo", uploadedMediaIDs: [], failedCount: 0, errorCode: nil
+            ))
+        }
     }
 
-    private func showUnsupported(context: AnjuAppContext) {
-        let alert = UIAlertController(
-            title: ProductCopy.unsupportedTitle,
-            message: ProductCopy.unsupportedMessage,
-            preferredStyle: .alert
-        )
-        alert.addAction(UIAlertAction(title: ProductCopy.cancel, style: .cancel))
-        alert.addAction(UIAlertAction(title: ProductCopy.demoReport, style: .default) { [weak self] _ in
-            DemoIssueFactory.populateIfRequested(context: context, force: true)
-            let report = ReportViewController(context: context)
-            report.modalPresentationStyle = .fullScreen
-            self?.present(report, animated: true)
-        })
-        present(alert, animated: true)
+    private func finishActiveRequest(_ result: NativeCaptureResult) {
+        activeRequest = nil
+        activeScanner = nil
+        sendResult(result)
     }
 
-    private func makeEyebrow(_ text: String) -> UILabel {
-        let label = UILabel()
-        label.text = text
-        label.font = .preferredFont(forTextStyle: .headline)
-        label.adjustsFontForContentSizeCategory = true
-        label.textColor = AnjuTheme.teal
-        return label
+    private func sendResult(_ result: NativeCaptureResult) {
+        guard let data = try? JSONEncoder().encode(result),
+              let json = String(data: data, encoding: .utf8) else { return }
+        let script = "window.dispatchEvent(new CustomEvent('anju:native-capture-result',{detail:\(json)}));"
+        webView.evaluateJavaScript(script)
     }
 
-    private func makeTitle(_ text: String) -> UILabel {
-        let label = UILabel()
-        label.text = text
-        label.font = .preferredFont(forTextStyle: .largeTitle)
-        label.adjustsFontForContentSizeCategory = true
-        label.textColor = AnjuTheme.ink
-        label.numberOfLines = 0
-        return label
+    private func preparedJPEG(from image: UIImage) -> Data? {
+        let policy = NativeFrameSelectionPolicy.homeCamera
+        let longest = max(image.size.width, image.size.height)
+        let scale = min(1, CGFloat(policy.maximumImageEdge) / max(longest, 1))
+        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        let normalized = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: size))
+        }
+        return normalized.jpegData(compressionQuality: policy.jpegQuality)
+    }
+}
+
+extension OnboardViewController: WKScriptMessageHandler {
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == Self.bridgeName else { return }
+        handleBridgeMessage(message)
+    }
+}
+
+extension OnboardViewController: WKNavigationDelegate, WKUIDelegate {
+    @available(iOS 15.0, *)
+    func webView(
+        _ webView: WKWebView,
+        requestMediaCapturePermissionFor origin: WKSecurityOrigin,
+        initiatedByFrame frame: WKFrameInfo,
+        type: WKMediaCaptureType,
+        decisionHandler: @escaping (WKPermissionDecision) -> Void
+    ) {
+        guard frame.isMainFrame,
+              origin.protocol.lowercased() == "https",
+              origin.host.lowercased() == webBaseURL.host?.lowercased(),
+              type == .microphone else {
+            decisionHandler(.deny)
+            return
+        }
+        do {
+            let audioSession = AVAudioSession.sharedInstance()
+            try audioSession.setCategory(
+                .playAndRecord,
+                mode: .voiceChat,
+                options: [.defaultToSpeaker, .allowBluetooth]
+            )
+            try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
+            decisionHandler(.grant)
+        } catch {
+            decisionHandler(.deny)
+        }
     }
 
-    private func makeSubtitle(_ text: String) -> UILabel {
-        let label = UILabel()
-        label.text = text
-        label.font = .preferredFont(forTextStyle: .body)
-        label.adjustsFontForContentSizeCategory = true
-        label.textColor = AnjuTheme.ink.withAlphaComponent(0.72)
-        label.numberOfLines = 0
-        return label
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+    ) {
+        guard let url = navigationAction.request.url else {
+            decisionHandler(.cancel)
+            return
+        }
+        if url.scheme == "about" || (url.scheme == "https" && url.host?.lowercased() == webBaseURL.host?.lowercased()) {
+            decisionHandler(.allow)
+        } else {
+            decisionHandler(.cancel)
+            if ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
+                UIApplication.shared.open(url)
+            }
+        }
     }
 
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        errorView.isHidden = true
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        errorView.isHidden = false
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        errorView.isHidden = false
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        createWebViewWith configuration: WKWebViewConfiguration,
+        for navigationAction: WKNavigationAction,
+        windowFeatures: WKWindowFeatures
+    ) -> WKWebView? {
+        if let url = navigationAction.request.url { UIApplication.shared.open(url) }
+        return nil
+    }
+}
+
+extension OnboardViewController: UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+    func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+        guard let request = activeRequest else {
+            picker.dismiss(animated: true)
+            return
+        }
+        picker.dismiss(animated: true) { [weak self] in
+            self?.finishActiveRequest(.init(
+                requestID: request.requestID, status: "cancelled", roomID: request.roomID,
+                captureMode: "photo", uploadedMediaIDs: [], failedCount: 0, errorCode: nil
+            ))
+        }
+    }
+
+    func imagePickerController(
+        _ picker: UIImagePickerController,
+        didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
+    ) {
+        guard let request = activeRequest,
+              let image = info[.originalImage] as? UIImage,
+              let jpeg = preparedJPEG(from: image),
+              let client = RemoteAnalysisClient(baseURL: webBaseURL, request: request) else {
+            picker.dismiss(animated: true)
+            if let request = activeRequest {
+                finishActiveRequest(.init(
+                    requestID: request.requestID, status: "failed", roomID: request.roomID,
+                    captureMode: "photo", uploadedMediaIDs: [], failedCount: 1, errorCode: "photo_processing_failed"
+                ))
+            }
+            return
+        }
+        picker.dismiss(animated: true)
+        Task { [weak self] in
+            do {
+                let mediaID = try await client.upload(
+                    jpegData: jpeg, sourceKind: "photo", sourceID: nil,
+                    frameIndex: nil, capturedAtMilliseconds: Int(Date().timeIntervalSince1970 * 1000)
+                )
+                await MainActor.run {
+                    self?.finishActiveRequest(.init(
+                        requestID: request.requestID, status: "completed", roomID: request.roomID,
+                        captureMode: "photo", uploadedMediaIDs: [mediaID], failedCount: 0, errorCode: nil
+                    ))
+                }
+            } catch {
+                await MainActor.run {
+                    self?.finishActiveRequest(.init(
+                        requestID: request.requestID, status: "failed", roomID: request.roomID,
+                        captureMode: "photo", uploadedMediaIDs: [], failedCount: 1, errorCode: "photo_upload_failed"
+                    ))
+                }
+            }
+        }
+    }
 }

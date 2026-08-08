@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		2CBB090C4D2168CFC690BF79 /* libPods-RetroAccess App.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 3D71D734F8658A711BD01F33 /* libPods-RetroAccess App.a */; };
 		5E1656A3287CD8A2002577D3 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E1656A2287CD8A2002577D3 /* AppDelegate.swift */; };
 		5E1656A5287CD8A2002577D3 /* ViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E1656A4287CD8A2002577D3 /* ViewController.swift */; };
 		5E1656A7287CD8A2002577D3 /* Experience.rcproject in Sources */ = {isa = PBXBuildFile; fileRef = 5E1656A6287CD8A2002577D3 /* Experience.rcproject */; };
@@ -58,6 +59,7 @@
 		A1000000000000000000000E /* AnjuCore in Frameworks */ = {isa = PBXBuildFile; productRef = E10000000000000000000001 /* AnjuCore */; };
 		A1000000000000000000000F /* IssueMiniMapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000F /* IssueMiniMapView.swift */; };
 		A10000000000000000000010 /* FrameQualityService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000010 /* FrameQualityService.swift */; };
+		A10000000000000000000011 /* NativeAdvisorVoiceClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000011 /* NativeAdvisorVoiceClient.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -78,6 +80,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		3D71D734F8658A711BD01F33 /* libPods-RetroAccess App.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-RetroAccess App.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		5E16569F287CD8A2002577D3 /* RetroAccess App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "RetroAccess App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		5E1656A2287CD8A2002577D3 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		5E1656A4287CD8A2002577D3 /* ViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewController.swift; sourceTree = "<group>"; };
@@ -132,6 +135,9 @@
 		B1000000000000000000000D /* SafetyRules.zh-CN.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "SafetyRules.zh-CN.json"; sourceTree = "<group>"; };
 		B1000000000000000000000F /* IssueMiniMapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IssueMiniMapView.swift; sourceTree = "<group>"; };
 		B10000000000000000000010 /* FrameQualityService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameQualityService.swift; sourceTree = "<group>"; };
+		B10000000000000000000011 /* NativeAdvisorVoiceClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeAdvisorVoiceClient.swift; sourceTree = "<group>"; };
+		E0FFF934C3D6FEFF56F58216 /* Pods-RetroAccess App.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-RetroAccess App.release.xcconfig"; path = "Target Support Files/Pods-RetroAccess App/Pods-RetroAccess App.release.xcconfig"; sourceTree = "<group>"; };
+		EA3806AE0E0C9EE048181657 /* Pods-RetroAccess App.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-RetroAccess App.debug.xcconfig"; path = "Target Support Files/Pods-RetroAccess App/Pods-RetroAccess App.debug.xcconfig"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -141,6 +147,7 @@
 			files = (
 				A1000000000000000000000E /* AnjuCore in Frameworks */,
 				5E3FB27D28EEC34500281359 /* RoomPlan.framework in Frameworks */,
+				2CBB090C4D2168CFC690BF79 /* libPods-RetroAccess App.a in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -161,12 +168,23 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		40A85275BAE2178D015BC4F9 /* Pods */ = {
+			isa = PBXGroup;
+			children = (
+				EA3806AE0E0C9EE048181657 /* Pods-RetroAccess App.debug.xcconfig */,
+				E0FFF934C3D6FEFF56F58216 /* Pods-RetroAccess App.release.xcconfig */,
+			);
+			name = Pods;
+			path = Pods;
+			sourceTree = "<group>";
+		};
 		5E165696287CD8A2002577D3 = {
 			isa = PBXGroup;
 			children = (
 				5E1656A1287CD8A2002577D3 /* RASSAR App */,
 				5E1656A0287CD8A2002577D3 /* Products */,
 				5E3FB27B28EEC34500281359 /* Frameworks */,
+				40A85275BAE2178D015BC4F9 /* Pods */,
 			);
 			sourceTree = "<group>";
 		};
@@ -216,6 +234,7 @@
 			isa = PBXGroup;
 			children = (
 				5E3FB27C28EEC34500281359 /* RoomPlan.framework */,
+				3D71D734F8658A711BD01F33 /* libPods-RetroAccess App.a */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -289,6 +308,7 @@
 				B1000000000000000000000C /* LegacyIssueAdapter.swift */,
 				B1000000000000000000000F /* IssueMiniMapView.swift */,
 				B10000000000000000000010 /* FrameQualityService.swift */,
+				B10000000000000000000011 /* NativeAdvisorVoiceClient.swift */,
 			);
 			path = AnjuGuard;
 			sourceTree = "<group>";
@@ -308,9 +328,11 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 5E1656C8287CD8A4002577D3 /* Build configuration list for PBXNativeTarget "RetroAccess App" */;
 			buildPhases = (
+				C3CBDE3470E185FDC3716205 /* [CP] Check Pods Manifest.lock */,
 				5E16569B287CD8A2002577D3 /* Sources */,
 				5E16569C287CD8A2002577D3 /* Frameworks */,
 				5E16569D287CD8A2002577D3 /* Resources */,
+				6D00A4607AA4F50C3600B909 /* [CP] Embed Pods Frameworks */,
 			);
 			buildRules = (
 			);
@@ -394,7 +416,7 @@
 			);
 			mainGroup = 5E165696287CD8A2002577D3;
 			packageReferences = (
-				D10000000000000000000001 /* XCLocalSwiftPackageReference "Packages/AnjuCore" */,
+				D10000000000000000000001 /* XCLocalSwiftPackageReference "AnjuCore" */,
 			);
 			productRefGroup = 5E1656A0287CD8A2002577D3 /* Products */;
 			projectDirPath = "";
@@ -449,6 +471,48 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		6D00A4607AA4F50C3600B909 /* [CP] Embed Pods Frameworks */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-RetroAccess App/Pods-RetroAccess App-frameworks-${CONFIGURATION}-input-files.xcfilelist",
+			);
+			name = "[CP] Embed Pods Frameworks";
+			outputFileListPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-RetroAccess App/Pods-RetroAccess App-frameworks-${CONFIGURATION}-output-files.xcfilelist",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-RetroAccess App/Pods-RetroAccess App-frameworks.sh\"\n";
+			showEnvVarsInLog = 0;
+		};
+		C3CBDE3470E185FDC3716205 /* [CP] Check Pods Manifest.lock */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"${PODS_PODFILE_DIR_PATH}/Podfile.lock",
+				"${PODS_ROOT}/Manifest.lock",
+			);
+			name = "[CP] Check Pods Manifest.lock";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(DERIVED_FILE_DIR)/Pods-RetroAccess App-checkManifestLockResult.txt",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "diff \"${PODS_PODFILE_DIR_PATH}/Podfile.lock\" \"${PODS_ROOT}/Manifest.lock\" > /dev/null\nif [ $? != 0 ] ; then\n    # print error to STDERR\n    echo \"error: The sandbox is not in sync with the Podfile.lock. Run 'pod install' or update your CocoaPods installation.\" >&2\n    exit 1\nfi\n# This output is used by Xcode 'outputs' to avoid re-running this script phase.\necho \"SUCCESS\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n";
+			showEnvVarsInLog = 0;
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		5E16569B287CD8A2002577D3 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -467,6 +531,7 @@
 				A1000000000000000000000C /* LegacyIssueAdapter.swift in Sources */,
 				A1000000000000000000000F /* IssueMiniMapView.swift in Sources */,
 				A10000000000000000000010 /* FrameQualityService.swift in Sources */,
+				A10000000000000000000011 /* NativeAdvisorVoiceClient.swift in Sources */,
 				5E1656EA289B8E13002577D3 /* NotifyingEntity.swift in Sources */,
 				5E16572928AC62CE002577D3 /* RoomObjectClasses.swift in Sources */,
 				5EC420282974BD45004F4E88 /* MiniMapLayer.swift in Sources */,
@@ -653,6 +718,7 @@
 		};
 		5E1656C9287CD8A4002577D3 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = EA3806AE0E0C9EE048181657 /* Pods-RetroAccess App.debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -661,10 +727,11 @@
 				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = SVRNMKJ8X4;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_AnjuWebBaseURL = "https://shot.socialdog.cn";
 				INFOPLIST_KEY_CFBundleDisplayName = "长者友好家";
-				INFOPLIST_KEY_AnjuAnalysisBaseURL = "https://shotapi.socialdog.cn";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
-				INFOPLIST_KEY_NSCameraUsageDescription = "打开相机，才能在游园会现场进行分区安全辅助筛查。";
+				INFOPLIST_KEY_NSCameraUsageDescription = "打开相机，才能拍摄房间照片或进行家庭安全实时扫描。";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "打开麦克风，才能与 AI 适老顾问实时对话。";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UIMainStoryboardFile = Main;
@@ -690,6 +757,7 @@
 		};
 		5E1656CA287CD8A4002577D3 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = E0FFF934C3D6FEFF56F58216 /* Pods-RetroAccess App.release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -698,10 +766,11 @@
 				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = SVRNMKJ8X4;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_AnjuWebBaseURL = "https://shot.socialdog.cn";
 				INFOPLIST_KEY_CFBundleDisplayName = "长者友好家";
-				INFOPLIST_KEY_AnjuAnalysisBaseURL = "https://shotapi.socialdog.cn";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
-				INFOPLIST_KEY_NSCameraUsageDescription = "打开相机，才能在游园会现场进行分区安全辅助筛查。";
+				INFOPLIST_KEY_NSCameraUsageDescription = "打开相机，才能拍摄房间照片或进行家庭安全实时扫描。";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "打开麦克风，才能与 AI 适老顾问实时对话。";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UIMainStoryboardFile = Main;
@@ -843,7 +912,7 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		D10000000000000000000001 /* XCLocalSwiftPackageReference "Packages/AnjuCore" */ = {
+		D10000000000000000000001 /* XCLocalSwiftPackageReference "AnjuCore" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/AnjuCore;
 		};
@@ -852,7 +921,7 @@
 /* Begin XCSwiftPackageProductDependency section */
 		E10000000000000000000001 /* AnjuCore */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = D10000000000000000000001 /* XCLocalSwiftPackageReference "Packages/AnjuCore" */;
+			package = D10000000000000000000001 /* XCLocalSwiftPackageReference "AnjuCore" */;
 			productName = AnjuCore;
 		};
 /* End XCSwiftPackageProductDependency section */

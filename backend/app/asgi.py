@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import asyncio
 from pathlib import Path
 import json
 import logging
@@ -9,7 +10,7 @@ import os
 from typing import Any, AsyncIterator, Optional, TypeVar
 import uuid
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -18,7 +19,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .assessment_service import AssessmentError, AssessmentService
 from .environment import load_environment
-from .providers import ProviderError, VisionProvider
+from .providers import ProviderError, VisionProvider, VolcengineVoiceProvider
 from .repositories import SQLiteRepository
 from .service import SessionService, demo_analysis, empty_analysis
 
@@ -31,7 +32,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_STATIC_ROOT = PROJECT_ROOT / "frontend" / "dist"
 MAX_BODY_BYTES = 6 * 1024 * 1024
-STRICT_CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; font-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+STRICT_CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self' https://*.volcengine.com wss://*.volcengine.com https://*.volces.com wss://*.volces.com; font-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
 
 ERROR_MESSAGES = {
     "assessment_access_denied": "没有找到这次检查或访问已失效",
@@ -46,10 +47,39 @@ ERROR_MESSAGES = {
     "camera_request_in_progress": "上一张画面仍在检查，请稍候",
     "camera_not_enabled": "实时相机功能暂未开放",
     "video_not_enabled": "视频检查功能暂未开放",
-    "fair_ar_not_enabled": "游园会 AR 功能暂未开放",
-    "fair_scan_access_denied": "没有找到本次游园会扫描或访问已失效",
-    "invalid_fair_frame": "游园会画面信息不完整，请重试",
-    "invalid_fair_zone": "请选择正确的游园会区域",
+    "ios_home_camera_not_enabled": "iPhone 实时相机功能暂未开放",
+    "camera_session_not_found": "本次实时扫描已结束，请重新进入相机",
+    "invalid_camera_session": "扫描结果与当前房间不匹配",
+    "camera_suggestion_not_found": "没有找到这条扫描提示",
+    "camera_inspection_expired": "这张画面已过期，请停稳后重新拍摄",
+    "rtc_tool_schema_invalid": "实时顾问没有返回可用的扫描提示",
+    "rtc_callback_denied": "实时顾问回调校验失败",
+    "rtc_callback_invalid": "实时顾问回调内容不完整",
+    "advisor_session_not_found": "本次顾问对话已结束，请重新进入",
+    "advisor_message_invalid": "请输入需要咨询的问题",
+    "advisor_confirmation_not_found": "这项确认已处理或已失效",
+    "advisor_tool_not_allowed": "这项操作不能由顾问直接执行",
+    "advisor_room_in_use": "这个房间正在另一台设备上使用，请稍后再试",
+    "advisor_queue_required": "AI 顾问体验人数较多，正在排队，请稍候。",
+    "advisor_queue_expired": "本次排队已失效，请重新排队",
+    "advisor_capacity_busy": "当前体验人数较多，请稍后重试",
+    "renovation_preview_not_enabled": "改造效果预览暂未开放",
+    "renovation_source_not_found": "没有找到这张原始照片",
+    "renovation_source_not_usable": "这张照片不适合生成改造效果，请换一张清晰照片",
+    "renovation_no_selected_solutions": "请先为这个房间选择改造方案",
+    "renovation_no_visualizable_actions": "当前已选方案不适合生成图片效果",
+    "renovation_preview_in_progress": "这个房间已有一张效果图正在生成",
+    "renovation_preview_daily_limit": "今天的生成次数已用完，请稍后再试",
+    "renovation_preview_not_found": "没有找到这张改造效果图",
+    "renovation_preview_not_ready": "改造效果图还没有生成完成",
+    "renovation_preview_stale": "改造方案已更新，请重新生成效果图",
+    "renovation_preview_interrupted": "服务重启中断了生成，请重新尝试",
+    "renovation_preview_start_failed": "暂时无法开始生成，请稍后重试",
+    "renovation_preview_timeout": "效果图生成时间较长，请稍后重试",
+    "renovation_preview_capacity_busy": "当前生成任务较多，请稍后再试",
+    "renovation_preview_refusal": "这张照片暂时无法生成改造效果",
+    "renovation_preview_invalid_response": "模型没有返回可用的效果图，请重新尝试",
+    "renovation_preview_failed": "效果图没有生成完成，请重新尝试",
     "too_many_images": "每个房间最多上传 6 张照片",
     "no_usable_media": "至少需要一张可以看清的照片",
     "provider_not_configured": "分析服务尚未配置",
@@ -101,6 +131,10 @@ class SolutionUpdate(DTO):
     solution_package_id: str
 
 
+class RenovationPreviewCreate(DTO):
+    source_media_id: str = Field(min_length=1, max_length=80)
+
+
 class AnalyticsCreate(DTO):
     event_name: str
     room_id: Optional[str] = None
@@ -111,6 +145,55 @@ class CameraFrameContext(DTO):
     frame_id: str
     room_type: str
     previous_summary: list[str] = Field(default_factory=list, max_length=5)
+
+
+class RoomCameraFrameContext(DTO):
+    frame_id: str = Field(min_length=1, max_length=80)
+    source_kind: str = "h5_camera_frame"
+    orientation: str = "up"
+    previous_summary: list[str] = Field(default_factory=list, max_length=5)
+    camera_session_id: Optional[str] = Field(default=None, min_length=1, max_length=80)
+
+
+class CameraSessionComplete(DTO):
+    media_ids: list[str] = Field(default_factory=list, max_length=6)
+
+
+class CameraInspectionPrepare(DTO):
+    frame_id: str = Field(min_length=1, max_length=80)
+    captured_at_ms: int = Field(gt=0)
+    width: int = Field(ge=1, le=1920)
+    height: int = Field(ge=1, le=1920)
+    orientation: str
+    perceptual_hash: str = Field(default="", max_length=128)
+    quality: dict[str, float] = Field(default_factory=dict)
+
+
+class AdvisorSessionCreate(DTO):
+    camera_session_id: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    context_refs: dict[str, str] = Field(default_factory=dict)
+
+
+class AdvisorRTCQueueCreate(DTO):
+    client_instance_id: str = Field(min_length=1, max_length=80)
+    mode: str
+
+
+class AdvisorMessageCreate(DTO):
+    text: str = Field(min_length=1, max_length=500)
+    context_refs: dict[str, str] = Field(default_factory=dict)
+    requested_action: Optional[dict[str, Any]] = None
+
+
+class AdvisorTranscriptCreate(DTO):
+    role: str
+    text: str = Field(min_length=1, max_length=500)
+    provider_event_id: str = Field(min_length=1, max_length=120)
+    context_refs: dict[str, str] = Field(default_factory=dict)
+
+
+class AdvisorConfirmationDecision(DTO):
+    approved: bool
 
 
 ModelT = TypeVar("ModelT", bound=DTO)
@@ -203,12 +286,6 @@ def _authorize(request: Request, assessment_id: str) -> None:
     _service(request).authorize(assessment_id, token)
 
 
-def _authorize_fair(request: Request, scan_id: str) -> None:
-    header = request.headers.get("authorization", "")
-    token = header[7:].strip() if header.startswith("Bearer ") else ""
-    _service(request).authorize_fair_scan(scan_id, token)
-
-
 def create_app(
     *,
     assessment_service: AssessmentService | None = None,
@@ -247,7 +324,13 @@ def create_app(
     @application.middleware("http")
     async def security_headers(request: Request, call_next):
         request.state.request_id = uuid.uuid4().hex
-        response = await call_next(request)
+        if request.url.path == "/api/v2/fair-scans" or request.url.path.startswith("/api/v2/fair-scans/"):
+            response = JSONResponse(
+                {"code": "not_found", "message": "请求的功能不存在", "request_id": request.state.request_id},
+                status_code=404,
+            )
+        else:
+            response = await call_next(request)
         response.headers["X-Request-ID"] = request.state.request_id
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
@@ -292,7 +375,10 @@ def create_app(
             "capabilities": {
                 "h5_video": os.environ.get("ANJU_ENABLE_H5_VIDEO", "0") == "1",
                 "h5_camera": os.environ.get("ANJU_ENABLE_H5_CAMERA", "0") == "1",
-                "ios_fair_ar": os.environ.get("ANJU_ENABLE_IOS_FAIR_AR", "0") == "1",
+                "ios_home_camera": os.environ.get("ANJU_ENABLE_IOS_HOME_CAMERA", "0") == "1",
+                "voice_advisor": VolcengineVoiceProvider.configured(),
+                "rtc_video_advisor": VolcengineVoiceProvider.video_healthy(),
+                "renovation_preview": os.environ.get("ANJU_ENABLE_RENOVATION_PREVIEW", "0") == "1",
             },
         }
 
@@ -352,39 +438,6 @@ def create_app(
     async def create_assessment(request: Request) -> dict[str, Any]:
         payload = await _read_model(request, AssessmentCreate)
         return _service(request).create_assessment(payload.model_dump())
-
-    @application.post("/api/v2/fair-scans", status_code=201)
-    def create_fair_scan(request: Request) -> dict[str, Any]:
-        return _service(request).create_fair_scan()
-
-    @application.post("/api/v2/fair-scans/{scan_id}/zones/{zone_id}/frames%3Aanalyze", include_in_schema=False)
-    @application.post("/api/v2/fair-scans/{scan_id}/zones/{zone_id}/frames:analyze")
-    @application.post("/api/v2/fair-scans/{scan_id}/zones/{zone_id}/frames%3Aturbo", include_in_schema=False)
-    @application.post("/api/v2/fair-scans/{scan_id}/zones/{zone_id}/frames:turbo", include_in_schema=False)
-    async def analyze_fair_frame(scan_id: str, zone_id: str, request: Request) -> dict[str, Any]:
-        _authorize_fair(request, scan_id)
-        mime_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-        frame_id = request.headers.get("x-frame-id", "")
-        orientation = request.headers.get("x-model-image-orientation", "right")
-        body = await _read_limited_body(request)
-        return await run_in_threadpool(
-            _service(request).analyze_fair_frame,
-            scan_id, zone_id, frame_id, body, mime_type,
-            _integer_header(request, "x-image-width"), _integer_header(request, "x-image-height"), orientation,
-        )
-
-    @application.post("/api/v2/fair-scans/{scan_id}/zones/{zone_id}%3Afinalize", include_in_schema=False)
-    @application.post("/api/v2/fair-scans/{scan_id}/zones/{zone_id}:finalize")
-    @application.post("/api/v2/fair-scans/{scan_id}/zones/{zone_id}%3Areview", include_in_schema=False)
-    @application.post("/api/v2/fair-scans/{scan_id}/zones/{zone_id}:review", include_in_schema=False)
-    async def review_fair_zone(scan_id: str, zone_id: str, request: Request) -> dict[str, Any]:
-        _authorize_fair(request, scan_id)
-        return await run_in_threadpool(_service(request).finalize_fair_zone, scan_id, zone_id)
-
-    @application.get("/api/v2/fair-scans/{scan_id}/report")
-    def fair_report(scan_id: str, request: Request) -> dict[str, Any]:
-        _authorize_fair(request, scan_id)
-        return _service(request).fair_report(scan_id)
 
     @application.get("/api/v2/assessments/{assessment_id}")
     def get_assessment(assessment_id: str, request: Request) -> dict[str, Any]:
@@ -464,6 +517,48 @@ def create_app(
             assessment_id, body, mime_type, width, height, context.model_dump(),
         )
 
+    @application.post("/api/v2/assessments/{assessment_id}/rooms/{room_id}/camera/frames:inspect")
+    async def inspect_room_camera_frame(assessment_id: str, room_id: str, request: Request) -> dict[str, Any]:
+        _authorize(request, assessment_id)
+        mime_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        width = _integer_header(request, "x-image-width")
+        height = _integer_header(request, "x-image-height")
+        context_header = request.headers.get("x-camera-context", "")
+        try:
+            context = RoomCameraFrameContext.model_validate_json(context_header)
+        except (ValidationError, ValueError) as error:
+            raise AssessmentError("invalid_camera_frame") from error
+        body = await _read_limited_body(request)
+        return await run_in_threadpool(
+            _service(request).inspect_room_camera_frame,
+            assessment_id, room_id, body, mime_type, width, height, context.model_dump(),
+        )
+
+    @application.post("/api/v2/assessments/{assessment_id}/rooms/{room_id}/camera/sessions", status_code=201)
+    def create_camera_session(assessment_id: str, room_id: str, request: Request) -> dict[str, Any]:
+        _authorize(request, assessment_id)
+        return _service(request).advisor.create_camera_session(assessment_id, room_id)
+
+    @application.post("/api/v2/assessments/{assessment_id}/rooms/{room_id}/camera/sessions/{camera_session_id}:complete")
+    async def complete_camera_session(
+        assessment_id: str, room_id: str, camera_session_id: str, request: Request,
+    ) -> dict[str, Any]:
+        _authorize(request, assessment_id)
+        payload = await _read_model(request, CameraSessionComplete)
+        return _service(request).advisor.complete_camera_session(
+            assessment_id, room_id, camera_session_id, payload.media_ids,
+        )
+
+    @application.post("/api/v2/assessments/{assessment_id}/rooms/{room_id}/camera/sessions/{camera_session_id}/frames:prepare-inspection")
+    async def prepare_camera_inspection(
+        assessment_id: str, room_id: str, camera_session_id: str, request: Request,
+    ) -> dict[str, Any]:
+        _authorize(request, assessment_id)
+        payload = await _read_model(request, CameraInspectionPrepare)
+        return _service(request).advisor.prepare_camera_inspection(
+            assessment_id, room_id, camera_session_id, payload.model_dump(),
+        )
+
     @application.post("/api/v2/assessments/{assessment_id}/rooms/{room_id}:analyze", status_code=202)
     def start_analysis(assessment_id: str, room_id: str, request: Request) -> dict[str, Any]:
         _authorize(request, assessment_id)
@@ -478,6 +573,223 @@ def create_app(
     def room_result(assessment_id: str, room_id: str, request: Request) -> dict[str, Any]:
         _authorize(request, assessment_id)
         return _service(request).room_result(assessment_id, room_id)
+
+    @application.post("/api/v2/assessments/{assessment_id}/rooms/{room_id}/advisor/sessions", status_code=201)
+    async def create_advisor_session(assessment_id: str, room_id: str, request: Request) -> dict[str, Any]:
+        _authorize(request, assessment_id)
+        payload = await _read_model(request, AdvisorSessionCreate)
+        return await run_in_threadpool(
+            _service(request).advisor.create_session,
+            assessment_id, room_id, payload.camera_session_id, payload.context_refs,
+        )
+
+    @application.get("/api/v2/assessments/{assessment_id}/rooms/{room_id}/advisor/sessions/{session_id}/turns")
+    def advisor_turns(assessment_id: str, room_id: str, session_id: str, request: Request) -> dict[str, Any]:
+        _authorize(request, assessment_id)
+        return _service(request).advisor.list_turns(assessment_id, room_id, session_id)
+
+    @application.post("/api/v2/assessments/{assessment_id}/rooms/{room_id}/advisor/sessions/{session_id}/rtc-queue", status_code=201)
+    async def join_advisor_rtc_queue(
+        assessment_id: str, room_id: str, session_id: str, request: Request,
+    ) -> dict[str, Any]:
+        _authorize(request, assessment_id)
+        payload = await _read_model(request, AdvisorRTCQueueCreate)
+        return _service(request).advisor.enqueue_rtc(
+            assessment_id, room_id, session_id, payload.client_instance_id, payload.mode,
+        )
+
+    @application.get("/api/v2/assessments/{assessment_id}/rooms/{room_id}/advisor/sessions/{session_id}/rtc-queue/{ticket_id}")
+    def advisor_rtc_queue_status(
+        assessment_id: str, room_id: str, session_id: str, ticket_id: str, request: Request,
+    ) -> dict[str, Any]:
+        _authorize(request, assessment_id)
+        return _service(request).advisor.rtc_queue_status(
+            assessment_id, room_id, session_id, ticket_id,
+            request.headers.get("X-Advisor-Client-ID", ""),
+        )
+
+    @application.post("/api/v2/assessments/{assessment_id}/rooms/{room_id}/advisor/sessions/{session_id}/rtc-queue/{ticket_id}/heartbeat")
+    def heartbeat_advisor_rtc_queue(
+        assessment_id: str, room_id: str, session_id: str, ticket_id: str, request: Request,
+    ) -> dict[str, Any]:
+        _authorize(request, assessment_id)
+        return _service(request).advisor.heartbeat_rtc_queue(
+            assessment_id, room_id, session_id, ticket_id,
+            request.headers.get("X-Advisor-Client-ID", ""),
+        )
+
+    @application.delete(
+        "/api/v2/assessments/{assessment_id}/rooms/{room_id}/advisor/sessions/{session_id}/rtc-queue/{ticket_id}",
+        status_code=204,
+    )
+    def cancel_advisor_rtc_queue(
+        assessment_id: str, room_id: str, session_id: str, ticket_id: str, request: Request,
+    ) -> Response:
+        _authorize(request, assessment_id)
+        _service(request).advisor.cancel_rtc_queue(
+            assessment_id, room_id, session_id, ticket_id,
+            request.headers.get("X-Advisor-Client-ID", ""),
+        )
+        return Response(status_code=204)
+
+    @application.post("/api/v2/assessments/{assessment_id}/rooms/{room_id}/advisor/sessions/{session_id}/voice")
+    def start_advisor_voice(
+        assessment_id: str, room_id: str, session_id: str, request: Request,
+    ) -> dict[str, Any]:
+        _authorize(request, assessment_id)
+        return _service(request).advisor.start_voice(
+            assessment_id, room_id, session_id,
+            request.headers.get("X-Advisor-Client-ID"),
+            request.headers.get("X-Advisor-Queue-Ticket"),
+        )
+
+    @application.post("/api/v2/assessments/{assessment_id}/rooms/{room_id}/advisor/sessions/{session_id}/realtime")
+    def start_advisor_realtime(
+        assessment_id: str, room_id: str, session_id: str, request: Request,
+    ) -> dict[str, Any]:
+        _authorize(request, assessment_id)
+        return _service(request).advisor.start_realtime(
+            assessment_id, room_id, session_id,
+            request.headers.get("X-Advisor-Client-ID"),
+            request.headers.get("X-Advisor-Queue-Ticket"),
+        )
+
+    @application.post("/api/internal/rtc/function-calls")
+    async def rtc_function_calls(request: Request) -> dict[str, Any]:
+        payload = await _read_json(request)
+        if not isinstance(payload, dict):
+            raise AssessmentError("rtc_callback_invalid")
+        return await run_in_threadpool(_service(request).advisor.handle_function_callback, payload)
+
+    @application.post("/api/v2/assessments/{assessment_id}/rooms/{room_id}/advisor/sessions/{session_id}/messages")
+    async def advisor_message(
+        assessment_id: str, room_id: str, session_id: str, request: Request,
+    ) -> dict[str, Any]:
+        _authorize(request, assessment_id)
+        payload = await _read_model(request, AdvisorMessageCreate)
+        return _service(request).advisor.add_message(
+            assessment_id, room_id, session_id, payload.text, payload.context_refs, payload.requested_action,
+        )
+
+    @application.post("/api/v2/assessments/{assessment_id}/rooms/{room_id}/advisor/sessions/{session_id}/transcripts")
+    async def advisor_transcript(
+        assessment_id: str, room_id: str, session_id: str, request: Request,
+    ) -> dict[str, Any]:
+        _authorize(request, assessment_id)
+        payload = await _read_model(request, AdvisorTranscriptCreate)
+        return _service(request).advisor.add_transcript(
+            assessment_id, room_id, session_id, payload.role, payload.text,
+            payload.provider_event_id, payload.context_refs,
+        )
+
+    @application.post("/api/v2/assessments/{assessment_id}/rooms/{room_id}/advisor/sessions/{session_id}/confirmations/{confirmation_id}")
+    async def advisor_confirmation(
+        assessment_id: str, room_id: str, session_id: str, confirmation_id: str, request: Request,
+    ) -> dict[str, Any]:
+        _authorize(request, assessment_id)
+        payload = await _read_model(request, AdvisorConfirmationDecision)
+        return _service(request).advisor.decide_confirmation(
+            assessment_id, room_id, session_id, confirmation_id, payload.approved,
+        )
+
+    @application.delete("/api/v2/assessments/{assessment_id}/rooms/{room_id}/advisor/sessions/{session_id}", status_code=204)
+    def end_advisor_session(
+        assessment_id: str, room_id: str, session_id: str, request: Request,
+    ) -> Response:
+        _authorize(request, assessment_id)
+        _service(request).advisor.end_session(assessment_id, room_id, session_id)
+        return Response(status_code=204)
+
+    @application.websocket("/api/v2/assessments/{assessment_id}/rooms/{room_id}/advisor/sessions/{session_id}/events")
+    async def advisor_events(
+        websocket: WebSocket, assessment_id: str, room_id: str, session_id: str,
+    ) -> None:
+        token = websocket.query_params.get("token", "")
+        service = websocket.app.state.v2_service
+        accepted = await run_in_threadpool(
+            service.advisor.consume_event_token, assessment_id, room_id, session_id, token,
+        )
+        if not accepted:
+            await websocket.close(code=4401)
+            return
+        await websocket.accept()
+        known = {
+            item["turn_id"] for item in await run_in_threadpool(
+                service.advisor._room_turns, assessment_id, room_id,
+            )
+        }
+        advisor_session = await run_in_threadpool(
+            service.advisor._owned_session, assessment_id, room_id, session_id,
+        )
+        camera = await run_in_threadpool(service.advisor._camera_context, advisor_session)
+        camera_session_id = camera.get("camera_session_id")
+        known_suggestions = {item.get("suggestion_id") for item in camera.get("suggestions", [])}
+        known_frames: dict[str, str] = {}
+        await websocket.send_json({"type": "ready", "session_id": session_id})
+        try:
+            while True:
+                await asyncio.sleep(1)
+                turns = await run_in_threadpool(service.advisor._room_turns, assessment_id, room_id)
+                for turn in turns:
+                    if turn["turn_id"] not in known:
+                        known.add(turn["turn_id"])
+                        await websocket.send_json({"type": "turn", "turn": turn})
+                context = await run_in_threadpool(service.advisor._camera_context, advisor_session)
+                for suggestion in context.get("suggestions", []):
+                    suggestion_id = suggestion.get("suggestion_id")
+                    if suggestion_id and suggestion_id not in known_suggestions:
+                        known_suggestions.add(suggestion_id)
+                        await websocket.send_json({
+                            "type": "camera_suggestion_added",
+                            "inspection_id": suggestion.get("inspection_id"),
+                            "frame_id": suggestion.get("frame_id"),
+                            "suggestion": suggestion,
+                        })
+                if camera_session_id:
+                    frames = await run_in_threadpool(
+                        service.repository.fetchall,
+                        "SELECT id,inspection_id,status,updated_at FROM camera_session_frames WHERE camera_session_id=? ORDER BY created_at",
+                        (camera_session_id,),
+                    )
+                    for frame in frames:
+                        if known_frames.get(frame["inspection_id"]) != frame["status"]:
+                            known_frames[frame["inspection_id"]] = frame["status"]
+                            await websocket.send_json({
+                                "type": "inspection_state", "inspection_id": frame["inspection_id"],
+                                "frame_id": frame["id"], "status": frame["status"],
+                            })
+                await websocket.send_json({"type": "heartbeat"})
+        except (WebSocketDisconnect, RuntimeError):
+            return
+
+    @application.get("/api/v2/assessments/{assessment_id}/rooms/{room_id}/renovation-preview-context")
+    def renovation_preview_context(assessment_id: str, room_id: str, request: Request) -> dict[str, Any]:
+        _authorize(request, assessment_id)
+        return _service(request).renovation_preview_context(assessment_id, room_id)
+
+    @application.post("/api/v2/assessments/{assessment_id}/rooms/{room_id}/renovation-previews", status_code=201)
+    async def create_renovation_preview(assessment_id: str, room_id: str, request: Request) -> dict[str, Any]:
+        _authorize(request, assessment_id)
+        payload = await _read_model(request, RenovationPreviewCreate)
+        return _service(request).create_renovation_preview(assessment_id, room_id, payload.source_media_id)
+
+    @application.get("/api/v2/assessments/{assessment_id}/rooms/{room_id}/renovation-previews/{preview_id}")
+    def renovation_preview(assessment_id: str, room_id: str, preview_id: str, request: Request) -> dict[str, Any]:
+        _authorize(request, assessment_id)
+        return _service(request).renovation_preview(assessment_id, room_id, preview_id)
+
+    @application.put("/api/v2/assessments/{assessment_id}/rooms/{room_id}/renovation-previews/{preview_id}:select")
+    def select_renovation_preview(assessment_id: str, room_id: str, preview_id: str, request: Request) -> dict[str, Any]:
+        _authorize(request, assessment_id)
+        return _service(request).select_renovation_preview(assessment_id, room_id, preview_id)
+
+    @application.get("/api/v2/assessments/{assessment_id}/rooms/{room_id}/renovation-previews/{preview_id}/content")
+    def renovation_preview_content(assessment_id: str, room_id: str, preview_id: str, request: Request) -> Response:
+        _authorize(request, assessment_id)
+        path, mime_type = _service(request).renovation_preview_content(assessment_id, room_id, preview_id)
+        response = FileResponse(path, media_type=mime_type)
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @application.post("/api/v2/assessments/{assessment_id}/risks/{risk_id}/feedback")
     async def feedback(assessment_id: str, risk_id: str, request: Request) -> dict[str, Any]:
@@ -526,6 +838,13 @@ def create_app(
     @application.get("/api/v2/shared-reports/{token}")
     def shared_report(token: str, request: Request) -> dict[str, Any]:
         return _service(request).shared_report(token)
+
+    @application.get("/api/v2/shared-reports/{token}/renovation-previews/{preview_id}/{kind}")
+    def shared_renovation_preview_content(token: str, preview_id: str, kind: str, request: Request) -> Response:
+        path, mime_type = _service(request).shared_renovation_preview_content(token, preview_id, kind)
+        response = FileResponse(path, media_type=mime_type)
+        response.headers["Cache-Control"] = "private, max-age=300"
+        return response
 
     @application.post("/api/v2/assessments/{assessment_id}/analytics/events", status_code=202)
     async def analytics(assessment_id: str, request: Request) -> dict[str, bool]:

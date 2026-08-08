@@ -2,12 +2,11 @@ import AnjuCore
 import UIKit
 
 enum ProductCopy {
-    static let appName = "长者友好家"
-    static let homeTitle = "IPhone AR体验"
-    static let homeSubtitle = "用 iPhone 分区扫描和空间定位，找出值得现场确认的通行风险"
+    static let appName = "安心家 AI"
+    static let homeTitle = "家庭安全检查"
+    static let homeSubtitle = "网页负责完整检查流程，iPhone 在需要时提供拍照和实时扫描。"
     static let startRoom = "开启扫描"
     static let prepareTitle = "先选择扫描区域"
-    static let fairPreparationTips = ["握稳手机，慢慢移动", "让地面和人员动线保持在画面中", "需要网络完成 AI 识别与报告汇总"]
     static let bedroom = "卧室"
     static let livingRoom = "客厅"
     static let bathroom = "卫生间"
@@ -15,9 +14,50 @@ enum ProductCopy {
     static let beginScan = "开始扫描这个区域"
     static let scanning = "辅助筛查现场"
     static let scanMore = "再看看地面和人员通道"
-    static let finishScan = "结束扫描"
+    static let finishScan = "结束扫描并分析"
+    static let finishScanHint = "停止采集并上传代表帧，随后由网页自动开始正式分析"
+    static let homeCameraScanning = "AI 适老顾问：请缓慢移动，尽量拍到地面和通道"
+    static let spatialCameraMode = "空间定位模式：扫描期间可显示临时锚点"
+    static let camera2DModeWarning = "当前设备暂不支持空间定位功能"
+    static let temporarySuggestionEmpty = "实时建议仅供扫描时参考，不计入评分"
+    static let pauseScan = "暂停扫描"
+    static let resumeScan = "继续扫描"
+    static let scanPaused = "扫描已暂停"
+    static let cancelScan = "取消"
+    static let representativeFrameLimitReached = "已收集足够的代表帧，可结束扫描"
+    static let frameSaveFailed = "这一帧未能保存，请继续缓慢移动"
+    static let uploadingRepresentativeFrames = "正在上传代表帧……"
+    static let advisorTitle = "AI 适老顾问"
+    static let advisorDefaultSubtitle = "可随时问我“这个地方可能有什么问题”"
+    static let advisorInputPlaceholder = "输入扫描中的问题"
+    static let advisorSend = "发送"
+    static let advisorOpen = "展开顾问"
+    static let advisorClose = "收起顾问"
+    static let advisorConnecting = "正在连接语音顾问……"
+    static let advisorListening = "正在听，你可以开始说话"
+    static let advisorThinking = "正在理解你的问题"
+    static let depthContextBusy = "正在处理前一处画面，请继续缓慢扫描"
+    static let rtcVideoThermalDegraded = "设备温度较高，已降低实时画质"
+    static let advisorSpeaking = "顾问正在回答，点击麦克风可打断"
+    static let advisorReconnecting = "语音连接中断，正在恢复"
+    static let advisorVoiceUnavailable = "语音暂不可用，可以继续文字咨询"
+    static let advisorMicrophoneDenied = "没有麦克风权限，可以继续文字咨询"
+    static let advisorMessageFailed = "这次没有回答成功，请稍后再试"
+    static let advisorSuggestionHint = "选中后，可以用“这个地方”向顾问追问"
+    static func advisorSelected(_ title: String) -> String { "已选中“\(title)”，可以继续追问" }
+    static func advisorTemporarySuggestion(_ title: String, advice: String) -> String {
+        "可能存在“\(title)”，\(advice)"
+    }
+    static let moveCloser = "再靠近一点看看墙边"
+    static let moveAway = "稍微退后一点"
+    static let slowDown = "慢一点，画面会更清楚"
+    static let turnOnLight = "打开灯后再看看这里"
+    static let scanCorner = "把墙角也放进画面里"
+    static func savedRepresentativeFrames(_ count: Int, limit: Int) -> String {
+        "已保存代表帧 \(count)/\(limit)"
+    }
     static let finishingScan = "正在汇总扫描结果"
-    static let reportTitle = "游园会现场辅助筛查结果"
+    static let reportTitle = "家庭安全检查结果"
     static let emptyReport = "暂时没有发现明显问题"
     static let emptyReportDetail = "你仍可以按日常使用习惯，再看看地面和通道。"
     static let highPriority = "建议先处理"
@@ -42,12 +82,8 @@ enum ProductCopy {
     static let directAnalysisNoCandidate = "AI 已检查当前画面，请继续缓慢移动"
     static func directAnalysisCandidatesFound(_ count: Int) -> String { "AI 发现 \(count) 个待确认位置，正在定位" }
     static let partialReport = "部分内容稍后补充"
-    static let fairPartialReportDetail = "报告汇总未完成，以下只是待确认候选，本次不提供参考分。"
-    static let fairAIIncompleteTitle = "本次 AI 检查未完成"
-    static let fairAIIncompleteMessage = "本次没有成功完成任何一次云端发现，不会生成空报告。"
     static let rescan = "重新扫描"
     static let exitToHome = "退出"
-    static let fairDisclaimer = "仅为游园会现场辅助筛查参考，不代表场馆验收或施工报价。"
 
     static func severityLabel(_ severity: Severity) -> String {
         switch severity {

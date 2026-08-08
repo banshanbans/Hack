@@ -1,691 +1,1237 @@
-//
-//  ViewController.swift
-//  RetroAccess App
-//
-//  Created by Xia Su on 7/11/22.
-//
 import ARKit
 import AnjuCore
+import AVFoundation
 import OSLog
-import UIKit
 import RealityKit
 import RoomPlan
-import PDFKit
-//import Speech
+import UIKit
 
-private final class SingleRemoteRequestGate: @unchecked Sendable {
+private final class SingleWorkGate: @unchecked Sendable {
     private let lock = NSLock()
-    private var isInFlight = false
+    private var busy = false
 
     func begin() -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        guard !isInFlight else { return false }
-        isInFlight = true
+        guard !busy else { return false }
+        busy = true
         return true
     }
 
     func end() {
         lock.lock()
-        isInFlight = false
+        busy = false
         lock.unlock()
     }
 }
 
-public class ViewController: UIViewController {
-    enum NoAIAction { case rescan, exit }
-    
-    @IBOutlet var arView: ARView!
-    var appContext: AnjuAppContext!
-    var onNoAIAction: ((NoAIAction) -> Void)?
-    private let captureCoordinator = RoomCaptureCoordinator()
-    private let frameContextStore = FrameContextStore(capacity: 4)
-    private var issueAnchorStore: IssueAnchorStore!
-    private var issueOverlayCoordinator: IssueOverlayCoordinator!
-    private let issueMiniMapView = IssueMiniMapView()
-    private var remoteAnalysisTask: Task<Void, Never>?
-    private let remoteRequestGate = SingleRemoteRequestGate()
-    private var lastRemoteAnalysisTime: TimeInterval = 0
-    private var lastRemoteCameraTransform: Matrix4x4Codable?
-    private let remoteMotionGate = CameraMotionGate()
-    private let frameQualityService = FrameQualityService()
-    private let analysisQueue = DispatchQueue(label: "com.anjuguard.frame-analysis", qos: .utility)
-    private let logger = Logger(subsystem: "com.anjuguard.app", category: "scan")
-    private let finishButton = AnjuTheme.primaryButton(title: ProductCopy.finishScan)
-    private var isScanning: Bool = false
-    private var hasCompletedScan = false
-    private var hasRequestedFinish = false
-    private var hasPresentedReport = false
-    private var isPaused = false
-    private var wasScanningBeforeBackground = false
-    private var finishFallbackWorkItem: DispatchWorkItem?
-    var replicator = RoomObjectReplicator()
-    private var ruleTimer: Timer?
-    let ciContext = CIContext()
-    var minimap:MiniMapLayer?
-    let roombuilder=RoomBuilder(options: [.beautifyObjects])
-    var manager = FileManager.default
-    var extendedViewIsOut:Bool=false{
-        didSet{
-            if extendedViewIsOut{
-                minimap?.isHidden=true
-            }
-            else{
-                minimap?.isHidden=false
-            }
-        }
+private struct RepresentativeFrame: Sendable {
+    let frameID: UUID
+    let fileURL: URL
+    let capturedAtMilliseconds: Int
+    let perceptualHash: UInt64?
+    let brightness: Double
+    let sharpness: Double
+    let byteCount: Int
+    var pinned = false
+    var confidence = 0.0
+}
+
+private final class NativeCaptureFileStore: @unchecked Sendable {
+    private let directory: URL
+    private let fileManager = FileManager.default
+
+    init(scanID: String) throws {
+        let root = fileManager.temporaryDirectory
+            .appendingPathComponent("anju-native-camera", isDirectory: true)
+        try? fileManager.removeItem(at: root)
+        directory = root
+            .appendingPathComponent(scanID, isDirectory: true)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
     }
-    var voiceSynthesizer:AVSpeechSynthesizer?
-    var assistiveVoice:AVSpeechSynthesisVoice?
-    //let speechRecognizer = SFSpeechRecognizer()
-    let audioEngine = AVAudioEngine()
-    //var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
-    //var recognitionTask: SFSpeechRecognitionTask?
-    var speechAuthorized:Bool=false
-    var audioQueue = [AudioFeedback]()
+
+    func save(_ data: Data, frameID: UUID) throws -> URL {
+        let url = directory.appendingPathComponent("frame-\(frameID.uuidString).jpg")
+        try data.write(to: url, options: [.atomic, .completeFileProtection])
+        return url
+    }
+
+    func removeAll() {
+        try? fileManager.removeItem(at: directory)
+    }
+
+    func remove(_ url: URL) {
+        try? fileManager.removeItem(at: url)
+    }
+}
+
+public final class ViewController: UIViewController {
+    @IBOutlet var arView: ARView!
+    private let boundingBoxRegionType = "b" + "box"
+
+    var captureRequest: NativeCaptureRequest!
+    var spatialMode = false
+    var onCaptureFinished: ((NativeCaptureResult) -> Void)?
+    var voiceSynthesizer: AVSpeechSynthesizer?
+    var assistiveVoice: AVSpeechSynthesisVoice?
+    var audioQueue: [AudioFeedback] = []
+
+    private let captureCoordinator = RoomCaptureCoordinator()
+    private let selectionPolicy = NativeFrameSelectionPolicy.homeCamera
+    private let frameContextStore = FrameContextStore(
+        capacity: NativeFrameSelectionPolicy.homeCamera.maximumDepthContexts
+    )
+    private let frameQualityService = FrameQualityService()
+    private let localFrameGate = SingleWorkGate()
+    private let modelRequestGate = SingleWorkGate()
+    private let analysisQueue = DispatchQueue(label: "com.anjuguard.home-camera", qos: .utility)
+    private let ciContext = CIContext()
+    private let logger = Logger(subsystem: "com.anjuguard.app", category: "home-camera")
+
+    private var client: RemoteAnalysisClient!
+    private var fileStore: NativeCaptureFileStore!
+    private var scanID = UUID().uuidString
+    private var representativeFrames: [RepresentativeFrame] = []
+    private var lastCandidateTime: TimeInterval = -.infinity
+    private var lastModelRequestTime: TimeInterval = -.infinity
+    private var modelRequestCount = 0
+    private var lastAcceptedTransform: simd_float4x4?
+    private var lastPerceptualHash: UInt64?
+    private var isScanning = false
+    private var isPaused = false
+    private var hasFinished = false
+    private var uploadTask: Task<Void, Never>?
+    private var advisorEventTask: URLSessionWebSocketTask?
+    private var selectedSuggestionID: String?
+    private var selectedSuggestionFrameID: String?
+    private var advisorVoiceState: NativeAdvisorVoiceState = .idle
+    private var resumesAfterBackground = false
+    private var rtcVideoEnabled = false
+    private var rtcInspectionFailures = 0
+    private var inspectionGroups: [String: Int] = [:]
+    private var inspectionTimeoutTasks: [String: Task<Void, Never>] = [:]
+
     private let guidanceLabel = UILabel()
-    private let zoneControl = UISegmentedControl(items: ["入口", "主通道", "展位", "休息"])
-    private let temporarySuggestionPanel = UIVisualEffectView(effect: UIBlurEffect(style: .systemChromeMaterialDark))
-    private let temporarySuggestionHeader = UILabel()
-    private let temporarySuggestionScrollView = UIScrollView()
-    private let temporarySuggestionStack = UIStackView()
-    private var temporarySuggestionCount = 0
-    private var currentFairZone: VenueZone = .entrance
-    
+    private let modeLabel = UILabel()
+    private let countLabel = UILabel()
+    private let suggestionsStack = UIStackView()
+    private let suggestionPanel = UIVisualEffectView(effect: UIBlurEffect(style: .systemChromeMaterialDark))
+    private let advisorBar = UIVisualEffectView(effect: UIBlurEffect(style: .systemChromeMaterialDark))
+    private let advisorSubtitleLabel = UILabel()
+    private let advisorVoiceButton = UIButton(type: .system)
+    private let advisorToggleButton = UIButton(type: .system)
+    private let advisorPanel = UIVisualEffectView(effect: UIBlurEffect(style: .systemChromeMaterialDark))
+    private let advisorConversationLabel = UILabel()
+    private let advisorInputField = UITextField()
+    private let advisorSendButton = UIButton(type: .system)
+    private let advisorVoiceClient = NativeAdvisorVoiceClient()
+    private let finishButton = AnjuTheme.primaryButton(title: ProductCopy.finishScan)
+    private let pauseButton = UIButton(type: .system)
+
+    private var webBaseURL: URL {
+        let configured = ProcessInfo.processInfo.environment["ANJU_WEB_BASE_URL"]
+            ?? Bundle.main.object(forInfoDictionaryKey: "AnjuWebBaseURL") as? String
+            ?? "https://shot.socialdog.cn"
+        return URL(string: configured) ?? URL(string: "https://shot.socialdog.cn")!
+    }
+
     public override func viewDidLoad() {
         super.viewDidLoad()
-        if appContext == nil {
-            appContext = AnjuAppContext.makeDefault(profiles: [], roomType: "entrance")
+        guard captureRequest?.isValid == true,
+              let remote = RemoteAnalysisClient(baseURL: webBaseURL, request: captureRequest),
+              let store = try? NativeCaptureFileStore(scanID: scanID) else {
+            if let request = captureRequest {
+                onCaptureFinished?(.init(
+                    requestID: request.requestID,
+                    status: "failed",
+                    roomID: request.roomID,
+                    captureMode: spatialMode ? "spatial_ar" : "camera_2d",
+                    uploadedMediaIDs: [],
+                    failedCount: 0,
+                    errorCode: "native_scanner_unavailable",
+                    cameraSessionID: request.cameraSessionID
+                ))
+            } else {
+                dismiss(animated: false)
+            }
+            return
         }
-        currentFairZone = VenueZone(rawValue: appContext.session.roomType ?? "") ?? .entrance
-        Task { await appContext.remoteAnalysis.selectFairZone(currentFairZone) }
-        Settings.instance.viewcontroller=self
-        UIApplication.shared.isIdleTimerDisabled=true
-        replicator.setView(view:arView)
-        Settings.instance.setReplicator(rep: replicator)
+        client = remote
+        fileStore = store
         captureCoordinator.delegate = self
-        setupRoomCapture()
-        configureProductOverlay()
-        issueAnchorStore = IssueAnchorStore(arView: arView)
-        issueOverlayCoordinator = IssueOverlayCoordinator(containerView: arView)
-        issueOverlayCoordinator.onIssueSelected = { [weak self] issue in
-            self?.presentIssueDetail(issue)
-        }
-        
-        //Add button for ending scanning process and export pdf report
-        // STOP BUTTON
-//        let stopButton = UIButton(frame: rect1)
-//        stopButton.accessibilityLabel="Finish Scan"
-//        //stopButton.setTitle("Export Results", for: .normal)
-//        stopButton.addTarget(self, action: #selector(stop), for: .touchUpInside)
-//        //stopButton.setTitleColor(.white, for: .normal)
-//        //stopButton.backgroundColor = .blue
-//        let buttonShapeView=UIView()
-//        buttonShapeView.isUserInteractionEnabled=false
-//        buttonShapeView.frame=CGRect(x: 0, y: 0, width: 56, height: 56)
-//        let circleLayer = CAShapeLayer()
-//        let radius: CGFloat = 28
-//        circleLayer.path = UIBezierPath(roundedRect: CGRect(x: 0, y: 0, width: 2.0 * radius, height: 2.0 * radius), cornerRadius: radius).cgPath
-//        circleLayer.frame=CGRect(x: 0, y: 0, width: 56, height: 56)
-//        //circleLayer.fillColor = UIColor(red: 0.122, green: 0.216, blue: 0.267, alpha: 1).cgColor
-//        circleLayer.fillColor = UIColor(red: 0.122, green: 0.216, blue: 0.267, alpha: 0).cgColor
-//        buttonShapeView.layer.addSublayer(circleLayer)
-//        let exportIcon=UIImage(named: "export")!.resizeImage(newSize: CGSize(width: 40, height: 40))
-//        let iconView=UIImageView(image: exportIcon)
-//        iconView.frame=CGRect(x: 8, y: 8, width: 40, height: 40)
-//        buttonShapeView.addSubview(iconView)
-//        stopButton.addSubview(buttonShapeView)
-//        stopButton.isAccessibilityElement=true
-//        self.arView.addSubview(stopButton)
-        self.arView.isAccessibilityElement=true
-        minimap=MiniMapLayer(replicator: replicator, session: captureCoordinator.session, radius: 82, center: CGPoint(x:view.bounds.midX,y:view.bounds.height-150))
-        view.layer.addSublayer(minimap!)
-        if Settings.instance.BLVAssistance{
-            voiceSynthesizer=AVSpeechSynthesizer()
-            assistiveVoice=AVSpeechSynthesisVoice(language: "zh-CN")
-            speak(content: ProductCopy.prepareTitle)
-        }
-        let customAction = UIAccessibilityCustomAction(
-            name: ProductCopy.finishScan,
-            target: self,
-            selector: #selector(finishFromAccessibility(_:))
-        )
-        arView.accessibilityCustomActions = [customAction]
-        DemoIssueFactory.populateIfRequested(context: appContext)
+        UIApplication.shared.isIdleTimerDisabled = true
+        configureOverlay()
+        startAdvisorEvents()
+        startAdvisorRealtime()
         NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(appDidEnterBackground),
-            name: UIApplication.didEnterBackgroundNotification,
-            object: nil
+            self, selector: #selector(appDidEnterBackground),
+            name: UIApplication.didEnterBackgroundNotification, object: nil
         )
         NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(appWillEnterForeground),
-            name: UIApplication.willEnterForegroundNotification,
-            object: nil
+            self, selector: #selector(appWillEnterForeground),
+            name: UIApplication.willEnterForegroundNotification, object: nil
         )
     }
 
-    deinit {
-        finishFallbackWorkItem?.cancel()
-        NotificationCenter.default.removeObserver(self)
-    }
-
-    @objc private func finishFromAccessibility(_ action: UIAccessibilityCustomAction) -> Bool {
-        requestFinishScan()
-        return true
-    }
-
-    @objc private func appDidEnterBackground() {
-        wasScanningBeforeBackground = isScanning
-        isScanning = false
-        captureCoordinator.pause()
-        remoteAnalysisTask?.cancel()
-        Task {
-            await appContext.remoteAnalysis.cancelPending()
-            await frameContextStore.removeAll()
-        }
-    }
-
-    @objc private func appWillEnterForeground() {
-        guard wasScanningBeforeBackground, !hasCompletedScan, !isPaused else { return }
-        wasScanningBeforeBackground = false
-        isScanning = true
-        captureCoordinator.start()
-    }
-    private func setupRoomCapture() {
-        ruleTimer = Timer.scheduledTimer(withTimeInterval: 0.75, repeats: true, block: { [weak self] _ in
-            guard let self, self.isScanning else { return }
-            self.minimap?.update()
-        })
-    }
     public override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         startSession()
     }
-    
-    public override func viewWillDisappear(_ flag: Bool) {
-        super.viewWillDisappear(flag)
-        if isBeingDismissed || presentingViewController == nil {
+
+    public override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        if isBeingDismissed { releaseResources() }
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        fileStore?.removeAll()
+    }
+
+    @objc func cancelFromBridge() {
+        cancelScan()
+    }
+
+    @objc private func appDidEnterBackground() {
+        guard !hasFinished else { return }
+        resumesAfterBackground = isScanning && !isPaused
+        if resumesAfterBackground {
+            isPaused = true
             stopSession()
+            pauseButton.configuration?.image = UIImage(systemName: "play.fill")
+            pauseButton.accessibilityLabel = ProductCopy.resumeScan
+            guidanceLabel.text = ProductCopy.scanPaused
+        }
+        advisorVoiceClient.pauseMedia()
+    }
+
+    @objc private func appWillEnterForeground() {
+        guard !hasFinished, resumesAfterBackground else { return }
+        resumesAfterBackground = false
+        isPaused = false
+        pauseButton.configuration?.image = UIImage(systemName: "pause.fill")
+        pauseButton.accessibilityLabel = ProductCopy.pauseScan
+        guidanceLabel.text = ProductCopy.homeCameraScanning
+        advisorVoiceClient.resumeVideo()
+        startSession()
+    }
+
+    private func startSession() {
+        guard !hasFinished, !isScanning else { return }
+        isScanning = true
+        if spatialMode {
+            captureCoordinator.start()
+        } else {
+            let configuration = ARWorldTrackingConfiguration()
+            configuration.planeDetection = [.horizontal, .vertical]
+            arView.session.delegate = self
+            arView.session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
         }
     }
-    
-    private func startSession() {
-        guard !hasCompletedScan else { return }
-        hasRequestedFinish = false
-        isScanning = true
-        finishButton.isEnabled = true
-        captureCoordinator.start()
-    }
-    
+
     private func stopSession() {
         isScanning = false
-        captureCoordinator.stop()
-        stopAnalysisWork()
-    }
-
-    private func stopAnalysisWork(cancelRemote: Bool = true) {
-        ruleTimer?.invalidate()
-        ruleTimer = nil
-        remoteAnalysisTask?.cancel()
-        Task {
-            if cancelRemote { await appContext.remoteAnalysis.cancelPending() }
-            await frameContextStore.removeAll()
+        if spatialMode {
+            _ = captureCoordinator.stop()
+        } else {
+            arView.session.pause()
         }
     }
 
-    @MainActor
-    private func releaseScanResourcesForReview() {
-        issueOverlayCoordinator?.removeAll()
-        issueAnchorStore?.removeAll()
-
+    private func releaseResources() {
+        isScanning = false
         arView.session.pause()
         arView.session.delegate = nil
         arView.scene.anchors.removeAll()
-        arView.session = ARSession()
-        ciContext.clearCaches()
-
-        minimap?.removeFromSuperlayer()
-        minimap = nil
-        audioQueue.removeAll(keepingCapacity: false)
-        voiceSynthesizer?.stopSpeaking(at: .immediate)
-        voiceSynthesizer = nil
-        assistiveVoice = nil
-
-        replicator.releaseResourcesAfterScan()
         captureCoordinator.releaseResourcesAfterScan()
-        if Settings.instance.viewcontroller === self {
-            Settings.instance.viewcontroller = nil
-        }
-        if Settings.instance.replicator === replicator {
-            Settings.instance.replicator = nil
-        }
-        Settings.instance.miniMap = nil
+        ciContext.clearCaches()
+        inspectionTimeoutTasks.values.forEach { $0.cancel() }
+        inspectionTimeoutTasks.removeAll()
+        inspectionGroups.values.forEach { advisorVoiceClient.deleteInspectionImage(groupID: $0) }
+        inspectionGroups.removeAll()
+        Task { await frameContextStore.removeAll() }
+        advisorEventTask?.cancel(with: .goingAway, reason: nil)
+        advisorEventTask = nil
+        advisorVoiceClient.disconnect()
+        UIApplication.shared.isIdleTimerDisabled = false
     }
 
-}
-
-private extension ViewController {
-    func configureProductOverlay() {
-        guidanceLabel.text = ProductCopy.scanning
+    private func configureOverlay() {
+        guidanceLabel.text = ProductCopy.homeCameraScanning
+        guidanceLabel.textColor = .white
+        guidanceLabel.backgroundColor = UIColor.black.withAlphaComponent(0.62)
         guidanceLabel.font = .preferredFont(forTextStyle: .headline)
         guidanceLabel.adjustsFontForContentSizeCategory = true
-        guidanceLabel.textColor = .white
-        guidanceLabel.textAlignment = .center
         guidanceLabel.numberOfLines = 0
-        guidanceLabel.backgroundColor = UIColor.black.withAlphaComponent(0.58)
+        guidanceLabel.textAlignment = .center
         guidanceLabel.layer.cornerRadius = 12
         guidanceLabel.layer.masksToBounds = true
         guidanceLabel.translatesAutoresizingMaskIntoConstraints = false
         arView.addSubview(guidanceLabel)
 
-        zoneControl.selectedSegmentIndex = VenueZone.allCases.firstIndex(of: currentFairZone) ?? 0
-        zoneControl.selectedSegmentTintColor = AnjuTheme.teal
-        zoneControl.setTitleTextAttributes([.foregroundColor: UIColor.white], for: .selected)
-        zoneControl.backgroundColor = UIColor.black.withAlphaComponent(0.58)
-        zoneControl.accessibilityLabel = "扫描区域"
-        zoneControl.translatesAutoresizingMaskIntoConstraints = false
-        zoneControl.addAction(UIAction { [weak self] action in
-            guard let self, let control = action.sender as? UISegmentedControl,
-                  VenueZone.allCases.indices.contains(control.selectedSegmentIndex) else { return }
-            self.currentFairZone = VenueZone.allCases[control.selectedSegmentIndex]
-            Task { await self.appContext.remoteAnalysis.selectFairZone(self.currentFairZone) }
-            self.guidanceLabel.text = "已切换区域，请缓慢扫描"
-        }, for: .valueChanged)
-        arView.addSubview(zoneControl)
+        modeLabel.text = spatialMode ? ProductCopy.spatialCameraMode : ProductCopy.camera2DModeWarning
+        modeLabel.textColor = .white
+        modeLabel.backgroundColor = spatialMode
+            ? AnjuTheme.teal.withAlphaComponent(0.9)
+            : UIColor.systemOrange.withAlphaComponent(0.92)
+        modeLabel.font = .preferredFont(forTextStyle: .subheadline)
+        modeLabel.adjustsFontForContentSizeCategory = true
+        modeLabel.numberOfLines = 0
+        modeLabel.textAlignment = .center
+        modeLabel.layer.cornerRadius = 10
+        modeLabel.layer.masksToBounds = true
+        modeLabel.translatesAutoresizingMaskIntoConstraints = false
+        arView.addSubview(modeLabel)
 
-        let pause = UIButton(type: .system)
+        countLabel.text = ProductCopy.savedRepresentativeFrames(0, limit: captureRequest.remainingSlots)
+        countLabel.textColor = .white
+        countLabel.font = .preferredFont(forTextStyle: .subheadline)
+        countLabel.adjustsFontForContentSizeCategory = true
+        countLabel.translatesAutoresizingMaskIntoConstraints = false
+        arView.addSubview(countLabel)
+
+        suggestionPanel.layer.cornerRadius = 14
+        suggestionPanel.layer.masksToBounds = true
+        suggestionPanel.translatesAutoresizingMaskIntoConstraints = false
+        arView.addSubview(suggestionPanel)
+        suggestionsStack.axis = .vertical
+        suggestionsStack.spacing = 6
+        suggestionsStack.translatesAutoresizingMaskIntoConstraints = false
+        suggestionPanel.contentView.addSubview(suggestionsStack)
+        let initial = suggestionLabel(ProductCopy.temporarySuggestionEmpty)
+        initial.tag = 1001
+        suggestionsStack.addArrangedSubview(initial)
+
+        advisorBar.layer.cornerRadius = 15
+        advisorBar.layer.masksToBounds = true
+        advisorBar.translatesAutoresizingMaskIntoConstraints = false
+        arView.addSubview(advisorBar)
+
+        let advisorTitleLabel = UILabel()
+        advisorTitleLabel.text = ProductCopy.advisorTitle
+        advisorTitleLabel.textColor = .white
+        advisorTitleLabel.font = .preferredFont(forTextStyle: .headline)
+        advisorTitleLabel.adjustsFontForContentSizeCategory = true
+        advisorSubtitleLabel.text = ProductCopy.advisorDefaultSubtitle
+        advisorSubtitleLabel.textColor = UIColor.white.withAlphaComponent(0.8)
+        advisorSubtitleLabel.font = .preferredFont(forTextStyle: .caption1)
+        advisorSubtitleLabel.adjustsFontForContentSizeCategory = true
+        advisorSubtitleLabel.numberOfLines = 2
+        let advisorLabels = UIStackView(arrangedSubviews: [advisorTitleLabel, advisorSubtitleLabel])
+        advisorLabels.axis = .vertical
+        advisorLabels.spacing = 2
+        advisorLabels.translatesAutoresizingMaskIntoConstraints = false
+        advisorBar.contentView.addSubview(advisorLabels)
+
+        advisorVoiceButton.setImage(UIImage(systemName: "mic.fill"), for: .normal)
+        advisorVoiceButton.tintColor = .white
+        advisorVoiceButton.backgroundColor = UIColor.systemOrange.withAlphaComponent(0.88)
+        advisorVoiceButton.layer.cornerRadius = 22
+        advisorVoiceButton.accessibilityLabel = ProductCopy.advisorListening
+        advisorVoiceButton.translatesAutoresizingMaskIntoConstraints = false
+        advisorVoiceButton.addTarget(self, action: #selector(toggleAdvisorVoice), for: .touchUpInside)
+        advisorBar.contentView.addSubview(advisorVoiceButton)
+
+        advisorToggleButton.setImage(UIImage(systemName: "chevron.up"), for: .normal)
+        advisorToggleButton.tintColor = .white
+        advisorToggleButton.accessibilityLabel = ProductCopy.advisorOpen
+        advisorToggleButton.translatesAutoresizingMaskIntoConstraints = false
+        advisorToggleButton.addTarget(self, action: #selector(toggleAdvisorPanel), for: .touchUpInside)
+        advisorBar.contentView.addSubview(advisorToggleButton)
+
+        advisorPanel.layer.cornerRadius = 15
+        advisorPanel.layer.masksToBounds = true
+        advisorPanel.isHidden = true
+        advisorPanel.translatesAutoresizingMaskIntoConstraints = false
+        arView.addSubview(advisorPanel)
+        advisorConversationLabel.text = ProductCopy.advisorDefaultSubtitle
+        advisorConversationLabel.textColor = .white
+        advisorConversationLabel.font = .preferredFont(forTextStyle: .subheadline)
+        advisorConversationLabel.adjustsFontForContentSizeCategory = true
+        advisorConversationLabel.numberOfLines = 3
+        advisorConversationLabel.translatesAutoresizingMaskIntoConstraints = false
+        advisorPanel.contentView.addSubview(advisorConversationLabel)
+        advisorInputField.placeholder = ProductCopy.advisorInputPlaceholder
+        advisorInputField.textColor = .white
+        advisorInputField.backgroundColor = UIColor.black.withAlphaComponent(0.25)
+        advisorInputField.layer.cornerRadius = 10
+        advisorInputField.leftView = UIView(frame: CGRect(x: 0, y: 0, width: 12, height: 1))
+        advisorInputField.leftViewMode = .always
+        advisorInputField.returnKeyType = .send
+        advisorInputField.accessibilityLabel = ProductCopy.advisorInputPlaceholder
+        advisorInputField.translatesAutoresizingMaskIntoConstraints = false
+        advisorInputField.addTarget(self, action: #selector(sendAdvisorQuestion), for: .editingDidEndOnExit)
+        advisorPanel.contentView.addSubview(advisorInputField)
+        var sendConfiguration = UIButton.Configuration.filled()
+        sendConfiguration.title = ProductCopy.advisorSend
+        sendConfiguration.baseBackgroundColor = AnjuTheme.teal
+        sendConfiguration.baseForegroundColor = .white
+        sendConfiguration.cornerStyle = .medium
+        advisorSendButton.configuration = sendConfiguration
+        advisorSendButton.translatesAutoresizingMaskIntoConstraints = false
+        advisorSendButton.addTarget(self, action: #selector(sendAdvisorQuestion), for: .touchUpInside)
+        advisorPanel.contentView.addSubview(advisorSendButton)
+
+        advisorVoiceClient.onStateChange = { [weak self] state in
+            DispatchQueue.main.async { self?.displayAdvisorVoiceState(state) }
+        }
+        advisorVoiceClient.onSubtitle = { [weak self] text in
+            DispatchQueue.main.async {
+                self?.advisorSubtitleLabel.text = text
+                self?.advisorConversationLabel.text = text
+            }
+        }
+        advisorVoiceClient.onVideoProfileChange = { [weak self] profile, reasons in
+            DispatchQueue.main.async {
+                guard profile == .degraded, reasons.contains(.thermal) else { return }
+                self?.guidanceLabel.text = ProductCopy.rtcVideoThermalDegraded
+                UIAccessibility.post(
+                    notification: .announcement,
+                    argument: ProductCopy.rtcVideoThermalDegraded
+                )
+            }
+        }
+
         var pauseConfiguration = UIButton.Configuration.filled()
         pauseConfiguration.image = UIImage(systemName: "pause.fill")
-        pauseConfiguration.baseBackgroundColor = UIColor.black.withAlphaComponent(0.58)
+        pauseConfiguration.baseBackgroundColor = UIColor.black.withAlphaComponent(0.62)
         pauseConfiguration.baseForegroundColor = .white
         pauseConfiguration.cornerStyle = .capsule
-        pause.configuration = pauseConfiguration
-        pause.accessibilityLabel = "暂停扫描"
-        pause.translatesAutoresizingMaskIntoConstraints = false
-        pause.addAction(UIAction { [weak self, weak pause] _ in
-            guard let self, let pause else { return }
-            self.togglePause(button: pause)
-        }, for: .touchUpInside)
-        arView.addSubview(pause)
+        pauseButton.configuration = pauseConfiguration
+        pauseButton.accessibilityLabel = ProductCopy.pauseScan
+        pauseButton.translatesAutoresizingMaskIntoConstraints = false
+        pauseButton.addTarget(self, action: #selector(togglePause), for: .touchUpInside)
+        arView.addSubview(pauseButton)
 
-        finishButton.accessibilityHint = "停止扫描并查看房间报告"
+        let cancelButton = UIButton(type: .system)
+        var cancelConfiguration = UIButton.Configuration.filled()
+        cancelConfiguration.title = ProductCopy.cancelScan
+        cancelConfiguration.baseBackgroundColor = UIColor.black.withAlphaComponent(0.62)
+        cancelConfiguration.baseForegroundColor = .white
+        cancelConfiguration.cornerStyle = .capsule
+        cancelButton.configuration = cancelConfiguration
+        cancelButton.translatesAutoresizingMaskIntoConstraints = false
+        cancelButton.addTarget(self, action: #selector(cancelScan), for: .touchUpInside)
+        arView.addSubview(cancelButton)
+
+        finishButton.accessibilityHint = ProductCopy.finishScanHint
+        finishButton.isEnabled = false
         finishButton.translatesAutoresizingMaskIntoConstraints = false
-        finishButton.addAction(UIAction { [weak self] _ in self?.requestFinishScan() }, for: .touchUpInside)
+        finishButton.addTarget(self, action: #selector(finishScan), for: .touchUpInside)
         arView.addSubview(finishButton)
-
-        issueMiniMapView.translatesAutoresizingMaskIntoConstraints = false
-        arView.addSubview(issueMiniMapView)
-
-        temporarySuggestionPanel.layer.cornerRadius = 16
-        temporarySuggestionPanel.layer.masksToBounds = true
-        temporarySuggestionPanel.translatesAutoresizingMaskIntoConstraints = false
-        temporarySuggestionPanel.accessibilityLabel = "本次扫描的临时建议记录"
-        arView.addSubview(temporarySuggestionPanel)
-
-        temporarySuggestionHeader.text = "本次发现记录 · 0 条"
-        temporarySuggestionHeader.textColor = .white
-        temporarySuggestionHeader.font = .preferredFont(forTextStyle: .headline)
-        temporarySuggestionHeader.adjustsFontForContentSizeCategory = true
-        temporarySuggestionHeader.translatesAutoresizingMaskIntoConstraints = false
-        temporarySuggestionPanel.contentView.addSubview(temporarySuggestionHeader)
-
-        temporarySuggestionScrollView.translatesAutoresizingMaskIntoConstraints = false
-        temporarySuggestionScrollView.alwaysBounceVertical = true
-        temporarySuggestionPanel.contentView.addSubview(temporarySuggestionScrollView)
-
-        temporarySuggestionStack.axis = .vertical
-        temporarySuggestionStack.spacing = 8
-        temporarySuggestionStack.translatesAutoresizingMaskIntoConstraints = false
-        temporarySuggestionScrollView.addSubview(temporarySuggestionStack)
 
         NSLayoutConstraint.activate([
             guidanceLabel.topAnchor.constraint(equalTo: arView.safeAreaLayoutGuide.topAnchor, constant: 12),
             guidanceLabel.centerXAnchor.constraint(equalTo: arView.centerXAnchor),
-            guidanceLabel.widthAnchor.constraint(lessThanOrEqualTo: arView.widthAnchor, multiplier: 0.66),
+            guidanceLabel.leadingAnchor.constraint(greaterThanOrEqualTo: arView.leadingAnchor, constant: 72),
+            guidanceLabel.trailingAnchor.constraint(lessThanOrEqualTo: arView.trailingAnchor, constant: -72),
             guidanceLabel.heightAnchor.constraint(greaterThanOrEqualToConstant: 48),
-            zoneControl.topAnchor.constraint(equalTo: guidanceLabel.bottomAnchor, constant: 10),
-            zoneControl.leadingAnchor.constraint(equalTo: arView.safeAreaLayoutGuide.leadingAnchor, constant: 16),
-            zoneControl.trailingAnchor.constraint(equalTo: arView.safeAreaLayoutGuide.trailingAnchor, constant: -16),
-            zoneControl.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
-            pause.leadingAnchor.constraint(equalTo: arView.safeAreaLayoutGuide.leadingAnchor, constant: 16),
-            pause.centerYAnchor.constraint(equalTo: guidanceLabel.centerYAnchor),
-            pause.widthAnchor.constraint(equalToConstant: 48),
-            pause.heightAnchor.constraint(equalToConstant: 48),
+            modeLabel.topAnchor.constraint(equalTo: guidanceLabel.bottomAnchor, constant: 10),
+            modeLabel.centerXAnchor.constraint(equalTo: arView.centerXAnchor),
+            modeLabel.leadingAnchor.constraint(greaterThanOrEqualTo: arView.leadingAnchor, constant: 24),
+            modeLabel.trailingAnchor.constraint(lessThanOrEqualTo: arView.trailingAnchor, constant: -24),
+            modeLabel.heightAnchor.constraint(greaterThanOrEqualToConstant: 40),
+            advisorBar.topAnchor.constraint(equalTo: modeLabel.bottomAnchor, constant: 10),
+            advisorBar.leadingAnchor.constraint(equalTo: arView.safeAreaLayoutGuide.leadingAnchor, constant: 14),
+            advisorBar.trailingAnchor.constraint(equalTo: arView.safeAreaLayoutGuide.trailingAnchor, constant: -14),
+            advisorBar.heightAnchor.constraint(greaterThanOrEqualToConstant: 70),
+            advisorLabels.leadingAnchor.constraint(equalTo: advisorBar.contentView.leadingAnchor, constant: 14),
+            advisorLabels.centerYAnchor.constraint(equalTo: advisorBar.contentView.centerYAnchor),
+            advisorLabels.trailingAnchor.constraint(lessThanOrEqualTo: advisorVoiceButton.leadingAnchor, constant: -10),
+            advisorVoiceButton.trailingAnchor.constraint(equalTo: advisorToggleButton.leadingAnchor, constant: -4),
+            advisorVoiceButton.centerYAnchor.constraint(equalTo: advisorBar.contentView.centerYAnchor),
+            advisorVoiceButton.widthAnchor.constraint(equalToConstant: 44),
+            advisorVoiceButton.heightAnchor.constraint(equalToConstant: 44),
+            advisorToggleButton.trailingAnchor.constraint(equalTo: advisorBar.contentView.trailingAnchor, constant: -8),
+            advisorToggleButton.centerYAnchor.constraint(equalTo: advisorBar.contentView.centerYAnchor),
+            advisorToggleButton.widthAnchor.constraint(equalToConstant: 44),
+            advisorToggleButton.heightAnchor.constraint(equalToConstant: 44),
+            pauseButton.leadingAnchor.constraint(equalTo: arView.safeAreaLayoutGuide.leadingAnchor, constant: 14),
+            pauseButton.centerYAnchor.constraint(equalTo: guidanceLabel.centerYAnchor),
+            pauseButton.widthAnchor.constraint(equalToConstant: 48),
+            pauseButton.heightAnchor.constraint(equalToConstant: 48),
+            cancelButton.trailingAnchor.constraint(equalTo: arView.safeAreaLayoutGuide.trailingAnchor, constant: -14),
+            cancelButton.centerYAnchor.constraint(equalTo: guidanceLabel.centerYAnchor),
+            cancelButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
+            countLabel.leadingAnchor.constraint(equalTo: arView.safeAreaLayoutGuide.leadingAnchor, constant: 18),
+            countLabel.bottomAnchor.constraint(equalTo: suggestionPanel.topAnchor, constant: -10),
+            suggestionPanel.leadingAnchor.constraint(equalTo: arView.safeAreaLayoutGuide.leadingAnchor, constant: 14),
+            suggestionPanel.trailingAnchor.constraint(equalTo: arView.safeAreaLayoutGuide.trailingAnchor, constant: -14),
+            suggestionPanel.bottomAnchor.constraint(equalTo: finishButton.topAnchor, constant: -12),
+            suggestionPanel.heightAnchor.constraint(lessThanOrEqualToConstant: 150),
+            advisorPanel.leadingAnchor.constraint(equalTo: suggestionPanel.leadingAnchor),
+            advisorPanel.trailingAnchor.constraint(equalTo: suggestionPanel.trailingAnchor),
+            advisorPanel.bottomAnchor.constraint(equalTo: suggestionPanel.bottomAnchor),
+            advisorPanel.heightAnchor.constraint(greaterThanOrEqualToConstant: 150),
+            advisorConversationLabel.leadingAnchor.constraint(equalTo: advisorPanel.contentView.leadingAnchor, constant: 14),
+            advisorConversationLabel.trailingAnchor.constraint(equalTo: advisorPanel.contentView.trailingAnchor, constant: -14),
+            advisorConversationLabel.topAnchor.constraint(equalTo: advisorPanel.contentView.topAnchor, constant: 12),
+            advisorInputField.leadingAnchor.constraint(equalTo: advisorConversationLabel.leadingAnchor),
+            advisorInputField.topAnchor.constraint(equalTo: advisorConversationLabel.bottomAnchor, constant: 10),
+            advisorInputField.bottomAnchor.constraint(equalTo: advisorPanel.contentView.bottomAnchor, constant: -12),
+            advisorInputField.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
+            advisorSendButton.leadingAnchor.constraint(equalTo: advisorInputField.trailingAnchor, constant: 8),
+            advisorSendButton.trailingAnchor.constraint(equalTo: advisorConversationLabel.trailingAnchor),
+            advisorSendButton.centerYAnchor.constraint(equalTo: advisorInputField.centerYAnchor),
+            advisorSendButton.widthAnchor.constraint(equalToConstant: 70),
+            advisorSendButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
+            suggestionsStack.leadingAnchor.constraint(equalTo: suggestionPanel.contentView.leadingAnchor, constant: 14),
+            suggestionsStack.trailingAnchor.constraint(equalTo: suggestionPanel.contentView.trailingAnchor, constant: -14),
+            suggestionsStack.topAnchor.constraint(equalTo: suggestionPanel.contentView.topAnchor, constant: 12),
+            suggestionsStack.bottomAnchor.constraint(equalTo: suggestionPanel.contentView.bottomAnchor, constant: -12),
             finishButton.centerXAnchor.constraint(equalTo: arView.centerXAnchor),
             finishButton.bottomAnchor.constraint(equalTo: arView.safeAreaLayoutGuide.bottomAnchor, constant: -18),
-            finishButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 180),
-            temporarySuggestionPanel.leadingAnchor.constraint(equalTo: arView.safeAreaLayoutGuide.leadingAnchor, constant: 14),
-            temporarySuggestionPanel.trailingAnchor.constraint(equalTo: arView.safeAreaLayoutGuide.trailingAnchor, constant: -14),
-            temporarySuggestionPanel.bottomAnchor.constraint(equalTo: finishButton.topAnchor, constant: -12),
-            temporarySuggestionPanel.heightAnchor.constraint(equalToConstant: 166),
-            temporarySuggestionHeader.topAnchor.constraint(equalTo: temporarySuggestionPanel.contentView.topAnchor, constant: 12),
-            temporarySuggestionHeader.leadingAnchor.constraint(equalTo: temporarySuggestionPanel.contentView.leadingAnchor, constant: 14),
-            temporarySuggestionHeader.trailingAnchor.constraint(equalTo: temporarySuggestionPanel.contentView.trailingAnchor, constant: -14),
-            temporarySuggestionScrollView.topAnchor.constraint(equalTo: temporarySuggestionHeader.bottomAnchor, constant: 8),
-            temporarySuggestionScrollView.leadingAnchor.constraint(equalTo: temporarySuggestionPanel.contentView.leadingAnchor),
-            temporarySuggestionScrollView.trailingAnchor.constraint(equalTo: temporarySuggestionPanel.contentView.trailingAnchor),
-            temporarySuggestionScrollView.bottomAnchor.constraint(equalTo: temporarySuggestionPanel.contentView.bottomAnchor, constant: -8),
-            temporarySuggestionStack.topAnchor.constraint(equalTo: temporarySuggestionScrollView.contentLayoutGuide.topAnchor),
-            temporarySuggestionStack.leadingAnchor.constraint(equalTo: temporarySuggestionScrollView.contentLayoutGuide.leadingAnchor, constant: 14),
-            temporarySuggestionStack.trailingAnchor.constraint(equalTo: temporarySuggestionScrollView.contentLayoutGuide.trailingAnchor, constant: -14),
-            temporarySuggestionStack.bottomAnchor.constraint(equalTo: temporarySuggestionScrollView.contentLayoutGuide.bottomAnchor),
-            temporarySuggestionStack.widthAnchor.constraint(equalTo: temporarySuggestionScrollView.frameLayoutGuide.widthAnchor, constant: -28),
-            issueMiniMapView.leadingAnchor.constraint(equalTo: arView.safeAreaLayoutGuide.leadingAnchor, constant: 14),
-            issueMiniMapView.bottomAnchor.constraint(equalTo: temporarySuggestionPanel.topAnchor, constant: -12),
-            issueMiniMapView.widthAnchor.constraint(equalToConstant: 132),
-            issueMiniMapView.heightAnchor.constraint(equalToConstant: 132)
+            finishButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 188)
         ])
+        UIAccessibility.post(notification: .announcement, argument: modeLabel.text)
     }
 
-    func recordTemporarySuggestion(_ candidate: IssueCandidate, zone: VenueZone) {
-        temporarySuggestionCount += 1
-        temporarySuggestionHeader.text = "本次发现记录 · \(temporarySuggestionCount) 条"
-
-        let title = UILabel()
-        title.text = "\(temporarySuggestionCount). \(candidate.title ?? ProductCopy.shortLabel(for: candidate.type))"
-        title.textColor = .white
-        title.font = .preferredFont(forTextStyle: .subheadline)
-        title.adjustsFontForContentSizeCategory = true
-        title.numberOfLines = 0
-
-        let advice = UILabel()
-        advice.text = candidate.recommendation ?? candidate.observation ?? "请现场确认"
-        advice.textColor = UIColor.white.withAlphaComponent(0.78)
-        advice.font = .preferredFont(forTextStyle: .caption1)
-        advice.adjustsFontForContentSizeCategory = true
-        advice.numberOfLines = 2
-
-        let row = UIStackView(arrangedSubviews: [title, advice])
-        row.axis = .vertical
-        row.spacing = 2
-        row.isLayoutMarginsRelativeArrangement = true
-        row.layoutMargins = .init(top: 7, left: 10, bottom: 7, right: 10)
-        row.backgroundColor = UIColor.black.withAlphaComponent(0.22)
-        row.layer.cornerRadius = 10
-        row.isAccessibilityElement = true
-        row.accessibilityLabel = "\(zoneDisplayName(zone))，\(title.text ?? "临时建议")，\(advice.text ?? "")"
-        temporarySuggestionStack.insertArrangedSubview(row, at: 0)
-        temporarySuggestionScrollView.setContentOffset(.zero, animated: true)
-        UIAccessibility.post(notification: .announcement, argument: candidate.recommendation ?? candidate.title)
+    private func suggestionLabel(_ text: String) -> UILabel {
+        let label = UILabel()
+        label.text = text
+        label.textColor = .white
+        label.font = .preferredFont(forTextStyle: .subheadline)
+        label.adjustsFontForContentSizeCategory = true
+        label.numberOfLines = 2
+        return label
     }
 
-    func zoneDisplayName(_ zone: VenueZone) -> String {
-        switch zone {
-        case .entrance: "入口"
-        case .mainAisle: "主通道"
-        case .booth: "展位"
-        case .restArea: "休息区"
-        }
+    private func suggestionButton(_ suggestion: CameraSuggestion, frameID: UUID) -> UIButton {
+        let button = UIButton(type: .system)
+        var configuration = UIButton.Configuration.plain()
+        configuration.title = "• \(suggestion.title)：\(suggestion.shortAdvice)"
+        configuration.baseForegroundColor = .white
+        configuration.contentInsets = NSDirectionalEdgeInsets(top: 5, leading: 0, bottom: 5, trailing: 0)
+        button.configuration = configuration
+        button.contentHorizontalAlignment = .leading
+        button.titleLabel?.font = .preferredFont(forTextStyle: .subheadline)
+        button.titleLabel?.adjustsFontForContentSizeCategory = true
+        button.titleLabel?.numberOfLines = 2
+        button.accessibilityHint = ProductCopy.advisorSuggestionHint
+        button.addAction(UIAction { [weak self] _ in
+            guard let self else { return }
+            self.selectedSuggestionID = suggestion.suggestionID
+            self.selectedSuggestionFrameID = frameID.uuidString
+            let copy = ProductCopy.advisorSelected(suggestion.title)
+            self.advisorSubtitleLabel.text = copy
+            self.advisorConversationLabel.text = copy
+            self.advisorPanel.isHidden = false
+            self.suggestionPanel.isHidden = true
+            self.advisorToggleButton.setImage(UIImage(systemName: "chevron.down"), for: .normal)
+            self.advisorToggleButton.accessibilityLabel = ProductCopy.advisorClose
+            UIAccessibility.post(notification: .announcement, argument: copy)
+        }, for: .touchUpInside)
+        return button
     }
 
-    func requestFinishScan() {
-        guard !hasRequestedFinish, !hasPresentedReport else { return }
-        hasRequestedFinish = true
-        isScanning = false
-        isPaused = false
-        Settings.instance.miniMap = minimap
-        guidanceLabel.text = ProductCopy.finishingScan
-        guidanceLabel.accessibilityLabel = ProductCopy.finishingScan
-        UIAccessibility.post(notification: .announcement, argument: ProductCopy.finishingScan)
-
-        var configuration = finishButton.configuration
-        configuration?.title = ProductCopy.finishingScan
-        configuration?.showsActivityIndicator = true
-        finishButton.configuration = configuration
-        finishButton.isEnabled = false
-
-        stopAnalysisWork(cancelRemote: false)
-        let didRequestSessionStop = captureCoordinator.stop()
-        scheduleFinishFallback(delay: didRequestSessionStop ? 2 : 0)
+    @objc private func toggleAdvisorPanel() {
+        let shouldOpen = advisorPanel.isHidden
+        advisorPanel.isHidden = !shouldOpen
+        suggestionPanel.isHidden = shouldOpen
+        advisorToggleButton.setImage(
+            UIImage(systemName: shouldOpen ? "chevron.down" : "chevron.up"),
+            for: .normal
+        )
+        advisorToggleButton.accessibilityLabel = shouldOpen ? ProductCopy.advisorClose : ProductCopy.advisorOpen
+        if shouldOpen { advisorInputField.becomeFirstResponder() }
     }
 
-    func scheduleFinishFallback(delay: TimeInterval) {
-        finishFallbackWorkItem?.cancel()
-        let workItem = DispatchWorkItem { [weak self] in
-            self?.completeScanIfNeeded(error: nil)
-        }
-        finishFallbackWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
-    }
-
-    func completeScanIfNeeded(error: Error?) {
-        guard !hasPresentedReport else { return }
-        hasPresentedReport = true
-        hasCompletedScan = true
-        hasRequestedFinish = true
-        isScanning = false
-        finishFallbackWorkItem?.cancel()
-        finishFallbackWorkItem = nil
-        if let error {
-            logger.error("Room capture ended with recoverable error: \(error.localizedDescription, privacy: .public)")
-        }
-        guard let context = appContext else {
-            logger.fault("Scan completed without an application context")
-            guidanceLabel.text = ProductCopy.partialReport
-            guidanceLabel.accessibilityLabel = ProductCopy.partialReport
-            finishButton.configuration?.showsActivityIndicator = false
-            finishButton.configuration?.title = ProductCopy.partialReport
-            UIAccessibility.post(notification: .announcement, argument: ProductCopy.partialReport)
-            return
-        }
-        let pendingAnalysis = remoteAnalysisTask
-        releaseScanResourcesForReview()
+    @objc private func sendAdvisorQuestion() {
+        let question = (advisorInputField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !question.isEmpty, advisorSendButton.isEnabled else { return }
+        advisorInputField.resignFirstResponder()
+        advisorSendButton.isEnabled = false
+        advisorConversationLabel.text = ProductCopy.advisorThinking
+        let client = self.client!
         Task { [weak self] in
-            await pendingAnalysis?.value
             do {
-                switch try await context.remoteAnalysis.completeFairScan() {
-                case let .report(reviewed):
-                    do {
-                        try await MainActor.run { try context.applyFairReport(reviewed) }
-                    } catch {
-                        self?.logger.error("Fair report validation failed; keeping direct analysis candidates as manual checks")
-                        await MainActor.run { context.markFairReviewIncomplete() }
-                    }
-                case .noSuccessfulAnalysis:
-                    await MainActor.run { [weak self] in self?.presentNoAIResultActions() }
-                    return
+                let response = try await client.advisorMessage(
+                    question,
+                    suggestionID: self?.selectedSuggestionID,
+                    frameID: self?.selectedSuggestionFrameID
+                )
+                await MainActor.run {
+                    guard let self else { return }
+                    self.advisorInputField.text = ""
+                    self.advisorConversationLabel.text = response.assistantTurn.text
+                    self.advisorSubtitleLabel.text = response.assistantTurn.text
+                    self.advisorSendButton.isEnabled = true
+                    UIAccessibility.post(notification: .announcement, argument: response.assistantTurn.text)
                 }
             } catch {
-                self?.logger.notice("Report finalization unavailable; report remains clearly partial")
-                await MainActor.run { context.markFairReviewIncomplete() }
-            }
-            await MainActor.run { [weak self] in
-                guard let self else { return }
-                let report = ReportViewController(context: context)
-                report.modalPresentationStyle = .fullScreen
-                self.present(report, animated: true)
-            }
-        }
-    }
-
-    func togglePause(button: UIButton) {
-        if isPaused {
-            isPaused = false
-            isScanning = true
-            captureCoordinator.start()
-            button.configuration?.image = UIImage(systemName: "pause.fill")
-            button.accessibilityLabel = "暂停扫描"
-            guidanceLabel.text = ProductCopy.scanning
-        } else {
-            isPaused = true
-            isScanning = false
-            captureCoordinator.pause()
-            button.configuration?.image = UIImage(systemName: "play.fill")
-            button.accessibilityLabel = "继续扫描"
-            guidanceLabel.text = "已经暂停，准备好后再继续"
-        }
-    }
-
-    private func presentNoAIResultActions() {
-        let alert = UIAlertController(
-            title: ProductCopy.fairAIIncompleteTitle,
-            message: ProductCopy.fairAIIncompleteMessage,
-            preferredStyle: .alert
-        )
-        alert.addAction(UIAlertAction(title: ProductCopy.rescan, style: .default) { [weak self] _ in
-            self?.onNoAIAction?(.rescan)
-        })
-        alert.addAction(UIAlertAction(title: ProductCopy.exitToHome, style: .cancel) { [weak self] _ in
-            self?.onNoAIAction?(.exit)
-        })
-        present(alert, animated: true)
-    }
-
-    func presentIssueDetail(_ issue: SafetyIssue) {
-        let detail = IssueDetailViewController(issueID: issue.id, repository: appContext.repository) { [weak self] in
-            guard let self else { return }
-            self.issueAnchorStore.synchronize(self.appContext.repository.issues)
-        }
-        if let sheet = detail.sheetPresentationController {
-            sheet.detents = [.medium(), .large()]
-            sheet.prefersGrabberVisible = true
-        }
-        present(detail, animated: true)
-    }
-
-    func scheduleRemoteAnalysisIfNeeded(_ frame: ARFrame) {
-        guard case .normal = frame.camera.trackingState else { return }
-        let transform = frame.camera.transform
-        guard let currentTransform = Matrix4x4Codable(values: [
-            transform.columns.0.x, transform.columns.0.y, transform.columns.0.z, transform.columns.0.w,
-            transform.columns.1.x, transform.columns.1.y, transform.columns.1.z, transform.columns.1.w,
-            transform.columns.2.x, transform.columns.2.y, transform.columns.2.z, transform.columns.2.w,
-            transform.columns.3.x, transform.columns.3.y, transform.columns.3.z, transform.columns.3.w
-        ]), remoteMotionGate.hasMeaningfulChange(previous: lastRemoteCameraTransform, current: currentTransform) else { return }
-        guard let context = appContext,
-              context.remoteAnalysis.isEnabled,
-              frame.timestamp - lastRemoteAnalysisTime >= 5,
-              remoteRequestGate.begin() else { return }
-        lastRemoteAnalysisTime = frame.timestamp
-        lastRemoteCameraTransform = currentTransform
-        let frameID = UUID()
-        let remote = context.remoteAnalysis
-        let roomType = currentFairZone.rawValue
-        let store = frameContextStore
-        let requestGate = remoteRequestGate
-        let sourceFrame = frame
-
-        let task = Task { @MainActor [weak self] in
-            guard let self else {
-                requestGate.end()
-                return
-            }
-            defer {
-                requestGate.end()
-                self.remoteAnalysisTask = nil
-            }
-            let prepared: (StoredFrameContext, Data)? = await withCheckedContinuation { continuation in
-                self.analysisQueue.async { [weak self] in
-                    guard let self,
-                          self.frameQualityService.evaluate(pixelBuffer: sourceFrame.capturedImage).map(\.isUsable) == true,
-                          let stored = ARFrameContextBuilder.makeStoredContext(frame: sourceFrame, frameID: frameID),
-                          let jpeg = self.makeJPEG(from: sourceFrame.capturedImage) else {
-                        continuation.resume(returning: nil)
-                        return
-                    }
-                    continuation.resume(returning: (stored, jpeg))
+                await MainActor.run {
+                    self?.advisorConversationLabel.text = ProductCopy.advisorMessageFailed
+                    self?.advisorSubtitleLabel.text = ProductCopy.advisorMessageFailed
+                    self?.advisorSendButton.isEnabled = true
                 }
             }
-            guard !Task.isCancelled else { return }
-            guard let (stored, jpeg) = prepared else {
-                self.guidanceLabel.text = ProductCopy.cameraFrameUnusable
-                self.guidanceLabel.accessibilityLabel = ProductCopy.cameraFrameUnusable
+        }
+    }
+
+    @objc private func toggleAdvisorVoice() {
+        if advisorVoiceState == .speaking {
+            advisorVoiceClient.interrupt()
+            return
+        }
+        if advisorVoiceClient.isMicrophoneEnabled {
+            advisorVoiceClient.disableMicrophone()
+            return
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            let allowed = await self.requestMicrophonePermission()
+            guard allowed else {
+                await MainActor.run {
+                    self.advisorSubtitleLabel.text = ProductCopy.advisorMicrophoneDenied
+                    self.advisorConversationLabel.text = ProductCopy.advisorMicrophoneDenied
+                    self.displayAdvisorVoiceState(.unavailable)
+                }
                 return
             }
-            await store.insert(stored)
-            defer { Task { await store.remove(frameID: frameID) } }
             do {
-                let candidates = try await remote.analyze(frameID: frameID, jpegData: jpeg, roomType: roomType)
-                self.guidanceLabel.text = candidates.isEmpty
-                    ? ProductCopy.directAnalysisNoCandidate
-                    : ProductCopy.directAnalysisCandidatesFound(candidates.count)
-                let resolver = WorldPointResolver()
-                for candidate in candidates {
-                    let candidateZone = candidate.evidence.zoneID.flatMap(VenueZone.init(rawValue:)) ?? self.currentFairZone
-                    self.recordTemporarySuggestion(candidate, zone: candidateZone)
-                    var evidence = candidate.evidence
-                    if let box = evidence.boundingBox {
-                        if let depth = stored.depth,
-                           let point = resolver.resolve(boundingBox: box, frame: stored.context, depth: depth) {
-                            evidence.worldPoint = point
-                        } else if let point = self.raycastWorldPoint(
-                            boundingBox: box,
-                            frameContext: stored.context,
-                            sourceFrame: sourceFrame
-                        ) {
-                            evidence.worldPoint = point
-                        }
+                if self.advisorVoiceClient.isConnected {
+                    try await MainActor.run { try self.advisorVoiceClient.enableMicrophone() }
+                } else {
+                    let configuration = try await self.client.startAdvisorVoice()
+                    guard configuration.isUsable, NativeAdvisorVoiceClient.isSDKAvailable else {
+                        throw NativeAdvisorVoiceError.sdkUnavailable
                     }
-                    let enriched = IssueCandidate(
-                        type: candidate.type,
-                        title: candidate.title,
-                        observation: candidate.observation,
-                        recommendation: candidate.recommendation,
-                        needsManualCheck: candidate.needsManualCheck,
-                        confidence: candidate.confidence,
-                        source: candidate.source,
-                        evidence: evidence,
-                        worldTransform: evidence.worldPoint.flatMap(LegacyIssueAdapter.translationMatrix)
+                    try await MainActor.run {
+                        try self.advisorVoiceClient.connect(configuration, microphone: true)
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    self.advisorSubtitleLabel.text = ProductCopy.advisorVoiceUnavailable
+                    self.advisorConversationLabel.text = ProductCopy.advisorVoiceUnavailable
+                    self.displayAdvisorVoiceState(.unavailable)
+                }
+            }
+        }
+    }
+
+    private func startAdvisorRealtime() {
+        guard NativeAdvisorVoiceClient.isSDKAvailable else { return }
+        let client = self.client!
+        Task { [weak self] in
+            do {
+                let configuration = try await client.startAdvisorRealtime()
+                guard configuration.supportsVideo else { return }
+                try await MainActor.run {
+                    guard let self, !self.hasFinished else { return }
+                    try self.advisorVoiceClient.connect(
+                        configuration,
+                        video: true,
+                        microphone: false
                     )
-                    if context.observeFairDirectCandidate(enriched) != nil {
-                        self.issueAnchorStore.synchronize(context.repository.issues)
+                    self.rtcVideoEnabled = true
+                    self.guidanceLabel.text = ProductCopy.homeCameraScanning
+                }
+            } catch {
+                await MainActor.run {
+                    self?.rtcVideoEnabled = false
+                    self?.guidanceLabel.text = ProductCopy.remoteUnavailable
+                }
+            }
+        }
+    }
+
+    private func requestMicrophonePermission() async -> Bool {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            return true
+        case .notDetermined:
+            return await withCheckedContinuation { continuation in
+                AVCaptureDevice.requestAccess(for: .audio) { continuation.resume(returning: $0) }
+            }
+        default:
+            return false
+        }
+    }
+
+    @MainActor
+    private func displayAdvisorVoiceState(_ state: NativeAdvisorVoiceState) {
+        advisorVoiceState = state
+        let copy: String
+        let symbol: String
+        switch state {
+        case .idle:
+            copy = ProductCopy.advisorDefaultSubtitle
+            symbol = "mic.fill"
+        case .connecting:
+            copy = ProductCopy.advisorConnecting
+            symbol = "mic.fill"
+        case .listening:
+            copy = ProductCopy.advisorListening
+            symbol = "mic.slash.fill"
+        case .thinking:
+            copy = ProductCopy.advisorThinking
+            symbol = "waveform"
+        case .speaking:
+            copy = ProductCopy.advisorSpeaking
+            symbol = "stop.fill"
+        case .reconnecting:
+            copy = ProductCopy.advisorReconnecting
+            symbol = "arrow.clockwise"
+        case .unavailable:
+            copy = ProductCopy.advisorVoiceUnavailable
+            symbol = "mic.slash.fill"
+        }
+        advisorVoiceButton.setImage(UIImage(systemName: symbol), for: .normal)
+        advisorVoiceButton.accessibilityLabel = copy
+        advisorSubtitleLabel.text = copy
+        if state != .idle || advisorConversationLabel.text?.isEmpty == true {
+            advisorConversationLabel.text = copy
+        }
+        if state != .idle { UIAccessibility.post(notification: .announcement, argument: copy) }
+    }
+
+    private func startAdvisorEvents() {
+        let client = self.client!
+        Task { [weak self] in
+            do {
+                guard let socket = try await client.advisorEventSocket() else { return }
+                await MainActor.run {
+                    self?.advisorEventTask?.cancel(with: .goingAway, reason: nil)
+                    self?.advisorEventTask = socket
+                    socket.resume()
+                }
+                while !Task.isCancelled {
+                    let message = try await socket.receive()
+                    let data: Data
+                    switch message {
+                    case let .data(value): data = value
+                    case let .string(value): data = Data(value.utf8)
+                    @unknown default: continue
                     }
+                    guard let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                          let type = payload["type"] as? String else { continue }
+                    if type == "turn",
+                       let turn = payload["turn"] as? [String: Any],
+                       turn["role"] as? String == "assistant",
+                       let text = turn["text"] as? String,
+                       !text.isEmpty {
+                        await MainActor.run {
+                            self?.advisorSubtitleLabel.text = text
+                            self?.advisorConversationLabel.text = text
+                        }
+                    } else if type == "camera_suggestion_added",
+                              let inspectionID = payload["inspection_id"] as? String,
+                              let frameIDText = payload["frame_id"] as? String,
+                              let value = payload["suggestion"],
+                              let suggestionData = try? JSONSerialization.data(withJSONObject: value),
+                              let suggestion = try? JSONDecoder().decode(CameraSuggestion.self, from: suggestionData),
+                              let frameID = UUID(uuidString: frameIDText) {
+                        await self?.display(
+                            CameraSuggestionResponse(
+                                frameID: frameIDText,
+                                temporary: true,
+                                suggestions: [suggestion]
+                            ),
+                            frameID: frameID,
+                            inspectionID: inspectionID
+                        )
+                    } else if type == "inspection_state",
+                              let inspectionID = payload["inspection_id"] as? String,
+                              let state = payload["status"] as? String,
+                              ["suggested", "inspected", "expired"].contains(state) {
+                        await self?.finishInspection(inspectionID)
+                    }
+                }
+            } catch {
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    if self?.advisorVoiceState != .idle {
+                        self?.displayAdvisorVoiceState(.reconnecting)
+                    }
+                }
+            }
+        }
+    }
+
+    @objc private func togglePause() {
+        guard !hasFinished else { return }
+        isPaused.toggle()
+        if isPaused {
+            isScanning = false
+            if spatialMode { captureCoordinator.pause() } else { arView.session.pause() }
+            advisorVoiceClient.pauseMedia()
+            pauseButton.configuration?.image = UIImage(systemName: "play.fill")
+            pauseButton.accessibilityLabel = ProductCopy.resumeScan
+            guidanceLabel.text = ProductCopy.scanPaused
+        } else {
+            pauseButton.configuration?.image = UIImage(systemName: "pause.fill")
+            pauseButton.accessibilityLabel = ProductCopy.pauseScan
+            startSession()
+            advisorVoiceClient.resumeVideo()
+            guidanceLabel.text = ProductCopy.homeCameraScanning
+        }
+    }
+
+    private func processFrameIfNeeded(_ frame: ARFrame) {
+        guard isScanning, !isPaused, !hasFinished,
+              representativeFrames.count < NativeRealtimeVideoPolicy.maximumCachedFrames,
+              frame.timestamp - lastCandidateTime >= selectionPolicy.candidateInterval,
+              localFrameGate.begin() else { return }
+        lastCandidateTime = frame.timestamp
+        let frameID = UUID()
+        let transform = frame.camera.transform
+        let shouldAcceptSpatial = !spatialMode || hasSpatialMovement(from: lastAcceptedTransform, to: transform)
+        guard shouldAcceptSpatial else {
+            localFrameGate.end()
+            return
+        }
+        let capturedAt = Int(Date().timeIntervalSince1970 * 1000)
+        analysisQueue.async { [weak self] in
+            guard let self else { return }
+            let quality = self.frameQualityService.evaluate(pixelBuffer: frame.capturedImage)
+            let jpeg = quality?.isUsable == true ? self.makeJPEG(from: frame.capturedImage) : nil
+            let inspectionJPEG = quality?.isUsable == true
+                ? self.makeJPEG(from: frame.capturedImage, maximumEdge: 720, quality: 0.68)
+                : nil
+            let hash = self.perceptualHash(frame.capturedImage)
+            let storedContext = ARFrameContextBuilder.makeStoredContext(frame: frame, frameID: frameID)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                defer { self.localFrameGate.end() }
+                guard !self.hasFinished, let jpeg else {
+                    self.guidanceLabel.text = ProductCopy.cameraFrameUnusable
+                    return
+                }
+                if !self.spatialMode, let hash,
+                   let previous = self.lastPerceptualHash,
+                   !self.selectionPolicy.acceptsPerceptualHash(previous: previous, current: hash) {
+                    return
+                }
+                do {
+                    let url = try self.fileStore.save(jpeg, frameID: frameID)
+                    self.representativeFrames.append(.init(
+                        frameID: frameID, fileURL: url, capturedAtMilliseconds: capturedAt,
+                        perceptualHash: hash, brightness: quality?.brightness ?? 0,
+                        sharpness: quality?.sharpness ?? 0, byteCount: jpeg.count
+                    ))
+                    self.enforceRepresentativeCacheLimit()
+                    self.finishButton.isEnabled = true
+                    self.lastAcceptedTransform = transform
+                    self.lastPerceptualHash = hash
+                    self.countLabel.text = ProductCopy.savedRepresentativeFrames(
+                        min(self.representativeFrames.count, self.captureRequest.remainingSlots),
+                        limit: self.captureRequest.remainingSlots
+                    )
+                    let beginInspection = { [weak self] in
+                        self?.inspectIfNeeded(
+                            frameID: frameID,
+                            jpeg: inspectionJPEG ?? jpeg,
+                            timestamp: frame.timestamp,
+                            capturedAtMilliseconds: capturedAt,
+                            width: CVPixelBufferGetHeight(frame.capturedImage),
+                            height: CVPixelBufferGetWidth(frame.capturedImage),
+                            hash: hash,
+                            quality: quality
+                        )
+                    }
+                    if let storedContext {
+                        Task { [weak self] in
+                            guard let self else { return }
+                            let inserted = await self.frameContextStore.insert(storedContext)
+                            await MainActor.run {
+                                guard !self.hasFinished else { return }
+                                if inserted { beginInspection() }
+                                else { self.guidanceLabel.text = ProductCopy.depthContextBusy }
+                            }
+                        }
+                    } else {
+                        beginInspection()
+                    }
+                    if self.representativeFrames.count >= NativeRealtimeVideoPolicy.maximumCachedFrames {
+                        self.guidanceLabel.text = ProductCopy.representativeFrameLimitReached
+                    }
+                } catch {
+                    self.guidanceLabel.text = ProductCopy.frameSaveFailed
+                }
+            }
+        }
+    }
+
+    private func inspectIfNeeded(
+        frameID: UUID,
+        jpeg: Data,
+        timestamp: TimeInterval,
+        capturedAtMilliseconds: Int,
+        width: Int,
+        height: Int,
+        hash: UInt64?,
+        quality: FrameQualityResult?
+    ) {
+        guard selectionPolicy.permitsModelRequest(
+                  elapsed: timestamp - lastModelRequestTime,
+                  completedRequests: modelRequestCount
+              ),
+              modelRequestGate.begin() else { return }
+        lastModelRequestTime = timestamp
+        modelRequestCount += 1
+        let client = self.client!
+        Task { [weak self] in
+            defer { self?.modelRequestGate.end() }
+            do {
+                if let self, self.rtcVideoEnabled, self.advisorVoiceClient.isConnected,
+                   let hash, let quality {
+                    let prepared = try await client.prepareInspection(
+                        frameID: frameID,
+                        capturedAtMilliseconds: capturedAtMilliseconds,
+                        width: width,
+                        height: height,
+                        perceptualHash: String(format: "%016llx", hash),
+                        brightness: quality.brightness,
+                        sharpness: quality.sharpness,
+                        motion: 0
+                    )
+                    guard await self.frameContextStore.lock(
+                        frameID: frameID,
+                        inspectionID: prepared.inspectionID
+                    ) else {
+                        await MainActor.run { self.guidanceLabel.text = ProductCopy.depthContextBusy }
+                        return
+                    }
+                    do {
+                        try await MainActor.run {
+                            guard !self.hasFinished else { throw CancellationError() }
+                            self.inspectionGroups[prepared.inspectionID] = prepared.groupID
+                            try self.advisorVoiceClient.sendInspectionImage(jpeg, prepared: prepared)
+                            self.scheduleInspectionTimeout(prepared.inspectionID)
+                            self.rtcInspectionFailures = 0
+                            self.guidanceLabel.text = ProductCopy.advisorThinking
+                        }
+                    } catch {
+                        await self.finishInspection(prepared.inspectionID)
+                        throw error
+                    }
+                } else {
+                    let response = try await client.inspect(frameID: frameID, jpegData: jpeg)
+                    guard !Task.isCancelled else { return }
+                    await self?.display(response, frameID: frameID, inspectionID: nil)
                 }
             } catch is CancellationError {
                 return
             } catch {
-                self.logger.notice("Remote Pro frame analysis unavailable; frame was not accepted")
-                self.guidanceLabel.text = ProductCopy.remoteUnavailable
-                UIAccessibility.post(notification: .announcement, argument: ProductCopy.remoteUnavailable)
+                await MainActor.run {
+                    guard let self else { return }
+                    self.rtcInspectionFailures += 1
+                    if self.rtcVideoEnabled, self.rtcInspectionFailures >= 3 {
+                        self.rtcVideoEnabled = false
+                        self.guidanceLabel.text = ProductCopy.remoteUnavailable
+                    } else {
+                        self.guidanceLabel.text = ProductCopy.remoteUnavailable
+                    }
+                }
             }
         }
-        remoteAnalysisTask = task
     }
 
-    func makeJPEG(from pixelBuffer: CVPixelBuffer) -> Data? {
+    @MainActor
+    private func display(
+        _ response: CameraSuggestionResponse,
+        frameID: UUID,
+        inspectionID: String?
+    ) async {
+        suggestionsStack.arrangedSubviews.forEach {
+            suggestionsStack.removeArrangedSubview($0)
+            $0.removeFromSuperview()
+        }
+        if response.suggestions.isEmpty {
+            suggestionsStack.addArrangedSubview(suggestionLabel(ProductCopy.directAnalysisNoCandidate))
+        } else {
+            if let index = representativeFrames.firstIndex(where: { $0.frameID == frameID }) {
+                representativeFrames[index].pinned = true
+                representativeFrames[index].confidence = max(
+                    representativeFrames[index].confidence,
+                    response.suggestions.map(\.confidence).max() ?? 0
+                )
+            }
+            if let first = response.suggestions.first {
+                advisorSubtitleLabel.text = ProductCopy.advisorTemporarySuggestion(first.title, advice: first.shortAdvice)
+            }
+            for suggestion in response.suggestions.prefix(3) {
+                suggestionsStack.addArrangedSubview(suggestionButton(suggestion, frameID: frameID))
+                if spatialMode {
+                    let anchored = await addSpatialAnchor(
+                        for: suggestion,
+                        frameID: frameID,
+                        inspectionID: inspectionID
+                    )
+                    if !anchored { add2DRegion(for: suggestion) }
+                } else { add2DRegion(for: suggestion) }
+            }
+            UIAccessibility.post(
+                notification: .announcement,
+                argument: ProductCopy.directAnalysisCandidatesFound(response.suggestions.count)
+            )
+        }
+    }
+
+    @MainActor
+    private func addSpatialAnchor(
+        for suggestion: CameraSuggestion,
+        frameID: UUID,
+        inspectionID: String?
+    ) async -> Bool {
+        let stored: StoredFrameContext?
+        if let inspectionID {
+            stored = await frameContextStore.value(
+                inspectionID: inspectionID,
+                expectedFrameID: frameID
+            )
+        } else {
+            stored = await frameContextStore.value(for: frameID)
+        }
+        guard let region = suggestion.region,
+              region.type == boundingBoxRegionType,
+              let x = region.x, let y = region.y, let width = region.width, let height = region.height,
+              let box = NormalizedBoundingBox(xMin: x, yMin: y, xMax: x + width, yMax: y + height),
+              let stored,
+              let depth = stored.depth,
+              let point = WorldPointResolver().resolve(boundingBox: box, frame: stored.context, depth: depth) else {
+            return false
+        }
+        let anchor = AnchorEntity(world: SIMD3<Float>(point.x, point.y, point.z))
+        let mesh = MeshResource.generateSphere(radius: 0.045)
+        let material = SimpleMaterial(color: .systemOrange, roughness: 0.35, isMetallic: false)
+        anchor.addChild(ModelEntity(mesh: mesh, materials: [material]))
+        arView.scene.addAnchor(anchor)
+        return true
+    }
+
+    @MainActor
+    private func scheduleInspectionTimeout(_ inspectionID: String) {
+        inspectionTimeoutTasks[inspectionID]?.cancel()
+        inspectionTimeoutTasks[inspectionID] = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(35))
+            guard !Task.isCancelled else { return }
+            await self?.finishInspection(inspectionID)
+        }
+    }
+
+    private func finishInspection(_ inspectionID: String) async {
+        await MainActor.run {
+            inspectionTimeoutTasks.removeValue(forKey: inspectionID)?.cancel()
+            if let groupID = inspectionGroups.removeValue(forKey: inspectionID) {
+                advisorVoiceClient.deleteInspectionImage(groupID: groupID)
+            }
+        }
+        await frameContextStore.unlock(inspectionID: inspectionID, removeContext: true)
+    }
+
+    private func add2DRegion(for suggestion: CameraSuggestion) {
+        guard let region = suggestion.region,
+              region.type == boundingBoxRegionType,
+              let x = region.x, let y = region.y, let width = region.width, let height = region.height else { return }
+        arView.subviews.filter { $0.accessibilityIdentifier == "temporary-risk-region" }.forEach { $0.removeFromSuperview() }
+        let box = UIView(frame: CGRect(
+            x: x * arView.bounds.width,
+            y: y * arView.bounds.height,
+            width: width * arView.bounds.width,
+            height: height * arView.bounds.height
+        ))
+        box.isUserInteractionEnabled = false
+        box.layer.borderColor = UIColor.systemOrange.cgColor
+        box.layer.borderWidth = 3
+        box.layer.cornerRadius = 8
+        box.accessibilityIdentifier = "temporary-risk-region"
+        arView.insertSubview(box, belowSubview: guidanceLabel)
+    }
+
+    private func hasSpatialMovement(from previous: simd_float4x4?, to current: simd_float4x4) -> Bool {
+        guard let previous else { return true }
+        let previousPosition = SIMD3<Float>(previous.columns.3.x, previous.columns.3.y, previous.columns.3.z)
+        let currentPosition = SIMD3<Float>(current.columns.3.x, current.columns.3.y, current.columns.3.z)
+        if Double(simd_distance(previousPosition, currentPosition)) >= selectionPolicy.minimumTranslationMeters { return true }
+        let previousRotation = simd_quatf(previous)
+        let currentRotation = simd_quatf(current)
+        let dot = min(1, abs(simd_dot(previousRotation.vector, currentRotation.vector)))
+        return Double(2 * acos(dot)) >= selectionPolicy.minimumRotationRadians
+    }
+
+    private func enforceRepresentativeCacheLimit() {
+        while representativeFrames.count > NativeRealtimeVideoPolicy.maximumCachedFrames
+            || representativeFrames.reduce(0, { $0 + $1.byteCount }) > NativeRealtimeVideoPolicy.maximumCacheBytes {
+            let candidates = representativeFrames.indices.filter { !representativeFrames[$0].pinned }
+            let eligible = candidates.isEmpty ? Array(representativeFrames.indices) : candidates
+            let index = eligible.min { left, right in
+                let lhs = representativeFrames[left]
+                let rhs = representativeFrames[right]
+                let lhsScore = lhs.confidence + lhs.sharpness / 100 - abs(lhs.brightness - 128) / 1_000
+                let rhsScore = rhs.confidence + rhs.sharpness / 100 - abs(rhs.brightness - 128) / 1_000
+                return lhsScore < rhsScore
+            }
+            guard let index else { break }
+            fileStore.remove(representativeFrames[index].fileURL)
+            representativeFrames.remove(at: index)
+        }
+    }
+
+    private func selectedRepresentativeFrames() -> [RepresentativeFrame] {
+        let identifiers = NativeRealtimeVideoPolicy.selectRepresentativeIDs(
+            representativeFrames.map { frame in
+                NativeRepresentativeCandidate(
+                    id: frame.frameID.uuidString,
+                    perceptualHash: frame.perceptualHash,
+                    pinned: frame.pinned,
+                    confidence: frame.confidence,
+                    brightness: frame.brightness,
+                    sharpness: frame.sharpness
+                )
+            },
+            limit: captureRequest.remainingSlots
+        )
+        let byID = Dictionary(uniqueKeysWithValues: representativeFrames.map { ($0.frameID.uuidString, $0) })
+        return identifiers.compactMap { byID[$0] }
+    }
+
+    private func makeJPEG(
+        from pixelBuffer: CVPixelBuffer,
+        maximumEdge: Double? = nil,
+        quality: Double? = nil
+    ) -> Data? {
         let image = CIImage(cvPixelBuffer: pixelBuffer).oriented(.right)
-        let scale = min(1, 1280 / max(image.extent.width, image.extent.height))
+        let scale = min(
+            1,
+            CGFloat(maximumEdge ?? selectionPolicy.maximumImageEdge) / max(image.extent.width, image.extent.height)
+        )
         let resized = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         guard let cgImage = ciContext.createCGImage(resized, from: resized.extent) else { return nil }
-        return UIImage(cgImage: cgImage).jpegData(compressionQuality: 0.72)
+        return UIImage(cgImage: cgImage).jpegData(
+            compressionQuality: quality ?? selectionPolicy.jpegQuality
+        )
     }
 
-    func raycastWorldPoint(
-        boundingBox: NormalizedBoundingBox,
-        frameContext: CapturedFrameContext,
-        sourceFrame: ARFrame
-    ) -> WorldPoint? {
-        guard let capturedBox = frameContext.modelImageOrientation.capturedImageBox(from: boundingBox) else { return nil }
-        let normalizedPoint = CGPoint(
-            x: (capturedBox.xMin + capturedBox.xMax) * 0.5,
-            y: capturedBox.yMax
-        ).applying(sourceFrame.displayTransform(for: .portrait, viewportSize: arView.bounds.size))
-        let screenPoint = CGPoint(
-            x: normalizedPoint.x * arView.bounds.width,
-            y: normalizedPoint.y * arView.bounds.height
-        )
-        for target in [ARRaycastQuery.Target.existingPlaneGeometry, .estimatedPlane] {
-            if let result = arView.raycast(from: screenPoint, allowing: target, alignment: .any).first {
-                let position = result.worldTransform.columns.3
-                guard position.x.isFinite, position.y.isFinite, position.z.isFinite else { continue }
-                return WorldPoint(x: position.x, y: position.y, z: position.z)
+    private func perceptualHash(_ pixelBuffer: CVPixelBuffer) -> UInt64? {
+        guard CVPixelBufferGetPlaneCount(pixelBuffer) > 0 else { return nil }
+        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0) else { return nil }
+        let width = CVPixelBufferGetWidthOfPlane(pixelBuffer, 0)
+        let height = CVPixelBufferGetHeightOfPlane(pixelBuffer, 0)
+        let stride = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0)
+        guard width >= 8, height >= 8 else { return nil }
+        let bytes = base.assumingMemoryBound(to: UInt8.self)
+        var samples: [UInt8] = []
+        for row in 0..<8 {
+            for column in 0..<8 {
+                let x = min(width - 1, (column * width + width / 2) / 8)
+                let y = min(height - 1, (row * height + height / 2) / 8)
+                samples.append(bytes[y * stride + x])
             }
         }
-        return nil
+        let average = samples.reduce(0) { $0 + Int($1) } / samples.count
+        return samples.enumerated().reduce(UInt64(0)) { value, item in
+            item.element >= average ? value | (UInt64(1) << UInt64(item.offset)) : value
+        }
+    }
+
+    @objc private func finishScan() {
+        guard !hasFinished else { return }
+        hasFinished = true
+        advisorVoiceClient.disconnect()
+        advisorEventTask?.cancel(with: .goingAway, reason: nil)
+        advisorEventTask = nil
+        stopSession()
+        finishButton.isEnabled = false
+        guidanceLabel.text = ProductCopy.uploadingRepresentativeFrames
+        let frames = selectedRepresentativeFrames()
+        let client = self.client!
+        let request = captureRequest!
+        uploadTask = Task { [weak self] in
+            await client.cancelPending()
+            var uploaded: [String] = []
+            var failed = 0
+            for (index, frame) in frames.enumerated() {
+                guard !Task.isCancelled else { return }
+                do {
+                    let data = try Data(contentsOf: frame.fileURL)
+                    let mediaID = try await client.upload(
+                        jpegData: data,
+                        sourceKind: "ios_camera_frame",
+                        sourceID: frame.frameID.uuidString,
+                        frameIndex: index,
+                        capturedAtMilliseconds: frame.capturedAtMilliseconds
+                    )
+                    uploaded.append(mediaID)
+                } catch {
+                    failed += 1
+                }
+            }
+            await MainActor.run {
+                guard let self else { return }
+                self.fileStore.removeAll()
+                self.releaseResources()
+                let status: String
+                let errorCode: String?
+                if uploaded.isEmpty {
+                    status = "failed"
+                    errorCode = frames.isEmpty ? "no_representative_frames" : "frame_upload_failed"
+                } else if failed > 0 {
+                    status = "partial"
+                    errorCode = "frame_upload_partial"
+                } else {
+                    status = "completed"
+                    errorCode = nil
+                }
+                self.onCaptureFinished?(.init(
+                    requestID: request.requestID,
+                    status: status,
+                    roomID: request.roomID,
+                    captureMode: self.spatialMode ? "spatial_ar" : "camera_2d",
+                    uploadedMediaIDs: uploaded,
+                    failedCount: failed,
+                    errorCode: errorCode,
+                    cameraSessionID: request.cameraSessionID
+                ))
+            }
+        }
+    }
+
+    @objc private func cancelScan() {
+        guard !hasFinished else { return }
+        hasFinished = true
+        advisorVoiceClient.disconnect()
+        advisorEventTask?.cancel(with: .goingAway, reason: nil)
+        advisorEventTask = nil
+        stopSession()
+        uploadTask?.cancel()
+        let client = self.client!
+        let request = captureRequest!
+        Task { [weak self] in
+            await client.cancelPending()
+            await MainActor.run {
+                guard let self else { return }
+                self.fileStore.removeAll()
+                self.releaseResources()
+                self.onCaptureFinished?(.init(
+                    requestID: request.requestID,
+                    status: "cancelled",
+                    roomID: request.roomID,
+                    captureMode: self.spatialMode ? "spatial_ar" : "camera_2d",
+                    uploadedMediaIDs: [],
+                    failedCount: 0,
+                    errorCode: nil,
+                    cameraSessionID: request.cameraSessionID
+                ))
+            }
+        }
+    }
+}
+
+extension ViewController: ARSessionDelegate {
+    public func session(_ session: ARSession, didUpdate frame: ARFrame) {
+        DispatchQueue.main.async { [weak self] in
+            self?.advisorVoiceClient.pushVideoFrame(frame.capturedImage, timestamp: frame.timestamp)
+            self?.processFrameIfNeeded(frame)
+        }
     }
 }
 
 extension ViewController: RoomCaptureCoordinatorDelegate {
-    func roomCaptureCoordinator(_ coordinator: RoomCaptureCoordinator, didUpdate room: CapturedRoom) {
-        replicator.anchor(
-            objects: room.objects,
-            surfaces: room.walls + room.doors + room.openings + room.windows,
-            in: coordinator.session
-        )
-        minimap?.update()
-    }
+    func roomCaptureCoordinator(_ coordinator: RoomCaptureCoordinator, didUpdate room: CapturedRoom) {}
 
     func roomCaptureCoordinatorDidStart(_ coordinator: RoomCaptureCoordinator) {
         arView.session.pause()
@@ -693,84 +1239,18 @@ extension ViewController: RoomCaptureCoordinatorDelegate {
         arView.session.delegate = self
     }
 
-    func roomCaptureCoordinator(_ coordinator: RoomCaptureCoordinator, didFinish data: CapturedRoomData, error: Error?) {
-        completeScanIfNeeded(error: error)
-    }
+    func roomCaptureCoordinator(_ coordinator: RoomCaptureCoordinator, didFinish data: CapturedRoomData, error: Error?) {}
 
     func roomCaptureCoordinator(_ coordinator: RoomCaptureCoordinator, didProvide instruction: RoomCaptureSession.Instruction) {
-        let message: String
-        switch instruction{
-        case .moveCloseToWall:
-            message = "再靠近一点看看墙边"
-        case .moveAwayFromWall:
-            message = "稍微退后一点"
-        case .slowDown:
-            message = "慢一点，画面会更清楚"
-        case .turnOnLight:
-            message = "打开灯后再看看这里"
-        case .normal:
-            message = ProductCopy.scanning
-        case .lowTexture:
-            message = "把墙角也放进画面里"
-        @unknown default:
-            message = ProductCopy.scanMore
-        }
-        guidanceLabel.text = message
-        guidanceLabel.accessibilityLabel = message
-        UIAccessibility.post(notification: .announcement, argument: message)
-    }
-}
-
-extension ViewController: ARSessionDelegate {
-    
-    public func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {
-        //        for a in anchors{
-        //            //session.add(anchor: a)
-        //            //arView.scene.addAnchor(NotifyingEntity(anchor:a))
-        //
-        //            let mesh = MeshResource.generateSphere(radius: 0.3)
-        //            let material = SimpleMaterial(color: .systemRed, roughness: 0.27, isMetallic: false)
-        //            let model = ModelEntity(mesh: mesh, materials: [material])
-        //            let anchorEntity = AnchorEntity(anchor: a)
-        //            anchorEntity.anchor?.addChild(model)
-        //            arView.scene.addAnchor(anchorEntity)
-        //}
-        //arView.scene.addRoomObjectEntities(for: anchors)
-        
-    }
-    
-    public func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
-        //arView.scene.updateRoomObjectEntities(for: anchors)
-        
-    }
-    public func session(_ session: ARSession, didUpdate frame: ARFrame) {
-        let camera = frame.camera
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            let issues = self.appContext.repository.issues
-            self.issueAnchorStore.synchronize(issues)
-            self.issueOverlayCoordinator.update(
-                issues: issues,
-                camera: camera,
-                viewportSize: self.arView.bounds.size
-            )
-            self.issueMiniMapView.update(issues: issues, cameraTransform: camera.transform)
-        }
-        scheduleRemoteAnalysisIfNeeded(frame)
-
-        //Rotate the minimap with the real-time camera orientation
-        let cameraTrans=session.currentFrame?.camera.eulerAngles
-        if let trans=cameraTrans {
-            var angle=trans.y
-            if angle<0{
-                angle += .pi*2
-            }
-            //let rotation = CATransform3DMakeRotation(CGFloat(angle), 0, 0, 1)
-            DispatchQueue.main.async { [weak self] in
-                if let map = self?.minimap, map.isDrawn() {
-                    map.set_rotation(angle:angle)
-                }
-            }
+        guard isScanning else { return }
+        switch instruction {
+        case .moveCloseToWall: guidanceLabel.text = ProductCopy.moveCloser
+        case .moveAwayFromWall: guidanceLabel.text = ProductCopy.moveAway
+        case .slowDown: guidanceLabel.text = ProductCopy.slowDown
+        case .turnOnLight: guidanceLabel.text = ProductCopy.turnOnLight
+        case .lowTexture: guidanceLabel.text = ProductCopy.scanCorner
+        case .normal: guidanceLabel.text = ProductCopy.homeCameraScanning
+        @unknown default: guidanceLabel.text = ProductCopy.scanMore
         }
     }
 }

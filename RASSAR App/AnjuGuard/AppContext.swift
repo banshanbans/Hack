@@ -34,27 +34,20 @@ final class ScanIssueRepository {
 
 @MainActor
 final class AnjuAppContext {
-    private static let productionAnalysisBaseURL = "https://shotapi.socialdog.cn"
-
     let session: ScanSession
     let ruleStore: SafetyRuleStore
     let detectionEngine: IssueDetectionEngine
     let repository: ScanIssueRepository
-    let remoteAnalysis: any RemoteAnalysisServing
-    private(set) var fairReport: FairScanReportDTO?
-    private(set) var fairReviewIncomplete = false
 
     init(
         session: ScanSession,
         ruleStore: SafetyRuleStore,
-        repository: ScanIssueRepository? = nil,
-        remoteAnalysis: any RemoteAnalysisServing = DisabledRemoteAnalysisClient()
+        repository: ScanIssueRepository? = nil
     ) {
         self.session = session
         self.ruleStore = ruleStore
         detectionEngine = IssueDetectionEngine(ruleStore: ruleStore)
         self.repository = repository ?? ScanIssueRepository()
-        self.remoteAnalysis = remoteAnalysis
     }
 
     static func makeDefault(profiles: Set<String>, roomType: String? = nil) -> AnjuAppContext {
@@ -70,37 +63,7 @@ final class AnjuAppContext {
         }
         var session = ScanSession(roomType: roomType, profiles: profiles)
         session.state = .preparing
-        let remote: any RemoteAnalysisServing
-        let configuredBaseURL = ProcessInfo.processInfo.environment["ANJU_ANALYSIS_BASE_URL"]
-            ?? Bundle.main.object(forInfoDictionaryKey: "AnjuAnalysisBaseURL") as? String
-            ?? Self.productionAnalysisBaseURL
-        if let url = URL(string: configuredBaseURL),
-           let client = RemoteAnalysisClient(baseURL: url, sessionID: session.id) {
-            remote = client
-        } else {
-            remote = DisabledRemoteAnalysisClient()
-        }
-        return AnjuAppContext(session: session, ruleStore: store, remoteAnalysis: remote)
-    }
-
-    @discardableResult
-    func observeFairDirectCandidate(_ candidate: IssueCandidate) -> SafetyIssue? {
-        guard let issue = FairDirectAdapter().temporaryIssue(from: candidate, sessionID: session.id) else { return nil }
-        return repository.observe(issue)
-    }
-
-    func applyFairReport(_ report: FairScanReportDTO) throws {
-        let turboIssues = repository.issues
-        let reviewedIssues = try FairReportAdapter().validatedIssues(
-            report: report, sessionID: session.id, preserving: turboIssues
-        )
-        repository.replace(with: reviewedIssues)
-        fairReport = report
-        fairReviewIncomplete = report.status == "partial_review_failed"
-    }
-
-    func markFairReviewIncomplete() {
-        fairReviewIncomplete = true
+        return AnjuAppContext(session: session, ruleStore: store)
     }
 
     private static let fallbackRule = SafetyRule(

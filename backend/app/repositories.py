@@ -104,6 +104,23 @@ class SQLiteRepository:
                     risk_id TEXT NOT NULL UNIQUE REFERENCES risks(id) ON DELETE CASCADE, solution_package_id TEXT NOT NULL,
                     status TEXT NOT NULL, created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS renovation_previews (
+                    id TEXT PRIMARY KEY, assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+                    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+                    source_media_id TEXT NOT NULL REFERENCES media(id) ON DELETE CASCADE,
+                    selection_snapshot_json TEXT NOT NULL, selection_hash TEXT NOT NULL,
+                    status TEXT NOT NULL, stage TEXT NOT NULL, error TEXT,
+                    provider TEXT, model TEXT, prompt_version TEXT NOT NULL, rule_set_version TEXT NOT NULL,
+                    visualized_actions_json TEXT NOT NULL DEFAULT '[]', skipped_actions_json TEXT NOT NULL DEFAULT '[]',
+                    output_path TEXT, output_mime_type TEXT, selected_for_report INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_renovation_previews_room_created
+                    ON renovation_previews(room_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_renovation_previews_assessment
+                    ON renovation_previews(assessment_id);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_renovation_previews_one_active_room
+                    ON renovation_previews(room_id) WHERE status IN ('queued','running');
                 CREATE TABLE IF NOT EXISTS shares (
                     token_hash TEXT PRIMARY KEY, assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
                     expires_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
@@ -112,20 +129,143 @@ class SQLiteRepository:
                     id TEXT PRIMARY KEY, assessment_id TEXT, room_id TEXT, event_name TEXT NOT NULL,
                     payload_json TEXT NOT NULL, created_at TEXT NOT NULL
                 );
-                CREATE TABLE IF NOT EXISTS fair_scans (
-                    id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, status TEXT NOT NULL,
-                    result_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                CREATE TABLE IF NOT EXISTS camera_discovery_sessions (
+                    id TEXT PRIMARY KEY,
+                    assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+                    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+                    status TEXT NOT NULL,
+                    media_ids_json TEXT NOT NULL DEFAULT '[]',
+                    expires_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
                 );
-                CREATE TABLE IF NOT EXISTS fair_frames (
-                    id TEXT PRIMARY KEY, scan_id TEXT NOT NULL REFERENCES fair_scans(id) ON DELETE CASCADE,
-                    zone_id TEXT NOT NULL, path TEXT NOT NULL, mime_type TEXT NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL,
-                    orientation TEXT NOT NULL, candidates_json TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL
+                CREATE TABLE IF NOT EXISTS camera_suggestions (
+                    id TEXT PRIMARY KEY,
+                    camera_session_id TEXT NOT NULL REFERENCES camera_discovery_sessions(id) ON DELETE CASCADE,
+                    assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+                    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+                    frame_id TEXT NOT NULL,
+                    risk_code TEXT NOT NULL,
+                    suggestion_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
                 );
-                CREATE TABLE IF NOT EXISTS fair_zones (
-                    id TEXT PRIMARY KEY, scan_id TEXT NOT NULL REFERENCES fair_scans(id) ON DELETE CASCADE,
-                    zone_id TEXT NOT NULL, status TEXT NOT NULL, result_json TEXT NOT NULL DEFAULT '{}', updated_at TEXT NOT NULL,
-                    UNIQUE(scan_id, zone_id)
+                CREATE INDEX IF NOT EXISTS idx_camera_suggestions_session_created
+                    ON camera_suggestions(camera_session_id, created_at);
+                CREATE TABLE IF NOT EXISTS camera_session_frames (
+                    id TEXT PRIMARY KEY,
+                    inspection_id TEXT NOT NULL UNIQUE,
+                    camera_session_id TEXT NOT NULL REFERENCES camera_discovery_sessions(id) ON DELETE CASCADE,
+                    assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+                    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+                    captured_at_ms INTEGER NOT NULL,
+                    width INTEGER NOT NULL,
+                    height INTEGER NOT NULL,
+                    orientation TEXT NOT NULL,
+                    perceptual_hash TEXT,
+                    quality_json TEXT NOT NULL DEFAULT '{}',
+                    group_id INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    media_id TEXT REFERENCES media(id) ON DELETE SET NULL,
+                    expires_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
                 );
+                CREATE INDEX IF NOT EXISTS idx_camera_session_frames_session_created
+                    ON camera_session_frames(camera_session_id, created_at);
+                CREATE TABLE IF NOT EXISTS advisor_sessions (
+                    id TEXT PRIMARY KEY,
+                    assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+                    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+                    camera_session_id TEXT REFERENCES camera_discovery_sessions(id) ON DELETE SET NULL,
+                    status TEXT NOT NULL,
+                    provider_task_id TEXT,
+                    rtc_room_id TEXT,
+                    rtc_user_id TEXT,
+                    rtc_bot_user_id TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    ended_at TEXT,
+                    last_activity_at TEXT,
+                    expires_at TEXT,
+                    event_token_hash TEXT,
+                    event_token_expires_at TEXT,
+                    event_token_used_at TEXT
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_advisor_one_active_room
+                    ON advisor_sessions(room_id) WHERE status='active';
+                CREATE TABLE IF NOT EXISTS advisor_turns (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL REFERENCES advisor_sessions(id) ON DELETE CASCADE,
+                    assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+                    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+                    role TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    context_json TEXT NOT NULL DEFAULT '{}',
+                    cards_json TEXT NOT NULL DEFAULT '[]',
+                    provider_event_id TEXT,
+                    created_at TEXT NOT NULL
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_advisor_turn_provider_event
+                    ON advisor_turns(session_id, provider_event_id) WHERE provider_event_id IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS idx_advisor_turns_session_created
+                    ON advisor_turns(session_id, created_at);
+                CREATE TABLE IF NOT EXISTS advisor_confirmations (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL REFERENCES advisor_sessions(id) ON DELETE CASCADE,
+                    assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+                    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+                    tool_name TEXT NOT NULL,
+                    arguments_json TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    decided_at TEXT
+                );
+                CREATE TABLE IF NOT EXISTS advisor_tool_calls (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL REFERENCES advisor_sessions(id) ON DELETE CASCADE,
+                    assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+                    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+                    provider_call_id TEXT NOT NULL UNIQUE,
+                    provider_response_id TEXT,
+                    tool_name TEXT NOT NULL,
+                    arguments_json TEXT NOT NULL DEFAULT '{}',
+                    result_json TEXT NOT NULL DEFAULT '{}',
+                    status TEXT NOT NULL,
+                    schema_result TEXT NOT NULL,
+                    latency_ms INTEGER,
+                    error_type TEXT,
+                    created_at TEXT NOT NULL,
+                    completed_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_advisor_tool_calls_session_created
+                    ON advisor_tool_calls(session_id, created_at);
+                CREATE TABLE IF NOT EXISTS advisor_rtc_queue (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL REFERENCES advisor_sessions(id) ON DELETE CASCADE,
+                    assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+                    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+                    client_instance_id TEXT NOT NULL,
+                    mode TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    enqueued_at TEXT NOT NULL,
+                    granted_at TEXT,
+                    activated_at TEXT,
+                    heartbeat_at TEXT,
+                    lease_expires_at TEXT,
+                    expires_at TEXT NOT NULL,
+                    released_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_advisor_rtc_queue_fifo
+                    ON advisor_rtc_queue(status,enqueued_at,id);
+                CREATE INDEX IF NOT EXISTS idx_advisor_rtc_queue_session
+                    ON advisor_rtc_queue(session_id,status);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_advisor_rtc_one_live_client
+                    ON advisor_rtc_queue(session_id,client_instance_id)
+                    WHERE status IN ('queued','granted','active','draining');
                 INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, datetime('now'));
             """)
             self._add_column(connection, "media", "source_kind", "TEXT NOT NULL DEFAULT 'photo'")
@@ -136,7 +276,26 @@ class SQLiteRepository:
             self._add_column(connection, "media", "perceptual_hash", "TEXT")
             self._add_column(connection, "media", "zone_id", "TEXT")
             self._add_column(connection, "risks", "evidence_media_ids_json", "TEXT NOT NULL DEFAULT '[]'")
+            self._add_column(connection, "camera_suggestions", "frame_id", "TEXT")
+            self._add_column(connection, "advisor_sessions", "camera_session_id", "TEXT")
+            self._add_column(connection, "advisor_sessions", "provider_task_id", "TEXT")
+            self._add_column(connection, "advisor_sessions", "rtc_room_id", "TEXT")
+            self._add_column(connection, "advisor_sessions", "rtc_user_id", "TEXT")
+            self._add_column(connection, "advisor_sessions", "rtc_bot_user_id", "TEXT")
+            self._add_column(connection, "advisor_sessions", "last_activity_at", "TEXT")
+            self._add_column(connection, "advisor_sessions", "expires_at", "TEXT")
+            self._add_column(connection, "advisor_sessions", "event_token_hash", "TEXT")
+            self._add_column(connection, "advisor_sessions", "event_token_expires_at", "TEXT")
+            self._add_column(connection, "advisor_sessions", "event_token_used_at", "TEXT")
+            self._add_column(connection, "advisor_sessions", "rtc_media_mode", "TEXT NOT NULL DEFAULT 'audio'")
+            self._add_column(connection, "advisor_sessions", "rtc_vision_mode", "TEXT")
+            self._add_column(connection, "advisor_sessions", "client_instance_id", "TEXT")
+            self._add_column(connection, "advisor_sessions", "device_lease_expires_at", "TEXT")
             connection.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (2, datetime('now'))")
+            connection.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (3, datetime('now'))")
+            connection.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (4, datetime('now'))")
+            connection.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (5, datetime('now'))")
+            connection.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (6, datetime('now'))")
 
     @staticmethod
     def _add_column(connection: sqlite3.Connection, table: str, name: str, declaration: str) -> None:

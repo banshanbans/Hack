@@ -2,16 +2,16 @@
   "version": "live-camera-rules-2026-07-26-v3",
   "contexts": ["h5_home"],
   "rules": [
-    {"risk_code":"floor_clutter","contexts":["h5_home"],"title":"低位物体侵入通道","short_advice":"把占道物移到行走路线外","visual_cue":"豆包或懒人沙发、椅子、箱包、散落物等可定位低位物体明确落在或伸入可行走路径；正常摆放且未侵入路径的座椅不算"},
-    {"risk_code":"cable_crossing","contexts":["h5_home"],"title":"裸露线缆或插排侵入通道","short_advice":"把线缆和插排固定到通道外","visual_cue":"裸露电线、延长线、插排或未收束线缆明确铺在、横跨或延伸进入可行走路径；贴墙固定且不进入路径的线缆不算，完全封闭的线槽凸起改按 level_change 判断"},
-    {"risk_code":"loose_rug","contexts":["h5_home"],"title":"地垫边缘易绊脚","short_advice":"固定翘起的地垫边缘","visual_cue":"地毯、地垫或临时铺设物边缘翘起、卷曲或位于主要动线"},
-    {"risk_code":"wet_floor","contexts":["h5_home"],"title":"地面有明显湿滑处","short_advice":"先擦干地面并提醒绕行","visual_cue":"地面有清楚可见的积水、湿痕或高反光湿滑区域"},
-    {"risk_code":"level_change","contexts":["h5_home"],"title":"脚下有明显高差","short_advice":"给高差加醒目标识并保持无遮挡","visual_cue":"平台或舞台边缘、临时台阶、门槛、坡坎，或跨通道电缆保护槽形成可定位凸起并进入可行走路径；即使已有黄黑警示色仍可提示，只有与地面近乎齐平时不算"},
-    {"risk_code":"narrow_path","contexts":["h5_home"],"title":"通道有点窄","short_advice":"移开占道物，留出连续通道","visual_cue":"成排家具、桌椅或连续摆放物形成狭窄通道并明显压缩可通行宽度；单个豆包、椅子或箱包侵入路径优先按 floor_clutter 判断"},
-    {"risk_code":"low_lighting","contexts":["h5_home"],"title":"通道光线偏暗","short_advice":"给通道补一盏连续照明","visual_cue":"通行区域明显昏暗，地面或障碍物轮廓难以辨认"},
-    {"risk_code":"sharp_corner","contexts":["h5_home"],"title":"动线旁有突出尖角","short_advice":"给尖角加软质防撞保护","visual_cue":"人员动线附近有清楚可见的突出硬质尖角"},
-    {"risk_code":"unstable_support","contexts":["h5_home"],"title":"借力物需要确认","short_advice":"先别借力，请检查是否固定","visual_cue":"扶靠或借力位置看起来临时、松动、为玻璃或缺少可靠固定"},
-    {"risk_code":"high_reach_item","contexts":["h5_home"],"title":"常用物品放得过高","short_advice":"把常用物品移到肩部以下","visual_cue":"常用物品明显需要踮脚、踩高或过度伸手才能取得"},
-    {"risk_code":"bedside_obstruction","contexts":["h5_home"],"title":"床边起身路线被挡","short_advice":"清出床边起身路线","visual_cue":"床边落脚或起身通道被清楚可见的物品占用"}
+    {"risk_code":"floor_clutter","contexts":["h5_home"],"room_types":["bathroom","bedroom","living_room","kitchen","corridor","balcony"],"title":"低位物体侵入通道","short_advice":"把占道物移到行走路线外","visual_cue":"豆包或懒人沙发、椅子、箱包、散落物等可定位低位物体明确落在或伸入可行走路径；正常摆放且未侵入路径的座椅不算"},
+    {"risk_code":"cable_crossing","contexts":["h5_home"],"room_types":["bathroom","bedroom","living_room","kitchen","corridor","balcony"],"title":"裸露线缆或插排侵入通道","short_advice":"把线缆和插排固定到通道外","visual_cue":"裸露电线、延长线、插排或未收束线缆明确铺在、横跨或延伸进入可行走路径；贴墙固定且不进入路径的线缆不算，完全封闭的线槽凸起改按 level_change 判断"},
+    {"risk_code":"loose_rug","contexts":["h5_home"],"room_types":["bedroom","living_room","corridor"],"title":"地垫边缘易绊脚","short_advice":"固定翘起的地垫边缘","visual_cue":"地毯、地垫或临时铺设物边缘翘起、卷曲或位于主要动线"},
+    {"risk_code":"wet_floor","contexts":["h5_home"],"room_types":["bathroom","kitchen","balcony"],"title":"地面有明显湿滑处","short_advice":"先擦干地面并提醒绕行","visual_cue":"地面有清楚可见的积水、湿痕或高反光湿滑区域"},
+    {"risk_code":"level_change","contexts":["h5_home"],"room_types":["bathroom","bedroom","living_room","kitchen","corridor","balcony"],"title":"脚下有明显高差","short_advice":"给高差加醒目标识并保持无遮挡","visual_cue":"平台或舞台边缘、临时台阶、门槛、坡坎，或跨通道电缆保护槽形成可定位凸起并进入可行走路径；即使已有黄黑警示色仍可提示，只有与地面近乎齐平时不算"},
+    {"risk_code":"narrow_path","contexts":["h5_home"],"room_types":["bathroom","bedroom","living_room","kitchen","corridor","balcony"],"title":"通道有点窄","short_advice":"移开占道物，留出连续通道","visual_cue":"成排家具、桌椅或连续摆放物形成狭窄通道并明显压缩可通行宽度；单个豆包、椅子或箱包侵入路径优先按 floor_clutter 判断"},
+    {"risk_code":"low_lighting","contexts":["h5_home"],"room_types":["bathroom","bedroom","living_room","kitchen","corridor","balcony"],"title":"通道光线偏暗","short_advice":"给通道补一盏连续照明","visual_cue":"通行区域明显昏暗，地面或障碍物轮廓难以辨认"},
+    {"risk_code":"sharp_corner","contexts":["h5_home"],"room_types":["bathroom","bedroom","living_room","kitchen","corridor","balcony"],"title":"动线旁有突出尖角","short_advice":"给尖角加软质防撞保护","visual_cue":"人员动线附近有清楚可见的突出硬质尖角"},
+    {"risk_code":"unstable_support","contexts":["h5_home"],"room_types":["bathroom","bedroom","living_room","corridor"],"title":"借力物需要确认","short_advice":"先别借力，请检查是否固定","visual_cue":"扶靠或借力位置看起来临时、松动、为玻璃或缺少可靠固定"},
+    {"risk_code":"high_reach_item","contexts":["h5_home"],"room_types":["bathroom","bedroom","kitchen"],"title":"常用物品放得过高","short_advice":"把常用物品移到肩部以下","visual_cue":"常用物品明显需要踮脚、踩高或过度伸手才能取得"},
+    {"risk_code":"bedside_obstruction","contexts":["h5_home"],"room_types":["bedroom"],"title":"床边起身路线被挡","short_advice":"清出床边起身路线","visual_cue":"床边落脚或起身通道被清楚可见的物品占用"}
   ]
 }

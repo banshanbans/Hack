@@ -3,6 +3,7 @@
 DerivedData/
 *.xcresult
 xcuserdata/
+Pods/
 __pycache__/
 *.py[cod]
 .env
@@ -17,6 +18,9 @@ backend/data/
 .venv/
 frontend/node_modules/
 frontend/dist/
+hero-demo/node_modules/
+hero-demo/dist/
+hero-demo/output/
 frontend/coverage/
 *.tsbuildinfo
 output/playwright/
