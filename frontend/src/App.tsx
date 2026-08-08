@@ -10,7 +10,7 @@ import LiveCameraOverlay, {type NumberedCameraSuggestion} from './LiveCameraOver
 import RiskOverlay, {coverMetrics, mapImagePoint} from './RiskOverlay';
 import {AppProvider, formatRange, useApp} from './store';
 import {OnboardingOverlay, OnboardingProvider, useOnboarding} from './onboarding';
-import type {AdvisorBootstrap, AdvisorCard, AdvisorConfirmationCard, AdvisorContextRef, AdvisorTurn, AnalysisStatus, Assessment, AssessmentReport, CameraSuggestion, ElderProfile, MediaAsset, RenovationPreview, RenovationPreviewContext, RoomAssessment, RoomResult, RoomType, SafetyRisk, SolutionPackage} from './types';
+import type {AdvisorBootstrap, AdvisorCard, AdvisorConfirmationCard, AdvisorContextRef, AdvisorTurn, AnalysisStatus, Assessment, AssessmentReport, CameraSuggestion, ElderProfile, MediaAsset, RenovationPreview, RenovationPreviewContext, RoomAssessment, RoomResult, RoomType, SafetyRisk, SessionState, SolutionPackage} from './types';
 import {AdvisorVoiceRTC, type VoiceState} from './voiceRtc';
 import {subscribeAdvisorEvents} from './advisorEvents';
 import {
@@ -33,6 +33,27 @@ function getHomeProgress(lastRoute?: string) {
   const index = HOME_FLOW_STEPS.findIndex(item => item.patterns.some(pattern => pattern.test(lastRoute)));
   const safeIndex = index < 0 ? 0 : index;
   return {step: safeIndex + 1, label: HOME_FLOW_STEPS[safeIndex].label};
+}
+
+const CHECK_ROUTE_PATTERN = /^(profile|rooms|report|(?:upload|analyzing|result|renovation-preview)\/[A-Za-z0-9_-]{1,80}|(?:risk|solutions)\/[A-Za-z0-9_-]{1,80}\/[A-Za-z0-9_-]{1,80}|selected-solution\/[A-Za-z0-9_-]{1,80}\/[A-Za-z0-9_-]{1,80}\/[A-Za-z0-9_-]{1,80})$/;
+
+function isCheckRoute(pathname: string): boolean {
+  return CHECK_ROUTE_PATTERN.test(pathname.replace(/^\//, ''));
+}
+
+function profileIsComplete(assessment: Assessment | null): boolean {
+  const profile = assessment?.profile || assessment?.profile_json;
+  return Boolean(profile?.mobility && profile?.fall_history && profile?.living_status);
+}
+
+export function resolveCheckDestination(session: SessionState | null, assessment: Assessment | null): string | null {
+  if (!session) return null;
+  const route = (session.last_route || '').replace(/^\//, '');
+  if (CHECK_ROUTE_PATTERN.test(route)) {
+    const roomId = route.match(/^(?:upload|analyzing|result|renovation-preview|risk|solutions|selected-solution)\/([^/]+)/)?.[1];
+    if (!roomId || !assessment || assessment.rooms.some(room => room.room_id === roomId)) return `/${route}`;
+  }
+  return profileIsComplete(assessment) ? '/rooms' : '/profile';
 }
 
 function Icon({name, filled = false, className = ''}: {name: string; filled?: boolean; className?: string}) {
@@ -166,7 +187,10 @@ function AppShell() {
     {!isShare && !isHome && <header className="app-header">
       <button className="icon-button" onClick={goBack} aria-label="返回" disabled={isHome}><Icon name="arrow_back" /></button>
       <strong>{isAdvisor ? ADVISOR_COPY.title : PRODUCT_NAME}</strong>
-      <button className="icon-button" onClick={() => setMenuOpen(true)} aria-label="检查与隐私"><Icon name="more_vert" /></button>
+      <div className="app-header-actions">
+        {(isAdvisor || isCamera) && <button className="icon-button" onClick={() => navigate('/home')} aria-label="返回首页"><Icon name="home" filled /></button>}
+        <button className="icon-button" onClick={() => setMenuOpen(true)} aria-label="检查与隐私"><Icon name="more_vert" /></button>
+      </div>
     </header>}
     {health === 'demo' && <div className="demo-banner" role="status"><Icon name="science" />演示模式：当前展示固定样例结果</div>}
     {!isShare && !isAdvisor && !isCamera && !isProfileEditing && <FlowProgress pathname={location.pathname} />}
@@ -316,6 +340,7 @@ function CameraIntroModal({close, enter}: {close: () => void; enter: () => void}
 function CameraLaunchModal({close}: {close: () => void}) {
   const navigate = useNavigate();
   const {session, setSession, showToast} = useApp();
+  const onboarding = useOnboarding();
   const [choosingRoom, setChoosingRoom] = useState(false);
   const [busyRoom, setBusyRoom] = useState<RoomType | null>(null);
   const enterRoom = async (roomType: RoomType) => {
@@ -329,6 +354,10 @@ function CameraLaunchModal({close}: {close: () => void}) {
       }
       const assessment = await api.getAssessment();
       const room = assessment.rooms.find(item => item.room_type === roomType && item.status !== 'completed') || await api.createRoom(roomType);
+      if (onboarding.active) {
+        if (!onboarding.state.phase_status.home) onboarding.completePhase('home', 'capture');
+        else onboarding.enterPhase('capture');
+      }
       close();
       navigate(`/camera?room_id=${encodeURIComponent(room.room_id)}&auto_start=1`);
     } catch (error) {
@@ -348,16 +377,58 @@ function CameraLaunchModal({close}: {close: () => void}) {
 
 function PersistentTabBar({pathname}: {pathname: string}) {
   const navigate = useNavigate();
-  const {session, capabilities} = useApp();
+  const {session, assessment, setSession, setAssessment, capabilities, showToast} = useApp();
+  const onboarding = useOnboarding();
   const [cameraIntroOpen, setCameraIntroOpen] = useState(false);
+  const [startingCheck, setStartingCheck] = useState(false);
   const myActive = pathname === '/my';
-  const cameraActive = pathname === '/camera';
   const homeActive = pathname === '/home';
-  const checkPath = session ? `/${session.last_route || 'rooms'}` : '/home';
+  const checkActive = isCheckRoute(pathname);
   const cameraAvailable = nativeCapability('live_scan') ? capabilities?.ios_home_camera !== false : capabilities?.h5_camera !== false;
-  return <><nav className={`persistent-tab-bar ${homeActive ? 'two-tabs' : 'three-tabs'}`} aria-label="主导航">
-    <button className={!myActive && !cameraActive ? 'active' : ''} aria-current={!myActive && !cameraActive ? 'page' : undefined} onClick={() => navigate(checkPath)}><Icon name={homeActive ? 'search' : 'fact_check'} filled={!homeActive && !myActive && !cameraActive} /><span>检查</span></button>
-    {!homeActive && (cameraAvailable ? <button data-onboarding-target="central-camera" className={`camera-tab ${cameraActive ? 'active' : ''}`} aria-label="中央相机" aria-current={cameraActive ? 'page' : undefined} onClick={() => cameraActive ? undefined : setCameraIntroOpen(true)}><span className="camera-tab-icon"><img src="/assets/camera-tab.svg" alt="" /></span><span>中央相机</span></button> : <button className="camera-tab" disabled aria-label="中央相机暂未开放"><span className="camera-tab-icon"><img src="/assets/camera-tab.svg" alt="" /></span><span>中央相机</span></button>)}
+  const openCheck = async () => {
+    if (startingCheck) return;
+    let activeSession = session;
+    let currentAssessment = assessment;
+    setStartingCheck(true);
+    if (!activeSession) {
+      try {
+        const value = await api.createAssessment('photo');
+        activeSession = {assessment_id: value.assessment_id, access_token: value.access_token};
+        setSession(activeSession);
+      } catch (error) {
+        showToast(friendlyError(error));
+        setStartingCheck(false);
+        return;
+      }
+    }
+    try {
+      if (!currentAssessment || currentAssessment.assessment_id !== activeSession.assessment_id) {
+        currentAssessment = await api.getAssessment();
+        setAssessment(currentAssessment);
+      }
+    } catch (error) {
+      showToast(friendlyError(error));
+      setStartingCheck(false);
+      return;
+    }
+    setStartingCheck(false);
+    const destination = resolveCheckDestination(activeSession, currentAssessment) || '/profile';
+    if (destination === '/profile') onboarding.enterPhase('profile');
+    else if (destination === '/rooms') onboarding.enterPhase('rooms');
+    else if (destination.startsWith('/upload/')) {
+      const roomId = destination.split('/')[2];
+      const usable = currentAssessment?.rooms.find(room => room.room_id === roomId)?.media.some(media => media.quality.usable);
+      onboarding.enterPhase(usable ? 'analyze' : 'capture');
+    } else if (destination.startsWith('/result/')) onboarding.enterPhase('result');
+    else if (destination.startsWith('/risk/')) onboarding.enterPhase('risk');
+    else if (destination.startsWith('/solutions/')) onboarding.enterPhase('solutions');
+    else if (destination === '/report') onboarding.enterPhase('report');
+    navigate(destination);
+  };
+  return <><nav className="persistent-tab-bar four-tabs" aria-label="主导航">
+    <button className={homeActive ? 'active' : ''} aria-current={homeActive ? 'page' : undefined} onClick={() => !homeActive && navigate('/home')}><Icon name="home" filled={homeActive} /><span>首页</span></button>
+    <button className={checkActive ? 'active' : ''} aria-current={checkActive ? 'page' : undefined} aria-busy={startingCheck} disabled={startingCheck} onClick={() => void openCheck()}><Icon name="fact_check" filled={checkActive} /><span>检查</span></button>
+    {cameraAvailable ? <button data-onboarding-target="camera-entry" className="camera-tab" aria-label="相机" onClick={() => setCameraIntroOpen(true)}><span className="camera-tab-icon"><img src="/assets/camera-tab.svg" alt="" /></span><span>相机</span></button> : <button className="camera-tab" disabled aria-label="相机暂未开放"><span className="camera-tab-icon"><img src="/assets/camera-tab.svg" alt="" /></span><span>相机</span></button>}
     <button className={myActive ? 'active' : ''} aria-current={myActive ? 'page' : undefined} onClick={() => !myActive && navigate('/my')}><Icon name="person" filled={myActive} /><span>我的</span></button>
   </nav>{cameraIntroOpen && <CameraLaunchModal close={() => setCameraIntroOpen(false)} />}</>;
 }
@@ -647,7 +718,7 @@ function CameraPage() {
     }
     pendingCompletionRef.current = null;
     showToast(`已保存 ${mediaIds.length} 张代表画面，可确认后开始 AI 检查`);
-    if (onboarding.active && onboarding.state.step === 3) onboarding.setPhase('analyze');
+    if (onboarding.active) onboarding.completePhase('capture', 'analyze');
     assessmentState.reload();
     await endAdvisorSession().catch(() => undefined);
     setSaving(false);
@@ -1085,8 +1156,8 @@ function HomePage() {
   const [busy, setBusy] = useState(false);
   const [cameraIntroOpen, setCameraIntroOpen] = useState(false);
   const startPhotoAssessment = async () => {
-    if (session && onboarding.active && onboarding.state.step === 1) {
-      onboarding.moveTo(2, 'profile');
+    if (session) {
+      if (onboarding.active) onboarding.completePhase('home', 'profile');
       navigate('/profile');
       return;
     }
@@ -1094,7 +1165,7 @@ function HomePage() {
     try {
       const value = await api.createAssessment('photo');
       setSession({assessment_id: value.assessment_id, access_token: value.access_token});
-      if (onboarding.active && onboarding.state.step === 1) onboarding.moveTo(2, 'profile');
+      if (onboarding.active) onboarding.completePhase('home', 'profile');
       navigate('/profile');
     } catch (error) {
       showToast(friendlyError(error));
@@ -1127,7 +1198,7 @@ function HomePage() {
           {HOME_FLOW_STEPS.map((item, index) => <span key={item.label} className={index < progress.step ? 'complete' : ''} />)}
         </div>
         <div className="home-action-stack">
-          <button data-onboarding-target="central-camera" className="button primary full home-primary-button" aria-label={hasCameraEntry ? '中央相机' : '中央相机暂未开放'} disabled={!hasCameraEntry || busy} onClick={() => setCameraIntroOpen(true)}><Icon name="photo_camera" filled />{hasCameraEntry ? 'AR 实时识别' : '实时识别暂未开放'}</button>
+          <button data-onboarding-target="home-start" className="button primary full home-primary-button" aria-label={hasCameraEntry ? '中央相机' : '中央相机暂未开放'} disabled={!hasCameraEntry || busy} onClick={() => setCameraIntroOpen(true)}><Icon name="photo_camera" filled />{hasCameraEntry ? 'AR 实时识别' : '实时识别暂未开放'}</button>
           <div className="home-secondary-actions two-actions">
             <button data-onboarding-target="home-start" className="button secondary full home-secondary-button" disabled={busy} onClick={startPhotoAssessment}><Icon name="image" />{busy ? '正在开始…' : '上传家中照片'}</button>
             <button className="button secondary full home-secondary-button" aria-label="问问 AI 助手" disabled={!hasCameraEntry || busy} onClick={() => setCameraIntroOpen(true)}><Icon name="smart_toy" />问问 AI 助手</button>
@@ -1168,7 +1239,7 @@ function ProfilePage() {
     try {
       await api.saveProfile(profile as ElderProfile);
       showToast('个人档案已保存');
-      if (onboarding.active && onboarding.state.step === 2) onboarding.setPhase('rooms');
+      if (onboarding.active) onboarding.completePhase('profile', safeReturn ? 'capture' : 'rooms');
       navigate(editingFromMy ? '/my' : safeReturn || '/rooms');
     } catch (value) {
       showToast(friendlyError(value));
@@ -1192,7 +1263,7 @@ function ProfilePage() {
 }
 
 function RadioSection({title, name, value, options, onChange}: {title: string; name: string; value?: string; options: [string, string][]; onChange: (value: string) => void}) {
-  return <fieldset className="radio-panel"><legend>{title}</legend>{options.map(([option, label]) => <label key={option} className="radio-row"><input type="radio" name={name} value={option} checked={value === option} onChange={() => onChange(option)} /><span>{label}</span></label>)}</fieldset>;
+  return <fieldset className="radio-panel"><legend>{title}</legend><div className="radio-options-card">{options.map(([option, label]) => <label key={option} className="radio-row"><input type="radio" name={name} value={option} checked={value === option} onChange={() => onChange(option)} /><span>{label}</span></label>)}</div></fieldset>;
 }
 
 function RoomsPage() {
@@ -1210,10 +1281,9 @@ function RoomsPage() {
   if (loading && !assessment) return <Loading />;
   if (error) return <ErrorState error={error} retry={reload} />;
   const openRoom = (room: RoomAssessment) => {
-    if (onboarding.active && onboarding.state.step <= 3) {
-      if (room.status === 'result_ready' || room.status === 'completed') onboarding.moveTo(4, 'result');
-      else if (room.status === 'analyzing') onboarding.moveTo(4, 'result');
-      else onboarding.moveTo(3, 'capture');
+    if (onboarding.active) {
+      if (room.status === 'result_ready' || room.status === 'completed' || room.status === 'analyzing') onboarding.completePhase('rooms', 'result');
+      else onboarding.completePhase('rooms', 'capture');
     }
     navigate(room.status === 'result_ready' ? `/result/${room.room_id}` : room.status === 'analyzing' ? `/analyzing/${room.room_id}` : `/upload/${room.room_id}`);
   };
@@ -1239,7 +1309,7 @@ function RoomsPage() {
         const room = existing || await api.createRoom(roomType);
         plannedRooms.push(room);
       }
-      if (onboarding.active && onboarding.state.step === 2) onboarding.moveTo(3, 'capture');
+      if (onboarding.active) onboarding.completePhase('rooms', 'capture');
       if (multiMode) {
         setLocalTasks(plannedRooms);
         setEditingPlan(false);
@@ -1319,8 +1389,8 @@ function UploadPage() {
   const room = assessment?.rooms.find(item => item.room_id === roomId);
   const usable = Boolean(room?.media.some(item => item.quality.usable));
   useEffect(() => {
-    if (usable && onboarding.active && onboarding.state.step === 3 && onboarding.state.phase === 'capture') onboarding.setPhase('analyze');
-  }, [onboarding.active, onboarding.setPhase, onboarding.state.phase, onboarding.state.step, usable]);
+    if (usable && onboarding.active && onboarding.state.phase !== 'analyze') onboarding.completePhase('capture', 'analyze');
+  }, [onboarding.active, onboarding.completePhase, onboarding.state.phase, usable]);
   if (!session) return <Navigate to="/home" replace />;
   if (loading && !assessment) return <Loading />;
   if (error) return <ErrorState error={error} retry={reload} />;
@@ -1351,19 +1421,20 @@ function UploadPage() {
     }
     setBusy(false);
     reload();
-    if (uploadedUsable && onboarding.active && onboarding.state.step === 3) onboarding.setPhase('analyze');
+    if (uploadedUsable && onboarding.active) onboarding.completePhase('capture', 'analyze');
     event.target.value = '';
     if (droppedCount) showToast(`已添加 ${files.length} 张，另 ${droppedCount} 张因达到上限未添加`);
   };
   const analyze = async () => {
     if (!profileComplete) {
+      if (onboarding.active) onboarding.enterPhase('profile');
       navigate(`/profile?return_to=${encodeURIComponent(`/upload/${roomId}`)}`);
       return;
     }
     setBusy(true);
     try {
       await api.analyze(roomId);
-      if (onboarding.active && onboarding.state.step === 3) onboarding.moveTo(4, 'result');
+      if (onboarding.active) onboarding.completePhase('analyze', 'result');
       navigate(`/analyzing/${roomId}`);
     }
     catch (value) { showToast(friendlyError(value)); setBusy(false); }
@@ -1556,13 +1627,13 @@ function ResultPage() {
     <div className="center-heading"><h1>{roomName}检查完成</h1><p>大部分问题都可以通过低成本措施改善。</p></div>
     <div className="result-overview" data-onboarding-target="result-overview"><article className="summary-card"><div><small>{result.score_label}</small><b className="score-number">{result.score}<em>/100</em></b></div><div className="coverage-block"><span>检查覆盖度 {result.coverage.percent}%</span><div className="progress"><i style={{width: `${result.coverage.percent}%`}} /></div></div><button className="text-button" onClick={() => setScoreOpen(true)}>查看评分依据</button></article>
     <article className="risk-summary"><small>发现问题</small><b className="issue-number">{result.risks.length}<em>个</em></b></article></div>
-    {activeEvidence && <section className="risk-overview-section" data-onboarding-target="result-risks"><h2>主要风险</h2><ResultRiskOverlay media={activeEvidence.media} risks={activeEvidence.risks} numberById={numberById} onSelect={riskId => { if (onboarding.active && onboarding.state.step === 4) onboarding.setPhase('risk'); navigate(`/risk/${roomId}/${riskId}`); }} />
+    {activeEvidence && <section className="risk-overview-section" data-onboarding-target="result-risks"><h2>主要风险</h2><ResultRiskOverlay media={activeEvidence.media} risks={activeEvidence.risks} numberById={numberById} onSelect={riskId => { if (onboarding.active) onboarding.completePhase('result', 'risk'); navigate(`/risk/${roomId}/${riskId}`); }} />
       {evidenceMedia.length > 1 && <div className="risk-photo-strip" aria-label="切换风险照片">{evidenceMedia.map(item => <RiskPhotoButton key={item.media.media_id} media={item.media} active={item.media.media_id === activeEvidence.media.media_id} count={item.risks.length} onClick={() => setSelectedMediaId(item.media.media_id)} />)}</div>}
-      <div className="risk-overview-list">{activeEvidence.risks.map(risk => <button key={risk.risk_id} onClick={() => { if (onboarding.active && onboarding.state.step === 4) onboarding.setPhase('risk'); navigate(`/risk/${roomId}/${risk.risk_id}`); }}><span>{numberById[risk.risk_id]}</span><div><b>{risk.title}</b><small>{SEVERITY_COPY[risk.severity]}</small></div><Icon name="chevron_right" /></button>)}</div>
+      <div className="risk-overview-list">{activeEvidence.risks.map(risk => <button key={risk.risk_id} onClick={() => { if (onboarding.active) onboarding.completePhase('result', 'risk'); navigate(`/risk/${roomId}/${risk.risk_id}`); }}><span>{numberById[risk.risk_id]}</span><div><b>{risk.title}</b><small>{SEVERITY_COPY[risk.severity]}</small></div><Icon name="chevron_right" /></button>)}</div>
     </section>}
     {!result.risks.length && <p className="empty-copy">当前已检查区域暂未发现明确风险。</p>}
     <button className="advisor-entry-button" onClick={() => navigate(`/advisor/${roomId}${selectedMediaId ? `?media_id=${encodeURIComponent(selectedMediaId)}` : ''}`)}><Icon name="forum" filled /><span><b>问问 AI 适老顾问</b><small>继续追问风险、方案和预算</small></span><Icon name="chevron_right" /></button>
-    <div className="result-fixed-actions"><button className="button secondary" disabled={!firstRisk} onClick={() => { if (!firstRisk) return; if (onboarding.active && onboarding.state.step === 4) onboarding.setPhase('risk'); navigate(`/risk/${roomId}/${firstRisk.risk_id}`); }}>查看问题</button><button data-onboarding-target="result-report" className="button primary" onClick={() => { if (onboarding.active && onboarding.state.step === 4) onboarding.moveTo(5, 'report'); navigate('/report'); }}>查看改造清单</button></div>
+    <div className="result-fixed-actions"><button className="button secondary" disabled={!firstRisk} onClick={() => { if (!firstRisk) return; if (onboarding.active) onboarding.completePhase('result', 'risk'); navigate(`/risk/${roomId}/${firstRisk.risk_id}`); }}>查看问题</button><button data-onboarding-target="result-report" className="button primary" onClick={() => { if (onboarding.active) onboarding.completePhase('result', 'report'); navigate('/report'); }}>查看改造清单</button></div>
     {scoreOpen && <Modal title="参考分的计算依据" close={() => setScoreOpen(false)}><div className="score-basis-sheet"><p>参考分由经过校验的风险、家人情况和本地规则确定性计算；覆盖度与参考分分开展示。</p>{result.main_deductions.length ? <div>{result.main_deductions.map(item => <div key={item.risk_id}><span>{item.title}</span><b>扣 {item.deduction} 分</b></div>)}</div> : <p className="muted">当前没有扣分项。</p>}<button className="button primary full" onClick={() => setScoreOpen(false)}>知道了</button></div></Modal>}
   </section>;
 }
@@ -1883,7 +1954,7 @@ function RiskPage() {
     <div className="risk-toolbar"><span className="glass-chip"><Icon name="cloud_done" filled />AI 已识别 {result.risks.length} 处风险</span><button className="glass-button" onClick={() => setZoom(value => value >= 1.8 ? 1 : value + 0.2)} aria-label="放大照片"><Icon name={zoom > 1 ? 'zoom_out_map' : 'zoom_in'} /></button></div>
     <RiskOverlay imageUrl={url} fallbackUrl={`${ASSETS}/risk-bathroom.jpg`} risks={[risk]} mediaId={risk.media_id} activeId={risk.risk_id} numberById={Object.fromEntries(result.risks.map((item, itemIndex) => [item.risk_id, itemIndex + 1]))} zoom={zoom} drawing={false} onSelect={() => undefined} onRegionChange={() => undefined} />
     <div className="risk-switcher"><button disabled={index === 0} onClick={() => switchRisk(index - 1)}><Icon name="chevron_left" /></button><span>风险 {index + 1} / {result.risks.length}</span><button disabled={index === result.risks.length - 1} onClick={() => switchRisk(index + 1)}><Icon name="chevron_right" /></button></div>
-    <article className="risk-detail"><span className={`severity ${risk.severity}`}><Icon name="warning" filled />{SEVERITY_COPY[risk.severity]}</span><h1>{risk.title}</h1><p>{risk.evidence}</p><small>参考扣分 {risk.score_deduction} 分 · {risk.region ? '已标出可参考位置' : '位置仍待确认'}</small><div className="button-stack"><button data-onboarding-target="risk-solution" className="button primary full" onClick={() => { if (onboarding.active && onboarding.state.step === 4) onboarding.moveTo(5, 'solutions'); navigate(`/solutions/${roomId}/${risk.risk_id}`); }}><Icon name="location_on" filled />查看解决方案</button><button className="button secondary full" onClick={() => navigate(`/advisor/${roomId}?risk_id=${encodeURIComponent(risk.risk_id)}&media_id=${encodeURIComponent(risk.media_id)}`)}><Icon name="forum" />问问 AI 顾问</button></div></article>
+    <article className="risk-detail"><span className={`severity ${risk.severity}`}><Icon name="warning" filled />{SEVERITY_COPY[risk.severity]}</span><h1>{risk.title}</h1><p>{risk.evidence}</p><small>参考扣分 {risk.score_deduction} 分 · {risk.region ? '已标出可参考位置' : '位置仍待确认'}</small><div className="button-stack"><button data-onboarding-target="risk-solution" className="button primary full" onClick={() => { if (onboarding.active) onboarding.completePhase('risk', 'solutions'); navigate(`/solutions/${roomId}/${risk.risk_id}`); }}><Icon name="location_on" filled />查看解决方案</button><button className="button secondary full" onClick={() => navigate(`/advisor/${roomId}?risk_id=${encodeURIComponent(risk.risk_id)}&media_id=${encodeURIComponent(risk.media_id)}`)}><Icon name="forum" />问问 AI 顾问</button></div></article>
   </section>;
 }
 
@@ -1924,6 +1995,7 @@ function SolutionsPage() {
       if (data.selected_solution_package_id === solution.solution_package_id) await api.removeSolution(riskId);
       else await api.selectSolution(riskId, solution.solution_package_id);
       await load();
+      if (onboarding.active) onboarding.completePhase('solutions', 'report');
       showToast(data.selected_solution_package_id === solution.solution_package_id ? '已从清单移除' : '已加入改造清单');
     } catch (value) { showToast(friendlyError(value)); }
     finally { setBusy(''); }
@@ -1953,7 +2025,7 @@ function SolutionsPage() {
     })}</div>
     <details className="detail-card" open><summary>改造详情</summary><div className="detail-grid"><span><Icon name="handyman" />改造难度</span><b>{DIFFICULTY_COPY[data.solutions.find(item => item.solution_package_id === data.selected_solution_package_id)?.difficulty || ''] || '选择后查看'}</b><span><Icon name="schedule" />预计处理时间</span><b>{data.solutions.find(item => item.solution_package_id === data.selected_solution_package_id)?.duration || '视方案而定'}</b><span><Icon name="engineering" />是否建议专业安装</span><b>{data.solutions.find(item => item.solution_package_id === data.selected_solution_package_id)?.professional_installation || '视方案而定'}</b></div></details>
     <p className="fine-print">{data.price_disclaimer}</p>
-    <div className="button-stack"><button className="button secondary full" onClick={() => navigate(`/advisor/${roomId}?risk_id=${encodeURIComponent(riskId)}`)}><Icon name="forum" />问问 AI 顾问</button><button className="button secondary full" onClick={() => navigate(nextRisk ? `/risk/${roomId}/${nextRisk.risk_id}` : `/result/${roomId}`)}>{nextRisk ? '继续查看下一个问题' : '返回检查结果'}<Icon name="arrow_forward" /></button><button data-onboarding-target="solutions-report" className="button quiet full" onClick={() => { if (onboarding.active && onboarding.state.step === 5) onboarding.setPhase('report'); navigate('/report'); }}>查看改造清单</button></div>
+    <div className="button-stack"><button className="button secondary full" onClick={() => navigate(`/advisor/${roomId}?risk_id=${encodeURIComponent(riskId)}`)}><Icon name="forum" />问问 AI 顾问</button><button className="button secondary full" onClick={() => navigate(nextRisk ? `/risk/${roomId}/${nextRisk.risk_id}` : `/result/${roomId}`)}>{nextRisk ? '继续查看下一个问题' : '返回检查结果'}<Icon name="arrow_forward" /></button><button data-onboarding-target="solutions-report" className="button quiet full" onClick={() => { if (onboarding.active) onboarding.completePhase('solutions', 'report'); navigate('/report'); }}>查看改造清单</button></div>
   </section>;
 }
 

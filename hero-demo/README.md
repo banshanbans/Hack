@@ -1,4 +1,4 @@
-# 老者 LAOZHE Hero Demo
+# 长者友好家 Hero Demo
 
 独立的 16:9 Three.js 产品展示前端，用于比赛 Demo 视频和现场循环播放。它不连接主 H5、后端 API 或真实分析任务；默认屏幕内容是明确的产品流程动效兜底。
 
@@ -57,6 +57,8 @@ npm run preview
 - `?debug=1`：显示控制条和 FPS。
 
 默认页面没有操作控件，适合直接录制。系统开启“减少动态效果”时，页面停在最终 Hero Shot。
+
+完整的 28 秒分镜、可选旁白和声音提示见 [`STORYBOARD.md`](./STORYBOARD.md)。
 
 ## iPhone GLB
 

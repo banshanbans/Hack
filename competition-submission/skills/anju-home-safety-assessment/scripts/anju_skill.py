@@ -167,7 +167,7 @@ def validate_manifest(value: dict[str, Any]) -> None:
 def check_health(client: Client, allow_demo: bool) -> None:
     health = client.request("GET", "/health")
     if health.get("version") != "v2":
-        raise SkillError("服务未提供安居守护 v2 能力")
+        raise SkillError("服务未提供长者友好家 v2 能力")
     mode = health.get("analysis")
     if mode == "not_configured":
         raise SkillError("正式分析服务尚未配置")
@@ -328,7 +328,7 @@ def command_delete(args: argparse.Namespace) -> None:
 
 
 def parser() -> argparse.ArgumentParser:
-    root = argparse.ArgumentParser(description="安居守护家庭安全评估 Skill 客户端")
+    root = argparse.ArgumentParser(description="长者友好家家庭安全评估 Skill 客户端")
     commands = root.add_subparsers(dest="command", required=True)
     assess = commands.add_parser("assess", help="创建并运行评估")
     assess.add_argument("--manifest", type=Path, required=True)

@@ -2,7 +2,7 @@ import AnjuCore
 import UIKit
 
 enum ProductCopy {
-    static let appName = "安心家 AI"
+    static let appName = "长者友好家"
     static let homeTitle = "家庭安全检查"
     static let homeSubtitle = "网页负责完整检查流程，iPhone 在需要时提供拍照和实时扫描。"
     static let startRoom = "开启扫描"

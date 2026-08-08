@@ -307,7 +307,7 @@ export class ScreenSource {
     drawStatusBar(context);
 
     if (phase === 0) {
-      drawHeader(context, '安心家 AI', '卫生间 · 实时检查');
+      drawHeader(context, '长者友好家', '卫生间 · 实时检查');
       drawImagePanel(context, this.images[0], 184, 1120);
       const scanY = 250 + progress * 850;
       const scanGradient = context.createLinearGradient(70, scanY, 650, scanY);

@@ -15,7 +15,7 @@ const showControls = query.get('controls') === '1' || query.get('debug') === '1'
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 app.innerHTML = `
-  <section class="hero-shell" aria-label="老者 LAOZHE 产品展示动画">
+  <section class="hero-shell" aria-label="${HERO_CONFIG.copy.brand} 产品展示动画">
     <div class="hero-stage" data-asset-state="fallback">
       <canvas class="hero-canvas" aria-hidden="true"></canvas>
       <div class="hero-atmosphere" aria-hidden="true"></div>

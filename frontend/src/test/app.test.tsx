@@ -22,13 +22,15 @@ describe('P01 entry and route recovery', () => {
 
     render(<App />);
     expect(screen.getByRole('heading', {name: /给父母的家/})).toBeVisible();
-    expect(screen.getAllByText('长者友好').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('长者友好家').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByRole('heading', {name: '本次检查进度'})).toBeVisible();
     expect(screen.getByRole('progressbar', {name: '检查完成进度'})).toHaveAttribute('aria-valuenow', '1');
     expect(screen.getByText('进行到：家人情况')).toBeVisible();
     expect(screen.getByRole('navigation', {name: '主导航'})).toBeVisible();
-    expect(screen.getByRole('button', {name: '检查'})).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('button', {name: '首页'})).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('button', {name: '检查'})).not.toHaveAttribute('aria-current');
     expect(screen.getByRole('button', {name: '中央相机'})).toBeVisible();
+    expect(screen.getByRole('button', {name: '相机'})).toBeVisible();
     expect(screen.getByRole('button', {name: '我的'})).toBeVisible();
     fireEvent.click(screen.getByRole('button', {name: /上传家中照片/}));
     await waitFor(() => expect(window.location.hash).toBe('#/profile'));
@@ -59,6 +61,8 @@ describe('P01 entry and route recovery', () => {
     fireEvent.click(screen.getByRole('button', {name: /卫生间/}));
     await waitFor(() => expect(window.location.hash).toBe('#/camera?room_id=room-camera&auto_start=1'));
     expect(await screen.findByRole('button', {name: '开启后置相机'})).toBeVisible();
+    expect(screen.queryByRole('navigation', {name: '主导航'})).not.toBeInTheDocument();
+    expect(screen.getByRole('button', {name: '返回首页'})).toBeVisible();
     expect(screen.getByRole('heading', {name: '实时扫描'})).toBeVisible();
     expect(screen.getByRole('button', {name: '打开 AI 适老顾问对话'})).toBeVisible();
     expect(screen.getByRole('button', {name: '结束扫描并保存'})).toBeDisabled();

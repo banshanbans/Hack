@@ -95,6 +95,7 @@ summary:focus-visible {
 .app-header {
   height: 66px;
   padding-inline: 16px;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
   color: var(--care-green);
   background: rgba(247, 245, 239, .97);
   border-bottom-color: var(--care-line);
@@ -274,7 +275,7 @@ summary:focus-visible {
 }
 
 .choice-card,
-.radio-panel,
+.radio-options-card,
 .room-card,
 .room-task-card {
   border-color: var(--care-line);
@@ -306,11 +307,27 @@ summary:focus-visible {
 }
 
 .radio-panel {
-  border-radius: var(--care-radius-lg);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
 }
 
 .radio-panel legend {
-  background: var(--care-canvas);
+  width: 100%;
+  padding: 0 0 12px;
+  background: transparent;
+}
+
+.radio-options-card {
+  overflow: hidden;
+  padding: 12px;
+  border: 1px solid var(--care-line);
+  border-radius: var(--care-radius-lg);
+  background: var(--care-paper);
+  box-shadow: var(--care-shadow-sm);
 }
 
 .radio-row {
@@ -810,7 +827,9 @@ summary:focus-visible {
   bottom: 0;
   width: min(100%, 480px);
   min-height: 70px;
-  padding: 7px 28px 4px;
+  padding: 7px 8px 4px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 2px;
   border: 1px solid var(--care-line);
   border-bottom: 0;
   border-radius: 8px 8px 0 0;
@@ -819,7 +838,9 @@ summary:focus-visible {
 }
 
 .persistent-tab-bar button {
+  min-width: 0;
   min-height: 56px;
+  padding-inline: 4px;
   color: #1f231b;
   border-radius: 999px;
   font-size: 13px;
@@ -841,6 +862,17 @@ summary:focus-visible {
 
 .persistent-tab-bar .camera-tab.active .camera-tab-icon img {
   filter: sepia(1) saturate(3) hue-rotate(28deg) brightness(.55);
+}
+
+.home-shell .persistent-tab-bar {
+  padding: 7px 8px 4px;
+  gap: 2px;
+}
+
+.home-shell .persistent-tab-bar button {
+  width: auto;
+  min-width: 0;
+  padding-inline: 4px;
 }
 
 /* Onboarding follows the product instead of introducing a second visual style. */
@@ -906,7 +938,7 @@ summary:focus-visible {
   }
 
   .persistent-tab-bar {
-    padding-inline: 20px;
+    padding-inline: 6px;
   }
 }
 
@@ -921,7 +953,7 @@ summary:focus-visible {
 @media (prefers-contrast: more) {
   .button.secondary,
   .choice-card,
-  .radio-panel,
+  .radio-options-card,
   .room-card,
   .upload-drop,
   .summary-card,

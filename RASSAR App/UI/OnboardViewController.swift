@@ -102,7 +102,7 @@ final class OnboardViewController: UIViewController {
         icon.translatesAutoresizingMaskIntoConstraints = false
         errorView.addSubview(icon)
 
-        errorLabel.text = "无法打开安心家 AI\n请检查网络后重试"
+        errorLabel.text = "无法打开长者友好家\n请检查网络后重试"
         errorLabel.numberOfLines = 0
         errorLabel.textAlignment = .center
         errorLabel.font = .preferredFont(forTextStyle: .title3)

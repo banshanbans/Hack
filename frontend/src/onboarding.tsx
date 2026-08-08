@@ -11,51 +11,90 @@ import {
 import {useLocation} from 'react-router-dom';
 import {ONBOARDING_COPY} from './content';
 
-export const ONBOARDING_STORAGE_KEY = 'anju_onboarding_v1';
-const ONBOARDING_VERSION = 1;
+export const ONBOARDING_STORAGE_KEY = 'anju_onboarding_v2';
+export const LEGACY_ONBOARDING_STORAGE_KEY = 'anju_onboarding_v1';
+const ONBOARDING_VERSION = 2;
 
 export type OnboardingStep = 1 | 2 | 3 | 4 | 5;
 export type OnboardingPhase = 'home' | 'profile' | 'rooms' | 'capture' | 'analyze' | 'result' | 'risk' | 'solutions' | 'report';
+export type OnboardingPhaseStatus = 'acknowledged' | 'skipped' | 'completed';
 
 export interface OnboardingState {
   version: number;
   status: 'active' | 'completed';
-  step: OnboardingStep;
   phase: OnboardingPhase;
-  skipped_steps: OnboardingStep[];
+  phase_status: Partial<Record<OnboardingPhase, OnboardingPhaseStatus>>;
 }
 
-const DEFAULT_PHASES: Record<OnboardingStep, OnboardingPhase> = {
-  1: 'home',
-  2: 'profile',
-  3: 'capture',
-  4: 'result',
-  5: 'solutions',
+const PHASES: OnboardingPhase[] = ['home', 'profile', 'rooms', 'capture', 'analyze', 'result', 'risk', 'solutions', 'report'];
+const STEP_BY_PHASE: Record<OnboardingPhase, OnboardingStep> = {
+  home: 1,
+  profile: 2,
+  rooms: 2,
+  capture: 3,
+  analyze: 3,
+  result: 4,
+  risk: 4,
+  solutions: 5,
+  report: 5,
+};
+const PHASES_BY_LEGACY_STEP: Record<OnboardingStep, OnboardingPhase[]> = {
+  1: ['home'],
+  2: ['profile', 'rooms'],
+  3: ['capture', 'analyze'],
+  4: ['result', 'risk'],
+  5: ['solutions', 'report'],
 };
 
 export function defaultOnboardingState(): OnboardingState {
-  return {version: ONBOARDING_VERSION, status: 'active', step: 1, phase: 'home', skipped_steps: []};
+  return {version: ONBOARDING_VERSION, status: 'active', phase: 'home', phase_status: {}};
 }
 
 export function readOnboardingState(storage: Storage | null = typeof localStorage === 'undefined' ? null : localStorage): OnboardingState {
   if (!storage) return defaultOnboardingState();
   try {
     const parsed = JSON.parse(storage.getItem(ONBOARDING_STORAGE_KEY) || 'null') as Partial<OnboardingState> | null;
-    if (!parsed || parsed.version !== ONBOARDING_VERSION || (parsed.status !== 'active' && parsed.status !== 'completed')) return defaultOnboardingState();
-    const step = Number(parsed.step);
-    if (![1, 2, 3, 4, 5].includes(step)) return defaultOnboardingState();
-    return {
-      version: ONBOARDING_VERSION,
-      status: parsed.status,
-      step: step as OnboardingStep,
-      phase: parsed.phase || DEFAULT_PHASES[step as OnboardingStep],
-      skipped_steps: Array.isArray(parsed.skipped_steps)
-        ? parsed.skipped_steps.filter((value): value is OnboardingStep => [1, 2, 3, 4, 5].includes(value))
-        : [],
-    };
+    if (parsed?.version === ONBOARDING_VERSION && (parsed.status === 'active' || parsed.status === 'completed') && isPhase(parsed.phase)) {
+      const phaseStatus = Object.fromEntries(Object.entries(parsed.phase_status || {}).filter(
+        (entry): entry is [OnboardingPhase, OnboardingPhaseStatus] => isPhase(entry[0]) && isPhaseStatus(entry[1]),
+      ));
+      return {version: ONBOARDING_VERSION, status: parsed.status, phase: parsed.phase, phase_status: phaseStatus};
+    }
+    const legacy = JSON.parse(storage.getItem(LEGACY_ONBOARDING_STORAGE_KEY) || 'null') as {
+      version?: number;
+      status?: 'active' | 'completed';
+      step?: number;
+      phase?: OnboardingPhase;
+      skipped_steps?: number[];
+    } | null;
+    if (!legacy || legacy.version !== 1 || (legacy.status !== 'active' && legacy.status !== 'completed')) return defaultOnboardingState();
+    const legacyStep = [1, 2, 3, 4, 5].includes(Number(legacy.step)) ? Number(legacy.step) as OnboardingStep : 1;
+    const phase = isPhase(legacy.phase) ? legacy.phase : PHASES_BY_LEGACY_STEP[legacyStep][0];
+    const phaseStatus: Partial<Record<OnboardingPhase, OnboardingPhaseStatus>> = {};
+    for (const item of legacy.skipped_steps || []) {
+      if (![1, 2, 3, 4, 5].includes(item)) continue;
+      for (const skippedPhase of PHASES_BY_LEGACY_STEP[item as OnboardingStep]) phaseStatus[skippedPhase] = 'skipped';
+    }
+    const phaseIndex = PHASES.indexOf(phase);
+    for (const completedPhase of PHASES.slice(0, Math.max(0, phaseIndex))) {
+      if (!phaseStatus[completedPhase]) phaseStatus[completedPhase] = 'completed';
+    }
+    if (legacy.status === 'completed') phaseStatus.report = 'completed';
+    const migrated: OnboardingState = {version: ONBOARDING_VERSION, status: legacy.status, phase, phase_status: phaseStatus};
+    writeOnboardingState(migrated, storage);
+    storage.removeItem(LEGACY_ONBOARDING_STORAGE_KEY);
+    return migrated;
   } catch {
     return defaultOnboardingState();
   }
+}
+
+function isPhase(value: unknown): value is OnboardingPhase {
+  return typeof value === 'string' && PHASES.includes(value as OnboardingPhase);
+}
+
+function isPhaseStatus(value: unknown): value is OnboardingPhaseStatus {
+  return value === 'acknowledged' || value === 'skipped' || value === 'completed';
 }
 
 function writeOnboardingState(value: OnboardingState, storage: Storage | null = typeof localStorage === 'undefined' ? null : localStorage) {
@@ -65,9 +104,10 @@ function writeOnboardingState(value: OnboardingState, storage: Storage | null = 
 interface OnboardingContextValue {
   state: OnboardingState;
   active: boolean;
-  moveTo: (step: OnboardingStep, phase?: OnboardingPhase) => void;
-  setPhase: (phase: OnboardingPhase) => void;
-  skipCurrent: () => void;
+  enterPhase: (phase: OnboardingPhase) => void;
+  completePhase: (phase: OnboardingPhase, nextPhase?: OnboardingPhase) => void;
+  acknowledgePhase: (phase: OnboardingPhase) => void;
+  skipPhase: (phase: OnboardingPhase) => void;
   complete: () => void;
   restart: () => void;
 }
@@ -83,22 +123,37 @@ export function OnboardingProvider({children}: {children: ReactNode}) {
       return next;
     });
   }, []);
-  const moveTo = useCallback((step: OnboardingStep, phase = DEFAULT_PHASES[step]) => {
-    update(current => current.status === 'active' ? {...current, step, phase} : current);
-  }, [update]);
-  const setPhase = useCallback((phase: OnboardingPhase) => {
+  const enterPhase = useCallback((phase: OnboardingPhase) => {
     update(current => current.status === 'active' ? {...current, phase} : current);
   }, [update]);
-  const skipCurrent = useCallback(() => {
-    update(current => {
-      if (current.status !== 'active') return current;
-      const skipped = current.skipped_steps.includes(current.step) ? current.skipped_steps : [...current.skipped_steps, current.step];
-      if (current.step === 5) return {...current, status: 'completed', skipped_steps: skipped};
-      const step = (current.step + 1) as OnboardingStep;
-      return {...current, step, phase: DEFAULT_PHASES[step], skipped_steps: skipped};
-    });
+  const completePhase = useCallback((phase: OnboardingPhase, nextPhase = phase) => {
+    update(current => current.status === 'active' ? {
+      ...current,
+      phase: nextPhase,
+      phase_status: {...current.phase_status, [phase]: 'completed'},
+    } : current);
   }, [update]);
-  const complete = useCallback(() => update(current => ({...current, status: 'completed', step: 5, phase: 'report'})), [update]);
+  const acknowledgePhase = useCallback((phase: OnboardingPhase) => {
+    update(current => current.status === 'active' ? {
+      ...current,
+      phase,
+      phase_status: {...current.phase_status, [phase]: 'acknowledged'},
+    } : current);
+  }, [update]);
+  const skipPhase = useCallback((phase: OnboardingPhase) => {
+    update(current => current.status === 'active' ? {
+      ...current,
+      status: phase === 'report' ? 'completed' : current.status,
+      phase,
+      phase_status: {...current.phase_status, [phase]: 'skipped'},
+    } : current);
+  }, [update]);
+  const complete = useCallback(() => update(current => ({
+    ...current,
+    status: 'completed',
+    phase: 'report',
+    phase_status: {...current.phase_status, report: 'completed'},
+  })), [update]);
   const restart = useCallback(() => {
     const next = defaultOnboardingState();
     writeOnboardingState(next);
@@ -107,12 +162,13 @@ export function OnboardingProvider({children}: {children: ReactNode}) {
   const value = useMemo<OnboardingContextValue>(() => ({
     state,
     active: state.status === 'active',
-    moveTo,
-    setPhase,
-    skipCurrent,
+    enterPhase,
+    completePhase,
+    acknowledgePhase,
+    skipPhase,
     complete,
     restart,
-  }), [complete, moveTo, restart, setPhase, skipCurrent, state]);
+  }), [acknowledgePhase, complete, completePhase, enterPhase, restart, skipPhase, state]);
   return <OnboardingContext.Provider value={value}>{children}</OnboardingContext.Provider>;
 }
 
@@ -125,6 +181,7 @@ export function useOnboarding(): OnboardingContextValue {
 interface TargetDefinition {name: string; optional?: boolean}
 interface OverlayDefinition {
   step: OnboardingStep;
+  phase: OnboardingPhase;
   title: string;
   body: string;
   targets: TargetDefinition[];
@@ -133,15 +190,26 @@ interface OverlayDefinition {
 
 function definitionFor(state: OnboardingState, pathname: string): OverlayDefinition | null {
   if (state.status !== 'active') return null;
-  if (state.step === 1 && pathname === '/home') return {...ONBOARDING_COPY.steps.start, step: 1, targets: [{name: 'home-start'}]};
-  if (state.step === 2 && pathname === '/profile') return {...ONBOARDING_COPY.steps.profile, step: 2, targets: [{name: 'profile-form'}, {name: 'profile-save'}]};
-  if (state.step === 2 && pathname === '/rooms') return {...ONBOARDING_COPY.steps.rooms, step: 2, targets: [{name: 'room-selection'}]};
-  if (state.step === 3 && state.phase === 'capture' && pathname.startsWith('/upload/')) return {...ONBOARDING_COPY.steps.capture, step: 3, targets: [{name: 'capture-source'}, {name: 'central-camera', optional: true}]};
-  if (state.step === 3 && state.phase === 'analyze' && pathname.startsWith('/upload/')) return {...ONBOARDING_COPY.steps.analyze, step: 3, targets: [{name: 'capture-analyze'}]};
-  if (state.step === 4 && pathname.startsWith('/result/')) return {...ONBOARDING_COPY.steps.result, step: 4, targets: [{name: 'result-overview'}, {name: 'result-risks', optional: true}, {name: 'result-report', optional: true}]};
-  if (state.step === 4 && pathname.startsWith('/risk/')) return {...ONBOARDING_COPY.steps.risk, step: 4, targets: [{name: 'risk-solution'}]};
-  if (state.step === 5 && pathname.startsWith('/solutions/')) return {...ONBOARDING_COPY.steps.solutions, step: 5, targets: [{name: 'solution-options'}, {name: 'solutions-report', optional: true}]};
-  if (state.step === 5 && pathname === '/report') return {...ONBOARDING_COPY.steps.report, step: 5, targets: [{name: 'report-summary'}, {name: 'report-actions', optional: true}], complete: true};
+  let phase: OnboardingPhase | null = null;
+  if (pathname === '/home') phase = 'home';
+  else if (pathname === '/profile') phase = 'profile';
+  else if (pathname === '/rooms') phase = 'rooms';
+  else if (pathname.startsWith('/upload/')) phase = state.phase === 'analyze' ? 'analyze' : 'capture';
+  else if (pathname.startsWith('/result/')) phase = 'result';
+  else if (pathname.startsWith('/risk/')) phase = 'risk';
+  else if (pathname.startsWith('/solutions/')) phase = 'solutions';
+  else if (pathname === '/report') phase = 'report';
+  if (!phase || state.phase_status[phase]) return null;
+  const step = STEP_BY_PHASE[phase];
+  if (phase === 'home') return {...ONBOARDING_COPY.steps.start, phase, step, targets: [{name: 'home-start'}]};
+  if (phase === 'profile') return {...ONBOARDING_COPY.steps.profile, phase, step, targets: [{name: 'profile-form'}, {name: 'profile-save'}]};
+  if (phase === 'rooms') return {...ONBOARDING_COPY.steps.rooms, phase, step, targets: [{name: 'room-selection'}]};
+  if (phase === 'capture') return {...ONBOARDING_COPY.steps.capture, phase, step, targets: [{name: 'capture-source'}, {name: 'camera-entry', optional: true}]};
+  if (phase === 'analyze') return {...ONBOARDING_COPY.steps.analyze, phase, step, targets: [{name: 'capture-analyze'}]};
+  if (phase === 'result') return {...ONBOARDING_COPY.steps.result, phase, step, targets: [{name: 'result-overview'}, {name: 'result-risks', optional: true}, {name: 'result-report', optional: true}]};
+  if (phase === 'risk') return {...ONBOARDING_COPY.steps.risk, phase, step, targets: [{name: 'risk-solution'}]};
+  if (phase === 'solutions') return {...ONBOARDING_COPY.steps.solutions, phase, step, targets: [{name: 'solution-options'}, {name: 'solutions-report', optional: true}]};
+  if (phase === 'report') return {...ONBOARDING_COPY.steps.report, phase, step, targets: [{name: 'report-summary'}, {name: 'report-actions', optional: true}], complete: true};
   return null;
 }
 
@@ -156,11 +224,9 @@ function roundedRectPath({x, y, width, height, radius}: TargetRect): string {
 
 export function OnboardingOverlay() {
   const location = useLocation();
-  const {state, skipCurrent, complete} = useOnboarding();
-  const rawDefinition = useMemo(() => definitionFor(state, location.pathname), [location.pathname, state.phase, state.status, state.step]);
-  const definitionKey = rawDefinition ? `${state.step}:${state.phase}:${location.pathname}` : '';
-  const [dismissedKey, setDismissedKey] = useState('');
-  const definition = dismissedKey === definitionKey ? null : rawDefinition;
+  const {state, acknowledgePhase, skipPhase, complete} = useOnboarding();
+  const rawDefinition = useMemo(() => definitionFor(state, location.pathname), [location.pathname, state.phase, state.phase_status, state.status]);
+  const definition = rawDefinition;
   const [rects, setRects] = useState<TargetRect[]>([]);
   const [ready, setReady] = useState(false);
   const [obscured, setObscured] = useState(false);
@@ -252,7 +318,7 @@ export function OnboardingOverlay() {
       return [...new Set([...candidates, ...[...(cardRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled)') || [])]])];
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { event.preventDefault(); skipCurrent(); }
+      if (event.key === 'Escape') { event.preventDefault(); skipPhase(definition.phase); }
       if (event.key === 'Tab') {
         const candidates = focusable();
         if (!candidates.length) return;
@@ -275,7 +341,7 @@ export function OnboardingOverlay() {
       document.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('focusin', onFocusIn);
     };
-  }, [definition, ready, skipCurrent]);
+  }, [definition, ready, skipPhase]);
 
   useEffect(() => {
     if (!definition || !ready || obscured) return;
@@ -318,7 +384,7 @@ export function OnboardingOverlay() {
   if (!definition || !ready || obscured) return null;
   const width = Math.max(1, window.innerWidth);
   const height = Math.max(1, window.innerHeight);
-  const maskId = `onboarding-mask-${definition.step}-${state.phase}`;
+  const maskId = `onboarding-mask-${definition.step}-${definition.phase}`;
   const blockerPath = [`M 0 0 H ${width} V ${height} H 0 Z`, ...rects.map(roundedRectPath)].join(' ');
   return <div className="onboarding-layer" aria-live="polite">
     <svg className="onboarding-mask" width={width} height={height} viewBox={`0 0 ${width} ${height}`} aria-hidden="true">
@@ -333,12 +399,10 @@ export function OnboardingOverlay() {
       <p id="onboarding-description">{definition.body}</p>
       {!rects.length && <p className="onboarding-fallback" role="status">当前页面还没有可指引的操作，可以稍后再试或跳过本步。</p>}
       <div className="onboarding-actions">
-        {definition.complete
-          ? <button type="button" className="button quiet" onClick={() => setDismissedKey(definitionKey)}>稍后再看</button>
-          : <button type="button" className="button quiet" onClick={skipCurrent}>跳过本步</button>}
+        <button type="button" className="button quiet" onClick={() => skipPhase(definition.phase)}>跳过本步</button>
         {definition.complete
           ? <button type="button" className="button primary" onClick={complete}>完成引导</button>
-          : <button type="button" className="button primary" onClick={() => setDismissedKey(definitionKey)}>知道了，继续操作</button>}
+          : <button type="button" className="button primary" onClick={() => acknowledgePhase(definition.phase)}>知道了，继续操作</button>}
       </div>
     </section>
   </div>;

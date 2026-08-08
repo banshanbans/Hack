@@ -1,4 +1,4 @@
-# 长者友好视觉系统 Design QA（2026-08-09）
+# 长者友好家视觉系统 Design QA（2026-08-09）
 
 ## Evidence
 
@@ -8,6 +8,9 @@
 - Full-view comparison: `output/design-qa-care/reference-vs-implementation.png`。该图保留参考图 904px 与验收视口 844px 的真实高度差，只用于检查内容顺序和视口底部处理，不用于判断底部导航的纵坐标。
 - Supporting 390 × 844 route captures: `profile`、`rooms`、`upload`、`result`、`risk`、`solutions`、`report`、`my`、`camera`、`advisor` 和 `onboarding`，均位于 `output/design-qa-care/`。
 - Browser: Codex in-app browser；状态为隔离的本地 Demo assessment，使用仓库内浴室测试图，未请求相机或麦克风权限。
+- 本轮档案卡片源视觉真值：`/Users/carrey/Desktop/Screenshot 2026-08-09 at 01.38.53.png`（956 × 792 px，用户提供的问题截图）。
+- 本轮实现证据：`output/design-qa-onboarding-nav/profile-cards-focused-390x323.png`（390 × 323 px，CSS 宽度 390px，density 1）。参考图按宽度归一化为 `reference-profile-390x323.png`，两张图在同一次比较输入中核对。
+- 本轮响应式证据：`profile-cards-320x700.png`、`profile-cards-390x844.png`、`profile-cards-480x900.png`以及 `onboarding-home-390x844.png`；对应 CSS 视口 320 × 700、390 × 844、480 × 900，density 1。
 
 ## Findings
 
@@ -16,6 +19,7 @@
 - P2：无（第二轮修复后）。
 - P3：实时相机画面继续使用深色取景器，风险等级继续使用红/黄/蓝语义色；这是相机状态与安全等级的功能表达，不跟随首页统一成装饰性绿色。
 - P3：参考首页为 390 × 904，而完整旅程验收采用更常见的 390 × 844。核心内容以同宽同密度区域比较；底部导航分别按各自视口固定，不将 60px 视口差异误报为视觉漂移。
+- P3：尚未用真机系统级字体放大复测；本轮已用 320px 视口和完整长标题检查换行/溢出，不构成当前 H5 验收阻塞。
 
 ## Required fidelity surfaces
 
@@ -31,6 +35,7 @@
 - 并排核心对照显示：品牌位置、英雄图比例与裁切、两行白色主标题、进度卡高度、1/6 标记、分段进度、主/次按钮尺寸和资源卡起始位置均保持一致。
 - 文本、按钮描边和图标在 800 × 760 的并排图中可直接辨认，因此无需额外放大裁图；完整页与 11 个辅助页面截图用于检查纵向节奏、固定导航和长内容状态。
 - 首页以视觉参考为真值，其他页面以相同 token、卡片、按钮和排版语法迁移，不虚构参考图未定义的新页面结构。
+- 档案卡片聚焦对比中，源截图的 `legend` 背景矩形、顶边框中断和阴影断层清晰可见；修复后标题位于正常文档流，独立选项卡的边框、圆角和阴影连续。该区域细节足够清晰，无需进一步放大。
 
 ## Comparison history
 
@@ -48,17 +53,27 @@
 - 控制台 warning/error：无。
 - 未发现剩余 P0/P1/P2 视觉或交互问题。
 
+### Iteration 3（新手引导、档案卡片与四栏导航）
+
+- P1：源截图中 `fieldset/legend` 直接承担白色卡片表面，造成标题背景矩形、顶边框被打断和阴影不连续。
+- P1：旧导航在首页不提供独立“首页”入口，“检查”也没有校验恢复路径；窄屏下标签与导航空间不稳定。
+- P1：旧引导使用数字 step 和临时关闭状态，同一步子阶段会被一起跳过，刷新后可能重复。
+- Fixes：保留语义化 `fieldset/legend`，由 `.radio-options-card` 独立承担卡片表面；固定“首页｜检查｜相机｜我的”并校验智能恢复路径；引导改为 v2 phase/result 状态机。
+- Post-fix evidence：390px 聚焦对比不再有顶边框或阴影断层；320/390/480px 均无水平溢出，四个导航按钮高 59.5px、单项宽分别为 75/91.5/114px；首页引导同时生成 2 个精确高亮区。
+- Console errors：无。未发现剩余 P0/P1/P2。
+
 ## Primary interactions tested
 
 - 首页 → 档案 → 房间 → 上传仓库浴室测试图 → 开始 AI 检查 → 结果 → 风险 → A/B/C 方案 → 选择 B 档 → 报告。
 - 新手引导的“知道了，继续操作”“跳过本步”“完成引导”，以及档案页在引导显示期间的表单可操作性。
 - 首页、检查页与“我的”导航；中央相机说明、房间选择和未授权相机空状态；正式 AI 适老顾问的风险卡、快捷问题和固定输入栏。
 - 改造预览未开放错误态、上传完成态、选中方案态和报告汇总态。
+- 新手引导重播后首页 AR/照片双入口高亮；档案卡片 320/390/480px；四项导航 active/ARIA 状态；相机沉浸页隐藏底栏并显示“返回首页”。
 
 ## Automated verification at this QA pass
 
 - `npm run typecheck`: passed.
-- `npm test -- --run`: passed（14 files，67 tests）。
+- `npm test -- --reporter=dot`: passed（15 files，71 tests）。
 - `npm run build`: passed。
 - Browser console logs: empty.
 

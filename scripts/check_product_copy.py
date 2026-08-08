@@ -21,6 +21,31 @@ OTHER_FILES = [
     ROOT / "frontend/src/content.ts",
     ROOT / "frontend/src/App.tsx",
 ]
+BRAND_FILES = [
+    ROOT / "README.md",
+    ROOT / "docs/IMPLEMENTATION_STATUS.md",
+    ROOT / "competition-submission/项目介绍.md",
+    ROOT / "competition-submission/skills/anju-home-safety-assessment/SKILL.md",
+    ROOT / "competition-submission/skills/anju-home-safety-assessment/agents/openai.yaml",
+    ROOT / "competition-submission/skills/anju-home-safety-assessment/scripts/anju_skill.py",
+    ROOT / "competition-submission/packages/anju-home-safety-assessment/SKILL.md",
+    ROOT / "competition-submission/packages/anju-home-safety-assessment/agents/openai.yaml",
+    ROOT / "competition-submission/packages/anju-home-safety-assessment/scripts/anju_skill.py",
+    ROOT / "frontend/index.html",
+    ROOT / "frontend/src/content.ts",
+    ROOT / "hero-demo/README.md",
+    ROOT / "hero-demo/index.html",
+    ROOT / "hero-demo/STORYBOARD.md",
+    ROOT / "hero-demo/src/hero.config.ts",
+    ROOT / "hero-demo/src/main.ts",
+    ROOT / "hero-demo/src/screenSource.ts",
+    ROOT / "backend/app/providers/voice.py",
+    ROOT / "RASSAR App/AnjuGuard/ProductCopy.swift",
+    ROOT / "RASSAR App/UI/OnboardViewController.swift",
+    ROOT / "RASSAR App/Base.lproj/Main.storyboard",
+    ROOT / "RASSAR App/Base.lproj/LaunchScreen.storyboard",
+]
+LEGACY_PRODUCT_NAMES = ["安心家 AI", "安心家AI", "安居守护", "老者 LAOZHE"]
 BANNED = [
     "GPT", "Gemini", "Qwen", "豆包", "YOLO", "API", "JSON", "bbox", "置信度",
     "RoomPlan", "ARKit", "系统检测到", "上传数据进行分析", "功能介绍", "本系统将",
@@ -36,6 +61,20 @@ def swift_strings(path: Path) -> list[str]:
 
 def main() -> int:
     failures: list[str] = []
+    for path in BRAND_FILES:
+        content = path.read_text(encoding="utf-8")
+        for term in LEGACY_PRODUCT_NAMES:
+            if term in content:
+                failures.append(f"{path.relative_to(ROOT)}: legacy product name contains {term!r}")
+    content_copy = (ROOT / "frontend/src/content.ts").read_text(encoding="utf-8")
+    if "export const PRODUCT_NAME = '长者友好家'" not in content_copy or "brand: '长者友好家'" not in content_copy:
+        failures.append("frontend/src/content.ts: canonical product name is not 长者友好家")
+    swift_copy = (ROOT / "RASSAR App/AnjuGuard/ProductCopy.swift").read_text(encoding="utf-8")
+    if 'static let appName = "长者友好家"' not in swift_copy:
+        failures.append("RASSAR App/AnjuGuard/ProductCopy.swift: canonical product name is not 长者友好家")
+    hero_copy = (ROOT / "hero-demo/src/hero.config.ts").read_text(encoding="utf-8")
+    if "brand: '长者友好家'" not in hero_copy:
+        failures.append("hero-demo/src/hero.config.ts: canonical product name is not 长者友好家")
     for path in SWIFT_FILES:
         for value in swift_strings(path):
             for term in BANNED:

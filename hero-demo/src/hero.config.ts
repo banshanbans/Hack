@@ -111,8 +111,8 @@ export const HERO_CONFIG = {
   },
   copy: {
     eyebrow: '居家空间 AI 安全守护',
-    brand: '老者',
-    latinBrand: 'LAOZHE',
+    brand: '长者友好家',
+    latinBrand: 'AGE-FRIENDLY HOME',
     tagline: '细微改造，步步心安',
     detail: '看见风险，也看见更安心的生活。',
   },

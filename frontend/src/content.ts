@@ -1,6 +1,6 @@
 import type {RoomType, Severity} from './types';
 
-export const PRODUCT_NAME = '安心家 AI';
+export const PRODUCT_NAME = '长者友好家';
 
 export const CAMERA_COPY = {
   invitationTitle: '开始家庭实时检查',
@@ -40,7 +40,7 @@ export const ADVISOR_COPY = {
 };
 
 export const HOME_HERO_COPY = {
-  brand: '长者友好',
+  brand: '长者友好家',
   rugCallout: '留意地毯边缘',
   handrailCallout: '建议增设扶手',
   cameraEntry: '使用实时相机检查',
@@ -55,7 +55,7 @@ export const ONBOARDING_COPY = {
   steps: {
     start: {
       title: '开始一次居家安全检查',
-      body: '先开始本次检查，接下来会了解家人情况、选择房间并采集环境画面。',
+      body: '可以选择 AR 实时识别，也可以上传家中照片。照片路线会先了解家人情况、选择房间，再开始检查。',
     },
     profile: {
       title: '先了解家人情况',

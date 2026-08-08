@@ -63,6 +63,7 @@ describe('AI 适老顾问', () => {
     expect(screen.getByText('正式检查结果', {selector: '.advisor-phase'})).toBeVisible();
     expect(screen.getAllByText('地面湿滑').length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByRole('navigation', {name: '主导航'})).not.toBeInTheDocument();
+    expect(screen.getByRole('button', {name: '返回首页'})).toBeVisible();
     sockets[sockets.length - 1].onmessage?.({data: JSON.stringify({type: 'turn', turn: {turn_id: 'turn-event', role: 'assistant', kind: 'message', text: '事件通道已连接。', status: 'final', context_refs: {}, cards: [], created_at: '2026-08-08T10:00:30+00:00'}})} as MessageEvent);
     expect(await screen.findByText('事件通道已连接。')).toBeVisible();
 
