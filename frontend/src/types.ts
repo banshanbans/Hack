@@ -394,7 +394,7 @@ export interface AdvisorConfirmationCard {
   confirmation_id: string;
   tool_name: 'select_solution' | 'remove_solution' | 'start_formal_analysis';
   label: string;
-  status: 'pending' | 'approved' | 'rejected';
+  status: 'pending' | 'processing' | 'approved' | 'rejected' | 'failed';
 }
 
 export type AdvisorCard =
@@ -446,6 +446,12 @@ export interface AdvisorRTCQueueTicket {
   reason?: 'not_configured';
 }
 
+export interface AdvisorEventConfig {
+  websocket_path: string;
+  token: string;
+  expires_at: string;
+}
+
 export interface AdvisorBootstrap {
   session_id: string;
   phase: AdvisorPhase;
@@ -459,6 +465,6 @@ export interface AdvisorBootstrap {
   turns: AdvisorTurn[];
   context_refs: AdvisorContextRef;
   rtc: AdvisorRTCConfig;
-  events?: {websocket_path: string; token: string; expires_at: string};
+  events?: AdvisorEventConfig;
   prompt_version: string;
 }

@@ -21,6 +21,7 @@ import type {
   MediaAsset,
   PreparedCameraInspection,
   AdvisorRTCQueueTicket,
+  AdvisorEventConfig,
 } from './types';
 
 async function request<T>(path: string, options: RequestInit = {}, authenticated = true): Promise<T> {
@@ -56,6 +57,11 @@ function assessmentPath(suffix = ''): string {
 
 export const api = {
   health: () => request<{status: string; analysis: string; version: string; capabilities?: ServerCapabilities}>('/health', {}, false),
+  async analytics(eventName: string, roomId?: string, payload: Record<string, unknown> = {}) {
+    return request<{accepted: boolean}>(
+      assessmentPath('/analytics/events'), json('POST', {event_name: eventName, room_id: roomId, payload}),
+    );
+  },
   async createAssessment(input_mode: InputMode) {
     const value = await request<{assessment_id: string; access_token: string}>('/api/v2/assessments', json('POST', {input_mode}), false);
     writeSession({assessment_id: value.assessment_id, access_token: value.access_token});
@@ -101,6 +107,7 @@ export const api = {
   completeCameraSession: (roomId: string, cameraSessionId: string, mediaIds: string[]) => request<{camera_session_id: string; status: string; media_ids: string[]}>(assessmentPath(`/rooms/${roomId}/camera/sessions/${cameraSessionId}:complete`), json('POST', {media_ids: mediaIds})),
   createAdvisorSession: (roomId: string, value: {camera_session_id?: string; context_refs?: AdvisorContextRef} = {}) => request<AdvisorBootstrap>(assessmentPath(`/rooms/${roomId}/advisor/sessions`), json('POST', value)),
   advisorTurns: (roomId: string, advisorSessionId: string, signal?: AbortSignal) => request<{turns: AdvisorTurn[]; next_cursor: string | null}>(assessmentPath(`/rooms/${roomId}/advisor/sessions/${advisorSessionId}/turns`), {signal}),
+  issueAdvisorEventToken: (roomId: string, advisorSessionId: string) => request<AdvisorEventConfig>(assessmentPath(`/rooms/${roomId}/advisor/sessions/${advisorSessionId}/events-token`), {method: 'POST'}),
   joinAdvisorRTCQueue: (roomId: string, advisorSessionId: string, clientInstanceId: string, mode: 'audio' | 'audio_video') => request<AdvisorRTCQueueTicket>(assessmentPath(`/rooms/${roomId}/advisor/sessions/${advisorSessionId}/rtc-queue`), json('POST', {client_instance_id: clientInstanceId, mode})),
   advisorRTCQueueStatus: (roomId: string, advisorSessionId: string, ticketId: string, clientInstanceId: string, signal?: AbortSignal) => request<AdvisorRTCQueueTicket>(assessmentPath(`/rooms/${roomId}/advisor/sessions/${advisorSessionId}/rtc-queue/${ticketId}`), {signal, headers: {'X-Advisor-Client-ID': clientInstanceId}}),
   heartbeatAdvisorRTCQueue: (roomId: string, advisorSessionId: string, ticketId: string, clientInstanceId: string) => request<AdvisorRTCQueueTicket>(assessmentPath(`/rooms/${roomId}/advisor/sessions/${advisorSessionId}/rtc-queue/${ticketId}/heartbeat`), {method: 'POST', headers: {'X-Advisor-Client-ID': clientInstanceId}}),
@@ -165,6 +172,8 @@ export function friendlyError(error: unknown): string {
     advisor_queue_required: 'AI 顾问体验人数较多，正在排队，请稍候。',
     advisor_queue_expired: '本次排队已失效，请重新排队',
     advisor_capacity_busy: '当前体验人数较多，请稍后重试',
+    advisor_confirmation_in_progress: '这项确认正在另一端处理，请稍候',
+    advisor_confirmation_already_decided: '这项确认已经处理，请刷新查看',
     renovation_preview_not_enabled: '改造效果预览暂未开放',
     renovation_source_not_usable: '这张照片不适合生成，请换一张清晰照片',
     renovation_no_selected_solutions: '请先为这个房间选择改造方案',

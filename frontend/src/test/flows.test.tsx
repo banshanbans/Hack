@@ -325,12 +325,12 @@ describe('recoverable product states', () => {
     expect(dialog).toBeVisible();
     expect(dialog).toHaveTextContent('iPhone App 会调用原生扫描');
     expect(dialog).toHaveTextContent('扫描结束只保存代表画面');
-    expect(dialog).toHaveTextContent('直接开始正式分析');
+    expect(dialog).toHaveTextContent('保存后可在照片页确认并开始 AI 检查');
     expect(window.location.hash).toBe('#/home');
     fireEvent.click(screen.getByRole('button', {name: /选择房间/}));
     fireEvent.click(screen.getByRole('button', {name: /客厅/}));
     await waitFor(() => expect(window.location.hash).toBe('#/camera?room_id=camera-room&auto_start=1'));
     expect(await screen.findByRole('heading', {name: '实时扫描'})).toBeVisible();
-    expect(screen.getByRole('button', {name: '结束扫描并分析'})).toBeDisabled();
+    expect(screen.getByRole('button', {name: '结束扫描并保存'})).toBeDisabled();
   });
 });

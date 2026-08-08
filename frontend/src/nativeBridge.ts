@@ -39,13 +39,13 @@ declare global {
   interface Window {
     __ANJU_NATIVE__?: {
       bridge_version: number;
-      capabilities: {photo_capture?: boolean; live_scan?: boolean; spatial_tracking?: boolean};
+      capabilities: {photo_capture?: boolean; live_scan?: boolean; spatial_tracking?: boolean; advisor_rtc_lease?: boolean};
     };
     webkit?: {messageHandlers?: {anjuNative?: {postMessage: (message: unknown) => void}}};
   }
 }
 
-export function nativeCapability(capability: 'photo_capture' | 'live_scan'): boolean {
+export function nativeCapability(capability: 'photo_capture' | 'live_scan' | 'advisor_rtc_lease'): boolean {
   return window.__ANJU_NATIVE__?.bridge_version === 1
     && window.__ANJU_NATIVE__?.capabilities?.[capability] === true
     && typeof window.webkit?.messageHandlers?.anjuNative?.postMessage === 'function';

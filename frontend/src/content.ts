@@ -7,7 +7,7 @@ export const CAMERA_COPY = {
   invitationBody: '先选择房间。iPhone App 会调用原生扫描，外部浏览器会使用网页相机。',
   enter: '选择房间',
   privacy: '只有通过本地质量与场景变化检查的候选画面才会发送；离开页面后摄像头会立即关闭。',
-  reportTip: '扫描结束只保存代表画面；档案完整时会直接开始正式分析，未完成则先引导补齐。',
+  reportTip: '扫描结束只保存代表画面；保存后可在照片页确认并开始 AI 检查。',
   regionOverlayLabel: '最近分析画面的临时建议位置',
   regionOverlayDescription: '标注仅对应最近一张已分析画面，不会固定在现实物体上。',
   positionLeft: '左侧',
@@ -25,7 +25,7 @@ export const ADVISOR_COPY = {
   draftLabel: '待确认提示',
   formalLabel: '正式检查结果',
   privacy: '仅保存本次检查的文字对话，不保存原始音频。',
-  draftDisclaimer: '以下是扫描中的临时提示，不计分、不显示风险等级或预算；结束扫描后会基于代表画面重新正式分析。',
+  draftDisclaimer: '以下是扫描中的临时提示，不计分、不显示风险等级或预算；保存代表画面后，可在照片页确认并开始 AI 检查。',
   formalDisclaimer: '风险等级、评分和预算由已校验的规则与价格数据生成；顾问只负责解释和引导操作。',
   inputPlaceholder: '输入问题，或点击麦克风说话…',
   states: {
@@ -40,6 +40,7 @@ export const ADVISOR_COPY = {
 };
 
 export const HOME_HERO_COPY = {
+  brand: '长者友好',
   rugCallout: '留意地毯边缘',
   handrailCallout: '建议增设扶手',
   cameraEntry: '使用实时相机检查',

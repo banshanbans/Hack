@@ -4,6 +4,7 @@ import '@fontsource-variable/plus-jakarta-sans';
 import '@fontsource-variable/noto-sans-sc';
 import '@material-symbols/font-400/rounded.css';
 import './styles.css';
+import './careTheme.css';
 import App from './App';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

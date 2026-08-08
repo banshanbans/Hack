@@ -21,10 +21,21 @@ describe('versioned onboarding state', () => {
     render(<App />);
 
     expect(await screen.findByRole('dialog', {name: '开始一次居家安全检查'})).toHaveTextContent('第 1 / 5 步');
-    fireEvent.click(screen.getByRole('button', {name: '跳过这一步'}));
+    fireEvent.click(screen.getByRole('button', {name: '跳过本步'}));
 
     await waitFor(() => expect(readOnboardingState()).toMatchObject({step: 2, phase: 'profile', skipped_steps: [1]}));
     expect(screen.queryByRole('dialog', {name: '开始一次居家安全检查'})).not.toBeInTheDocument();
+  });
+
+  it('lets users acknowledge a tip without advancing or skipping the guided step', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(json({analysis: 'ark', capabilities: {h5_camera: true}}));
+    render(<App />);
+
+    expect(await screen.findByRole('dialog', {name: '开始一次居家安全检查'})).toBeVisible();
+    fireEvent.click(screen.getByRole('button', {name: '知道了，继续操作'}));
+
+    expect(screen.queryByRole('dialog', {name: '开始一次居家安全检查'})).not.toBeInTheDocument();
+    expect(readOnboardingState()).toMatchObject({step: 1, phase: 'home', skipped_steps: []});
   });
 
   it('reuses an existing assessment when the guide is restarted', async () => {

@@ -24,7 +24,7 @@ describe('iOS native bridge v1', () => {
     const postMessage = vi.fn();
     window.__ANJU_NATIVE__ = {
       bridge_version: 1,
-      capabilities: {photo_capture: true, live_scan: true, spatial_tracking: true},
+      capabilities: {photo_capture: true, live_scan: true, spatial_tracking: true, advisor_rtc_lease: true},
     };
     window.webkit = {messageHandlers: {anjuNative: {postMessage}}};
     const payload = {
@@ -38,6 +38,7 @@ describe('iOS native bridge v1', () => {
     };
 
     expect(invokeNative('start_live_scan', payload)).toBe(true);
+    expect(nativeCapability('advisor_rtc_lease')).toBe(true);
     expect(postMessage).toHaveBeenCalledWith({bridge_version: 1, command: 'start_live_scan', ...payload});
   });
 

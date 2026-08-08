@@ -12,6 +12,7 @@ import {AppProvider, formatRange, useApp} from './store';
 import {OnboardingOverlay, OnboardingProvider, useOnboarding} from './onboarding';
 import type {AdvisorBootstrap, AdvisorCard, AdvisorConfirmationCard, AdvisorContextRef, AdvisorTurn, AnalysisStatus, Assessment, AssessmentReport, CameraSuggestion, ElderProfile, MediaAsset, RenovationPreview, RenovationPreviewContext, RoomAssessment, RoomResult, RoomType, SafetyRisk, SolutionPackage} from './types';
 import {AdvisorVoiceRTC, type VoiceState} from './voiceRtc';
+import {subscribeAdvisorEvents} from './advisorEvents';
 import {
   advisorClientInstanceId, clearAdvisorRTCTicket, readAdvisorRTCTicket, saveAdvisorRTCTicket,
 } from './advisorQueue';
@@ -351,11 +352,12 @@ function PersistentTabBar({pathname}: {pathname: string}) {
   const [cameraIntroOpen, setCameraIntroOpen] = useState(false);
   const myActive = pathname === '/my';
   const cameraActive = pathname === '/camera';
+  const homeActive = pathname === '/home';
   const checkPath = session ? `/${session.last_route || 'rooms'}` : '/home';
   const cameraAvailable = nativeCapability('live_scan') ? capabilities?.ios_home_camera !== false : capabilities?.h5_camera !== false;
-  return <><nav className="persistent-tab-bar three-tabs" aria-label="主导航">
-    <button className={!myActive && !cameraActive ? 'active' : ''} aria-current={!myActive && !cameraActive ? 'page' : undefined} onClick={() => navigate(checkPath)}><Icon name="fact_check" filled={!myActive && !cameraActive} /><span>检查</span></button>
-    {cameraAvailable ? <button data-onboarding-target="central-camera" className={`camera-tab ${cameraActive ? 'active' : ''}`} aria-label="中央相机" aria-current={cameraActive ? 'page' : undefined} onClick={() => cameraActive ? undefined : setCameraIntroOpen(true)}><span className="camera-tab-icon"><img src="/assets/camera-tab.svg" alt="" /></span><span>中央相机</span></button> : <button className="camera-tab" disabled aria-label="中央相机暂未开放"><span className="camera-tab-icon"><img src="/assets/camera-tab.svg" alt="" /></span><span>中央相机</span></button>}
+  return <><nav className={`persistent-tab-bar ${homeActive ? 'two-tabs' : 'three-tabs'}`} aria-label="主导航">
+    <button className={!myActive && !cameraActive ? 'active' : ''} aria-current={!myActive && !cameraActive ? 'page' : undefined} onClick={() => navigate(checkPath)}><Icon name={homeActive ? 'search' : 'fact_check'} filled={!homeActive && !myActive && !cameraActive} /><span>检查</span></button>
+    {!homeActive && (cameraAvailable ? <button data-onboarding-target="central-camera" className={`camera-tab ${cameraActive ? 'active' : ''}`} aria-label="中央相机" aria-current={cameraActive ? 'page' : undefined} onClick={() => cameraActive ? undefined : setCameraIntroOpen(true)}><span className="camera-tab-icon"><img src="/assets/camera-tab.svg" alt="" /></span><span>中央相机</span></button> : <button className="camera-tab" disabled aria-label="中央相机暂未开放"><span className="camera-tab-icon"><img src="/assets/camera-tab.svg" alt="" /></span><span>中央相机</span></button>)}
     <button className={myActive ? 'active' : ''} aria-current={myActive ? 'page' : undefined} onClick={() => !myActive && navigate('/my')}><Icon name="person" filled={myActive} /><span>我的</span></button>
   </nav>{cameraIntroOpen && <CameraLaunchModal close={() => setCameraIntroOpen(false)} />}</>;
 }
@@ -385,6 +387,7 @@ function CameraPage() {
   const overlayPreviewUrlRef = useRef<string | null>(null);
   const requestSequenceRef = useRef(0);
   const nativeRequestRef = useRef<string | null>(null);
+  const pendingCompletionRef = useRef<{cameraSessionId: string; mediaIds: string[]} | null>(null);
   const nativeAutoStartHandledRef = useRef(false);
   const cameraSessionRef = useRef<string | null>(null);
   const advisorRef = useRef<AdvisorBootstrap | null>(null);
@@ -630,33 +633,26 @@ function CameraPage() {
     advisorRef.current = null;
   }, [roomId, stopVoice]);
 
-  const completeAndAnalyze = useCallback(async (cameraSessionId: string, mediaIds: string[]) => {
+  const completeScan = useCallback(async (cameraSessionId: string, mediaIds: string[]) => {
+    pendingCompletionRef.current = {cameraSessionId, mediaIds};
     setSaving(true);
     setCompletionError('');
     try {
       await api.completeCameraSession(roomId, cameraSessionId, mediaIds);
-      try {
-        await api.analyze(roomId);
-        showToast(`已保存 ${mediaIds.length} 张代表画面，正在开始正式分析`);
-        if (onboarding.active && onboarding.state.step === 3) onboarding.moveTo(4, 'result');
-        navigate(`/analyzing/${roomId}`);
-      } catch (error) {
-        const typed = error as Error & {code?: string};
-        if (typed.code === 'profile_incomplete') {
-          navigate(`/profile?resume=scan_analysis&room_id=${encodeURIComponent(roomId)}`);
-          return;
-        }
-        setCompletionError('代表画面已保存，正式分析尚未启动。');
-        showToast(friendlyError(error));
-      }
     } catch (error) {
-      setCompletionError('代表画面尚未完成保存，请重试。');
+      setCompletionError('代表画面已上传，但扫描记录尚未完成，请重试保存。');
       showToast(friendlyError(error));
-    } finally {
-      await endAdvisorSession();
       setSaving(false);
+      return;
     }
-  }, [endAdvisorSession, navigate, onboarding, roomId, showToast]);
+    pendingCompletionRef.current = null;
+    showToast(`已保存 ${mediaIds.length} 张代表画面，可确认后开始 AI 检查`);
+    if (onboarding.active && onboarding.state.step === 3) onboarding.setPhase('analyze');
+    assessmentState.reload();
+    await endAdvisorSession().catch(() => undefined);
+    setSaving(false);
+    navigate(`/upload/${roomId}`);
+  }, [assessmentState, endAdvisorSession, navigate, onboarding, roomId, showToast]);
 
   useEffect(() => {
     if (!session || !room) return;
@@ -665,10 +661,8 @@ function CameraPage() {
 
   useEffect(() => {
     const events = advisor?.events;
-    if (!events?.websocket_path || !events.token || nativeCapability('live_scan')) return;
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const socket = new WebSocket(`${protocol}//${window.location.host}${events.websocket_path}?token=${encodeURIComponent(events.token)}`);
-    socket.onmessage = event => {
+    if (!advisor || !events?.websocket_path || !events.token || nativeCapability('live_scan')) return;
+    return subscribeAdvisorEvents({roomId, sessionId: advisor.session_id, initial: events, onMessage: event => {
       const value = parseAdvisorEvent(event.data);
       if (value?.type === 'turn' && value.turn?.turn_id) appendAdvisorTurns(value.turn);
       if (value?.type === 'camera_suggestion_added' && value.suggestion?.suggestion_id) {
@@ -693,9 +687,8 @@ function CameraPage() {
           void voiceRef.current?.deleteInspectionImage(groupId).catch(() => undefined);
         }
       }
-    };
-    return () => socket.close();
-  }, [advisor?.events, appendAdvisorTurns, showOverlay]);
+    }});
+  }, [advisor?.events, advisor?.session_id, appendAdvisorTurns, roomId, showOverlay]);
 
   useEffect(() => {
     const visibility = () => { if (document.visibilityState !== 'visible') { stopCamera(); void stopVoice(); } };
@@ -724,7 +717,7 @@ function CameraPage() {
           if (!cameraSessionId) throw new Error('本次扫描已失效，请重试');
           const failed = result.failed_count ? `，${result.failed_count} 张未上传` : '';
           showToast(`已保存 ${result.uploaded_media_ids.length} 张代表画面${failed}`);
-          await completeAndAnalyze(cameraSessionId, result.uploaded_media_ids);
+          await completeScan(cameraSessionId, result.uploaded_media_ids);
         } else {
           await endAdvisorSession();
           setStatus(result.error_code ? '本次扫描没有完成，请重试' : '本次没有保存可用画面');
@@ -733,7 +726,7 @@ function CameraPage() {
     };
     window.addEventListener(NATIVE_CAPTURE_RESULT_EVENT, receive);
     return () => window.removeEventListener(NATIVE_CAPTURE_RESULT_EVENT, receive);
-  }, [completeAndAnalyze, endAdvisorSession, roomId, showToast]);
+  }, [completeScan, endAdvisorSession, roomId, showToast]);
 
   const startCamera = async () => {
     if (!session || !room) { showToast('请先选择本次检查的房间'); return; }
@@ -780,10 +773,16 @@ function CameraPage() {
         advisor_queue_ticket_id: rtcTicket?.ticket_id,
       });
       if (started) {
-        if (rtcTicket) startQueueHeartbeat(rtcTicket);
+        if (rtcTicket && nativeCapability('advisor_rtc_lease')) {
+          if (rtcHeartbeatRef.current !== null) window.clearInterval(rtcHeartbeatRef.current);
+          rtcHeartbeatRef.current = null;
+          rtcTicketRef.current = null;
+          clearAdvisorRTCTicket(roomId, rtcTicket.mode);
+          void api.analytics('advisor_rtc_lease_transferred', roomId, {holder: 'ios_native'}).catch(() => undefined);
+        } else if (rtcTicket) startQueueHeartbeat(rtcTicket);
         nativeRequestRef.current = requestId;
         setNativePending(true);
-        setStatus('原生实时相机已打开；结束后会直接进入正式分析');
+        setStatus('原生实时相机已打开；结束后会保存代表画面');
       } else {
         await stopVoice();
         showToast('无法打开原生相机，请重试');
@@ -1028,9 +1027,9 @@ function CameraPage() {
         uploadedIds.push(uploaded.media_id);
       }
       const prepared = await prepareScanSession();
-      await completeAndAnalyze(prepared.cameraSessionId, uploadedIds);
+      await completeScan(prepared.cameraSessionId, uploadedIds);
     } catch (error) {
-      setCompletionError('代表画面尚未完成保存，请重试。');
+      setCompletionError('代表画面尚未完成上传，请重试。');
       showToast(friendlyError(error));
       setSaving(false);
     }
@@ -1039,10 +1038,10 @@ function CameraPage() {
   const selectedSuggestion = suggestions.find(item => item.suggestion_id === selectedSuggestionId);
   const guidanceTitle = completionError || overlaySuggestion?.title || status;
   const guidanceBody = completionError
-    ? '照片不会丢失，网络恢复后可重试正式分析。'
+    ? '照片不会丢失，网络恢复后可重试保存扫描记录。'
     : overlaySuggestion?.short_advice || (rtcFallback
       ? '当前使用兼容检查；顶部指引和正式分析不受影响。'
-      : active ? '这些都是待确认提示，结束扫描后才会正式分析。' : '开启相机后，我会在这里实时提醒你。');
+      : active ? '这些都是待确认提示，保存后可在照片页确认并开始正式分析。' : '开启相机后，我会在这里实时提醒你。');
   const voiceLabel = ADVISOR_COPY.states[voiceState];
 
   if (!session) return <Navigate to="/home" replace />;
@@ -1051,7 +1050,7 @@ function CameraPage() {
   if (!room) return <ErrorState error={new Error('没有找到本次实时检查的房间')} />;
 
   return <section className="page camera-page camera-advisor-page">
-    <div className="page-intro compact"><small className="eyebrow">{ROOM_COPY[room.room_type].name}</small><h1>实时扫描</h1><p>顾问会边看边提醒，扫描结束后直接进入正式分析。</p></div>
+    <div className="page-intro compact"><small className="eyebrow">{ROOM_COPY[room.room_type].name}</small><h1>实时扫描</h1><p>顾问会边看边提醒，结束后只保存代表画面。</p></div>
     <div className={`camera-viewport ${active ? 'active' : ''}`}>
       <video ref={videoRef} className={mirrored ? 'mirrored' : ''} muted playsInline aria-label="后置摄像头实时画面" />
       {!active && <button type="button" className="camera-placeholder" aria-label="开启后置相机" onClick={startCamera} disabled={nativePending || saving}><img src="/assets/camera-tab.svg" alt="" /><b>{nativePending ? '正在使用原生相机…' : '点击开启相机'}</b><p>将在你点击后申请相机权限</p></button>}
@@ -1062,8 +1061,8 @@ function CameraPage() {
       <button className={`camera-voice-button state-${voiceState}`} onClick={() => void toggleScanVoice()} aria-label={voiceLabel}><Icon name={voiceState === 'speaking' ? 'stop' : voiceState !== 'idle' && voiceState !== 'error' ? 'mic_off' : 'mic'} filled /><span>{voiceLabel}</span></button>
       <button className="camera-findings-button" onClick={() => setAdvisorOpen(true)}><span><b>{suggestions.length ? `已发现 ${suggestions.length} 条待确认提示` : '暂无待确认提示'}</b><small>{selectedSuggestion ? `已选中：${selectedSuggestion.title}` : '点击查看并选择“这个地方”'}</small></span><Icon name="keyboard_arrow_up" /></button>
     </div>
-    {completionError && <div className="camera-analysis-retry" role="alert"><Icon name="cloud_off" /><span><b>{completionError}</b><small>你可以直接重试，无需重新拍摄。</small></span><button className="button secondary" disabled={saving} onClick={() => void api.analyze(roomId).then(() => navigate(`/analyzing/${roomId}`)).catch(error => showToast(friendlyError(error)))}>重试分析</button></div>}
-    <button className="button primary full camera-finish-button" disabled={!hasRepresentative || saving || nativePending} onClick={() => void finishWebScan()}><Icon name="document_scanner" filled />{saving ? '正在保存并启动分析…' : '结束扫描并分析'}</button>
+    {completionError && <div className="camera-analysis-retry" role="alert"><Icon name="cloud_off" /><span><b>{completionError}</b><small>你可以直接重试，无需重新拍摄。</small></span><button className="button secondary" disabled={saving || !pendingCompletionRef.current} onClick={() => { const pending = pendingCompletionRef.current; if (pending) void completeScan(pending.cameraSessionId, pending.mediaIds); }}>重试保存</button></div>}
+    <button className="button primary full camera-finish-button" disabled={!hasRepresentative || saving || nativePending} onClick={() => void finishWebScan()}><Icon name="document_scanner" filled />{saving ? '正在保存代表画面…' : '结束扫描并保存'}</button>
     {!hasRepresentative && !nativePending && <p className="camera-finish-hint">需要先保存一张清晰的代表画面</p>}
     {active && <button className="button quiet full" onClick={() => { stopCamera(); void stopVoice(); }}><Icon name="pause_circle" />暂停扫描</button>}
     <button className="button quiet full" onClick={() => { stopCamera(); void endAdvisorSession(); navigate(`/upload/${roomId}`); }}>改用照片</button>
@@ -1104,38 +1103,41 @@ function HomePage() {
     }
   };
   const hasCameraEntry = nativeCapability('live_scan') ? capabilities?.ios_home_camera !== false : capabilities?.h5_camera !== false;
-  const progress = session ? getHomeProgress(session.last_route) : {step: 0, label: ''};
+  const progress = session ? getHomeProgress(session.last_route) : {step: 1, label: HOME_FLOW_STEPS[0].label};
   const progressPercent = Math.round(progress.step / HOME_FLOW_STEPS.length * 100);
   return <section className="page home-page">
-    <div className="home-backdrop">
-      <img src={`${ASSETS}/hero-living-room.jpg`} alt="温暖明亮的居家客厅" loading="eager" fetchPriority="high" />
-    </div>
+    <header className="home-brand-bar">
+      <Icon name="shield_with_heart" filled />
+      <strong>{HOME_HERO_COPY.brand}</strong>
+      <span aria-hidden="true" />
+    </header>
     <div className="home-editorial-content">
-      <div className="home-editorial-heading">
-        <p className="home-eyebrow"><span />{HOME_HERO_COPY.eyebrow}</p>
-        <div className="hero-copy"><h1>给父母的家<br />做一次安全体检</h1><p>上传家中的照片，AI 帮你发现容易忽略的跌倒与行动风险。</p></div>
-      </div>
+      <section className="home-hero" aria-labelledby="home-hero-title">
+        <img src={`${ASSETS}/home-hero-care.jpg`} alt="温暖客厅与居家安全检查手机界面" loading="eager" fetchPriority="high" />
+        <div className="hero-copy"><h1 id="home-hero-title">给父母的家<br />做一次安全体检</h1><p>AR实时识别/上传家中的照片，<br />AI帮你发现容易忽略的行动风险。</p></div>
+      </section>
       <section className="home-progress-card" aria-labelledby="home-progress-title">
-        <div className="home-progress-heading">
-          <div><small>HOME SAFETY</small><h2 id="home-progress-title">{HOME_HERO_COPY.progressTitle}</h2></div>
-          <strong aria-label={`第 ${progress.step} 步，共 ${HOME_FLOW_STEPS.length} 步`}>{progress.step}<span>/{HOME_FLOW_STEPS.length}</span></strong>
+        <div className="home-progress-meta">
+          <span className="home-family-chip"><Icon name="favorite" filled />{HOME_HERO_COPY.brand}</span>
+          <strong aria-label={`第 ${progress.step} 步，共 ${HOME_FLOW_STEPS.length} 步`}>{progress.step}/{HOME_FLOW_STEPS.length}</strong>
         </div>
-        <p>{session ? HOME_HERO_COPY.progressActive(progress.label) : HOME_HERO_COPY.progressIdle}</p>
-        <div className="home-progress-track" role="progressbar" aria-label="检查完成进度" aria-valuemin={0} aria-valuemax={HOME_FLOW_STEPS.length} aria-valuenow={progress.step}>
-          <i style={{width: `${progressPercent}%`}} />
-        </div>
-        <div className="home-progress-markers" aria-hidden="true">
+        <h2 id="home-progress-title">{HOME_HERO_COPY.progressTitle}</h2>
+        {session ? <button className="home-progress-resume" onClick={() => navigate(`/${session.last_route || 'profile'}`)} aria-label="继续上次检查">{HOME_HERO_COPY.progressActive(progress.label)}</button> : <p className="home-progress-status">{HOME_HERO_COPY.progressActive(progress.label)}</p>}
+        <div className="home-progress-segments" role="progressbar" aria-label="检查完成进度" aria-valuemin={0} aria-valuemax={HOME_FLOW_STEPS.length} aria-valuenow={progress.step} aria-valuetext={`${progressPercent}%`}>
           {HOME_FLOW_STEPS.map((item, index) => <span key={item.label} className={index < progress.step ? 'complete' : ''} />)}
         </div>
         <div className="home-action-stack">
-          <button data-onboarding-target="home-start" className="button primary full home-primary-button" disabled={busy} onClick={startPhotoAssessment}><Icon name="upload" filled />{busy ? '正在开始…' : '上传家中照片'}</button>
-          {(hasCameraEntry || session) && <div className={`home-secondary-actions ${hasCameraEntry && session ? 'two-actions' : ''}`}>
-            {hasCameraEntry && <button className="button secondary full home-secondary-button" aria-label={HOME_HERO_COPY.cameraEntry} disabled={busy} onClick={() => setCameraIntroOpen(true)}><Icon name="photo_camera" />{session ? '实时相机' : HOME_HERO_COPY.cameraEntry}</button>}
-            {session && <button className="button quiet full home-secondary-button" disabled={busy} onClick={() => navigate(`/${session.last_route || 'profile'}`)}><Icon name="assignment" />继续上次检查</button>}
-          </div>}
+          <button data-onboarding-target="central-camera" className="button primary full home-primary-button" aria-label={hasCameraEntry ? '中央相机' : '中央相机暂未开放'} disabled={!hasCameraEntry || busy} onClick={() => setCameraIntroOpen(true)}><Icon name="photo_camera" filled />{hasCameraEntry ? 'AR 实时识别' : '实时识别暂未开放'}</button>
+          <div className="home-secondary-actions two-actions">
+            <button data-onboarding-target="home-start" className="button secondary full home-secondary-button" disabled={busy} onClick={startPhotoAssessment}><Icon name="image" />{busy ? '正在开始…' : '上传家中照片'}</button>
+            <button className="button secondary full home-secondary-button" aria-label="问问 AI 助手" disabled={!hasCameraEntry || busy} onClick={() => setCameraIntroOpen(true)}><Icon name="smart_toy" />问问 AI 助手</button>
+          </div>
         </div>
       </section>
-      <p className="fine-print home-trust-note">无需专业设备 · 约 2 分钟完成 · 不涉及医疗诊断</p>
+      <section className="home-resource-grid" aria-label="长者居家安全建议">
+        <button onClick={startPhotoAssessment} disabled={busy}><span className="home-resource-icon"><Icon name="bathtub" /></span><b>浴室防滑指南</b><small>阅读3分钟</small></button>
+        <button onClick={() => setCameraIntroOpen(true)} disabled={!hasCameraEntry || busy}><span className="home-resource-icon"><Icon name="lightbulb" /></span><b>夜间照明建议</b><small><Icon name="auto_awesome" />AI推荐</small></button>
+      </section>
     </div>
     {cameraIntroOpen && <CameraLaunchModal close={() => setCameraIntroOpen(false)} />}
   </section>;
@@ -1159,8 +1161,6 @@ function ProfilePage() {
   const editingFromMy = query.get('from') === 'my';
   const requestedReturn = query.get('return_to') || '';
   const safeReturn = /^\/(upload|advisor)\/[A-Za-z0-9-]{1,80}$/.test(requestedReturn) ? requestedReturn : '';
-  const resumeScanRoomId = query.get('resume') === 'scan_analysis' && /^[A-Za-z0-9-]{1,80}$/.test(query.get('room_id') || '')
-    && assessment?.rooms.some(room => room.room_id === query.get('room_id')) ? query.get('room_id')! : '';
   const changed = Boolean(initial) && (profile.mobility !== initial?.mobility || profile.fall_history !== initial?.fall_history || profile.living_status !== initial?.living_status);
   const saveProfile = async () => {
     if (!complete) return;
@@ -1169,10 +1169,7 @@ function ProfilePage() {
       await api.saveProfile(profile as ElderProfile);
       showToast('个人档案已保存');
       if (onboarding.active && onboarding.state.step === 2) onboarding.setPhase('rooms');
-      if (resumeScanRoomId) {
-        await api.analyze(resumeScanRoomId);
-        navigate(`/analyzing/${resumeScanRoomId}`);
-      } else navigate(editingFromMy ? '/my' : safeReturn || '/rooms');
+      navigate(editingFromMy ? '/my' : safeReturn || '/rooms');
     } catch (value) {
       showToast(friendlyError(value));
     } finally { setSaving(false); }
@@ -1658,10 +1655,10 @@ function AdvisorPage() {
 
   const loadedAdvisorKeyRef = useRef('');
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (force = false) => {
     if (!session) return;
     const loadKey = `${session.assessment_id}:${roomId}:${query.toString()}`;
-    if (loadedAdvisorKeyRef.current === loadKey) return;
+    if (!force && loadedAdvisorKeyRef.current === loadKey) return;
     loadedAdvisorKeyRef.current = loadKey;
     try {
       const value = await api.createAdvisorSession(roomId, {
@@ -1688,15 +1685,12 @@ function AdvisorPage() {
   useEffect(() => { endRef.current?.scrollIntoView?.({behavior: 'smooth', block: 'end'}); }, [partialTranscript, turns.length]);
   useEffect(() => {
     const events = bootstrap?.events;
-    if (!events?.websocket_path || !events.token) return;
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const socket = new WebSocket(`${protocol}//${window.location.host}${events.websocket_path}?token=${encodeURIComponent(events.token)}`);
-    socket.onmessage = event => {
+    if (!bootstrap || !events?.websocket_path || !events.token) return;
+    return subscribeAdvisorEvents({roomId, sessionId: bootstrap.session_id, initial: events, onMessage: event => {
       const value = parseAdvisorEvent(event.data);
       if (value?.type === 'turn' && value.turn?.turn_id) appendTurns(value.turn);
-    };
-    return () => socket.close();
-  }, [appendTurns, bootstrap?.events]);
+    }});
+  }, [appendTurns, bootstrap?.events, bootstrap?.session_id, roomId]);
   useEffect(() => () => { void releaseVoice(); }, [releaseVoice]);
 
   const resetVoiceIdleTimer = () => {
@@ -1728,10 +1722,15 @@ function AdvisorPage() {
       setDecided(current => new Set(current).add(card.confirmation_id));
       appendTurns(value.turn);
       if (approved && card.tool_name === 'start_formal_analysis') navigate(`/analyzing/${roomId}?return_to=advisor`);
-      else if (approved) await load();
+      else if (approved) await load(true);
     } catch (value) {
       const typed = value as Error & {code?: string};
       if (typed.code === 'profile_incomplete') navigate(`/profile?return_to=${encodeURIComponent(`/advisor/${roomId}`)}`);
+      else if (typed.code === 'advisor_confirmation_in_progress' || typed.code === 'advisor_confirmation_already_decided') {
+        void api.analytics('advisor_confirmation_conflict', roomId, {code: typed.code}).catch(() => undefined);
+        setDecided(current => new Set(current).add(card.confirmation_id));
+        await load(true);
+      }
       else showToast(friendlyError(value));
     } finally { setBusy(false); }
   };
@@ -1853,7 +1852,8 @@ function AdvisorCardView({card, roomId, decided, onDecide, onSelectRisk, onReque
   if (card.type === 'budget') return <div className="advisor-budget-card"><small>已选项目去重后预算</small><b>{formatRange(card.total_min, card.total_max, card.currency)}</b><div><span>材料 {formatRange(card.material_min, card.material_max, card.currency)}</span><span>人工 {formatRange(card.labor_min, card.labor_max, card.currency)}</span></div><p>{card.disclaimer}</p></div>;
   if (card.type === 'confirmation') {
     const isDone = card.status !== 'pending' || decided.has(card.confirmation_id);
-    return <div className="advisor-confirmation-card"><Icon name="task_alt" filled /><div><b>需要你确认</b><p>{card.label}</p></div><div><button className="button primary" disabled={isDone} onClick={() => onDecide(card, true)}>{isDone ? '已处理' : '确认'}</button><button className="button quiet" disabled={isDone} onClick={() => onDecide(card, false)}>拒绝</button></div></div>;
+    const stateLabel = card.status === 'processing' ? '处理中' : card.status === 'failed' ? '未完成' : isDone ? '已处理' : '确认';
+    return <div className="advisor-confirmation-card"><Icon name="task_alt" filled /><div><b>需要你确认</b><p>{card.label}</p></div><div><button className="button primary" disabled={isDone} onClick={() => onDecide(card, true)}>{stateLabel}</button><button className="button quiet" disabled={isDone} onClick={() => onDecide(card, false)}>拒绝</button></div></div>;
   }
   return null;
 }

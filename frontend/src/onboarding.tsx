@@ -157,7 +157,10 @@ function roundedRectPath({x, y, width, height, radius}: TargetRect): string {
 export function OnboardingOverlay() {
   const location = useLocation();
   const {state, skipCurrent, complete} = useOnboarding();
-  const definition = useMemo(() => definitionFor(state, location.pathname), [location.pathname, state.phase, state.status, state.step]);
+  const rawDefinition = useMemo(() => definitionFor(state, location.pathname), [location.pathname, state.phase, state.status, state.step]);
+  const definitionKey = rawDefinition ? `${state.step}:${state.phase}:${location.pathname}` : '';
+  const [dismissedKey, setDismissedKey] = useState('');
+  const definition = dismissedKey === definitionKey ? null : rawDefinition;
   const [rects, setRects] = useState<TargetRect[]>([]);
   const [ready, setReady] = useState(false);
   const [obscured, setObscured] = useState(false);
@@ -330,8 +333,12 @@ export function OnboardingOverlay() {
       <p id="onboarding-description">{definition.body}</p>
       {!rects.length && <p className="onboarding-fallback" role="status">当前页面还没有可指引的操作，可以稍后再试或跳过本步。</p>}
       <div className="onboarding-actions">
-        <button type="button" className="button quiet" onClick={skipCurrent}>{definition.complete ? '稍后再看' : '跳过这一步'}</button>
-        {definition.complete && <button type="button" className="button primary" onClick={complete}>完成引导</button>}
+        {definition.complete
+          ? <button type="button" className="button quiet" onClick={() => setDismissedKey(definitionKey)}>稍后再看</button>
+          : <button type="button" className="button quiet" onClick={skipCurrent}>跳过本步</button>}
+        {definition.complete
+          ? <button type="button" className="button primary" onClick={complete}>完成引导</button>
+          : <button type="button" className="button primary" onClick={() => setDismissedKey(definitionKey)}>知道了，继续操作</button>}
       </div>
     </section>
   </div>;

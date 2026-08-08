@@ -70,4 +70,57 @@ describe('AI 适老顾问', () => {
     await waitFor(() => expect(screen.getByText('这是正式风险，可先查看证据位置。')).toBeVisible());
     expect(messageCalls).toBe(1);
   });
+
+  it('方案确认成功后强制同步服务端选中状态，StrictMode 不重复初始加载', async () => {
+    let createSessionCalls = 0;
+    const solution = {
+      solution_package_id: 'solution-b', tier: 'B', title: '推荐扶手', summary: '安装可靠扶手', actions: ['安装扶手'],
+      difficulty: 'medium', duration: '1 天', construction_required: true, professional_installation: 'recommended',
+      improvement: '提升起身支撑', limitations: ['需要核对墙体'], budget_group_id: 'grab-bar',
+      expected_score_gain_min: 4, expected_score_gain_max: 8,
+      price: {currency: 'CNY', material_min: 100, material_max: 200, labor_min: 100, labor_max: 200, total_min: 200, total_max: 400},
+    };
+    const risk = {
+      risk_id: 'risk-1', room_id: 'room-1', media_id: 'media-1', risk_code: 'wet_floor', state: 'confirmed', feedback: null,
+      title: '地面湿滑', evidence: '地面有水迹', confidence: .91, region: null, severity: 'high', score_deduction: 12,
+    };
+    const turn = (selected: string | null, status: 'pending' | 'approved') => [{
+      turn_id: 'turn-solutions', role: 'assistant', kind: 'message', text: '可以选择推荐改造。', status: 'final', context_refs: {risk_id: 'risk-1'},
+      cards: [{type: 'solution_options', risk_id: 'risk-1', risk_title: '地面湿滑', solutions: [solution], selected_solution_package_id: selected, price_disclaimer: '价格仅供参考'}],
+      created_at: '2026-08-08T10:00:00+00:00',
+    }, {
+      turn_id: 'turn-confirmation', role: 'assistant', kind: 'confirmation', text: '请确认加入清单。', status: 'final', context_refs: {risk_id: 'risk-1'},
+      cards: [{type: 'confirmation', confirmation_id: 'confirmation-1', tool_name: 'select_solution', label: '把这个方案加入改造清单', status}],
+      created_at: '2026-08-08T10:00:01+00:00',
+    }];
+    const bootstrap = (selected: string | null, status: 'pending' | 'approved') => ({
+      session_id: 'advisor-1', phase: 'formal',
+      room: {room_id: 'room-1', room_type: 'bathroom', room_name: '卫生间', status: 'result_ready'},
+      current_media: null, media: [], suggestions: [], camera_session_id: null, risks: [risk], quick_prompts: [],
+      turns: turn(selected, status), context_refs: {room_id: 'room-1', risk_id: 'risk-1'},
+      rtc: {available: false, reason: 'not_configured'}, prompt_version: 'anju_voice_advisor_v1',
+    });
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/health')) return jsonResponse({analysis: 'ark', capabilities: {voice_advisor: false}});
+      if (url.endsWith('/advisor/sessions') && init?.method === 'POST') {
+        createSessionCalls += 1;
+        return jsonResponse(createSessionCalls === 1 ? bootstrap(null, 'pending') : bootstrap('solution-b', 'approved'), 201);
+      }
+      if (url.endsWith('/confirmations/confirmation-1') && init?.method === 'POST') return jsonResponse({
+        confirmation_id: 'confirmation-1', status: 'approved',
+        turn: {turn_id: 'turn-done', role: 'assistant', kind: 'system', text: '已加入改造清单。', status: 'final', context_refs: {}, cards: [], created_at: '2026-08-08T10:00:02+00:00'},
+      });
+      return jsonResponse({code: 'not_found', message: 'not found'}, 404);
+    });
+
+    render(<StrictMode><App /></StrictMode>);
+    expect(await screen.findByRole('button', {name: '确认'})).toBeEnabled();
+    expect(createSessionCalls).toBe(1);
+    fireEvent.click(screen.getByRole('button', {name: '确认'}));
+
+    await waitFor(() => expect(screen.getByRole('button', {name: '已在清单'})).toBeVisible());
+    expect(createSessionCalls).toBe(2);
+    expect(screen.getByRole('button', {name: '已处理'})).toBeDisabled();
+  });
 });

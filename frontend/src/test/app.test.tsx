@@ -22,10 +22,10 @@ describe('P01 entry and route recovery', () => {
 
     render(<App />);
     expect(screen.getByRole('heading', {name: /给父母的家/})).toBeVisible();
-    expect(screen.getByText('居家安全检查')).toBeVisible();
+    expect(screen.getAllByText('长者友好').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByRole('heading', {name: '本次检查进度'})).toBeVisible();
-    expect(screen.getByRole('progressbar', {name: '检查完成进度'})).toHaveAttribute('aria-valuenow', '0');
-    expect(screen.getByText('从一张清晰的房间照片开始')).toBeVisible();
+    expect(screen.getByRole('progressbar', {name: '检查完成进度'})).toHaveAttribute('aria-valuenow', '1');
+    expect(screen.getByText('进行到：家人情况')).toBeVisible();
     expect(screen.getByRole('navigation', {name: '主导航'})).toBeVisible();
     expect(screen.getByRole('button', {name: '检查'})).toHaveAttribute('aria-current', 'page');
     expect(screen.getByRole('button', {name: '中央相机'})).toBeVisible();
@@ -48,12 +48,12 @@ describe('P01 entry and route recovery', () => {
     });
 
     render(<App />);
-    fireEvent.click(await screen.findByRole('button', {name: '使用实时相机检查'}));
+    fireEvent.click(await screen.findByRole('button', {name: '中央相机'}));
 
     const dialog = screen.getByRole('dialog', {name: '开始家庭实时检查'});
     expect(dialog).toBeVisible();
     expect(dialog).toHaveTextContent('扫描结束只保存代表画面');
-    expect(dialog).toHaveTextContent('直接开始正式分析');
+    expect(dialog).toHaveTextContent('保存后可在照片页确认并开始 AI 检查');
     expect(window.location.hash).toBe('#/home');
     fireEvent.click(screen.getByRole('button', {name: /选择房间/}));
     fireEvent.click(screen.getByRole('button', {name: /卫生间/}));
@@ -61,8 +61,8 @@ describe('P01 entry and route recovery', () => {
     expect(await screen.findByRole('button', {name: '开启后置相机'})).toBeVisible();
     expect(screen.getByRole('heading', {name: '实时扫描'})).toBeVisible();
     expect(screen.getByRole('button', {name: '打开 AI 适老顾问对话'})).toBeVisible();
-    expect(screen.getByRole('button', {name: '结束扫描并分析'})).toBeDisabled();
-    expect(screen.getByText('顾问会边看边提醒，扫描结束后直接进入正式分析。')).toBeVisible();
+    expect(screen.getByRole('button', {name: '结束扫描并保存'})).toBeDisabled();
+    expect(screen.getByText('顾问会边看边提醒，结束后只保存代表画面。')).toBeVisible();
     expect(screen.getByRole('button', {name: '改用照片'})).toBeVisible();
     expect(screen.queryByText(/三维锚点|连续视频|当前区域/)).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([input, init]) => String(input).endsWith('/api/v2/assessments') && init?.method === 'POST')).toBe(true);

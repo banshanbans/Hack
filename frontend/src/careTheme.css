@@ -1,0 +1,934 @@
+/*
+ * Care visual system
+ *
+ * The approved home screen is the source of truth for the rest of the H5:
+ * warm canvas, calm green hierarchy, lime primary actions, white cards and
+ * restrained elevation. This file intentionally loads after styles.css so the
+ * product can migrate without mixing visual decisions into business styles.
+ */
+
+:root {
+  --care-canvas: #f7f5ef;
+  --care-paper: #ffffff;
+  --care-paper-soft: #fbfde9;
+  --care-green: #4d6b00;
+  --care-green-strong: #354b00;
+  --care-green-soft: #eef1e5;
+  --care-lime: #bce447;
+  --care-lime-hover: #c6e95e;
+  --care-lime-pressed: #b4d93f;
+  --care-ink: #11130f;
+  --care-body: #33372f;
+  --care-muted: #62685e;
+  --care-line: #e5e6df;
+  --care-line-strong: #cbd0c2;
+  --care-warning: #755700;
+  --care-warning-soft: #fff3c8;
+  --care-danger: #9b1c1c;
+  --care-danger-soft: #ffe4df;
+  --care-info: #315a56;
+  --care-info-soft: #e5f2ed;
+  --care-radius-sm: 11px;
+  --care-radius: 14px;
+  --care-radius-lg: 21px;
+  --care-shadow-sm: 0 5px 12px rgba(40, 51, 17, .045);
+  --care-shadow: 0 10px 24px rgba(40, 51, 17, .06);
+  --care-shadow-raised: 0 18px 42px rgba(40, 51, 17, .12);
+
+  color: var(--care-ink);
+  background: var(--care-canvas);
+  --surface: var(--care-canvas);
+  --surface-warm: #faf9f4;
+  --card: var(--care-paper);
+  --surface-low: #f0f1eb;
+  --surface-mid: #e8eae2;
+  --surface-high: #dfe2d8;
+  --surface-highest: #d1d5c9;
+  --text: var(--care-ink);
+  --muted: var(--care-muted);
+  --outline: var(--care-line-strong);
+  --primary: var(--care-green);
+  --primary-container: var(--care-lime);
+  --primary-soft: var(--care-green-soft);
+  --on-primary: var(--care-green-strong);
+  --on-primary-container: var(--care-green-strong);
+  --shadow: var(--care-shadow-sm);
+  --shadow-md: var(--care-shadow);
+  --radius: var(--care-radius);
+  --radius-lg: var(--care-radius-lg);
+  --tab-bar-height: 76px;
+}
+
+html,
+body,
+.site-frame {
+  background: var(--care-canvas);
+}
+
+body {
+  color: var(--care-ink);
+}
+
+.site-frame {
+  box-shadow: 0 0 42px rgba(40, 51, 17, .08);
+}
+
+h1,
+h2,
+h3 {
+  color: var(--care-ink);
+  font-family: inherit;
+  font-weight: 850;
+  letter-spacing: -.025em;
+}
+
+p {
+  color: var(--care-muted);
+}
+
+button:focus-visible,
+input:focus-visible,
+summary:focus-visible {
+  outline-color: var(--care-lime);
+}
+
+.app-header {
+  height: 66px;
+  padding-inline: 16px;
+  color: var(--care-green);
+  background: rgba(247, 245, 239, .97);
+  border-bottom-color: var(--care-line);
+}
+
+.app-header strong {
+  color: var(--care-green);
+  font-size: 18px;
+  font-weight: 850;
+}
+
+.icon-button {
+  color: var(--care-green);
+}
+
+.icon-button:hover {
+  background: var(--care-green-soft);
+}
+
+.demo-banner {
+  color: var(--care-warning);
+  background: var(--care-warning-soft);
+  border: 1px solid #eadb9c;
+}
+
+.flow-progress {
+  padding: 9px 22px 2px;
+  color: var(--care-muted);
+  background: var(--care-canvas);
+}
+
+.flow-progress > div {
+  height: 6px;
+  background: #e2e1dd;
+}
+
+.flow-progress i {
+  background: var(--care-green);
+}
+
+.page:not(.home-page) {
+  gap: 22px;
+  padding: 24px 21px calc(30px + env(safe-area-inset-bottom));
+  color: var(--care-ink);
+  background: var(--care-canvas);
+}
+
+.has-tab-bar .page:not(.home-page) {
+  padding-bottom: calc(var(--tab-bar-height) + 32px + env(safe-area-inset-bottom));
+}
+
+.page-intro {
+  padding: 2px 1px 0;
+}
+
+.page-intro h1,
+.center-heading h1 {
+  margin-bottom: 8px;
+  font-family: inherit;
+  font-size: clamp(27px, 7.6vw, 34px);
+  font-weight: 850;
+  letter-spacing: -.025em;
+}
+
+.page-intro p,
+.center-heading p {
+  color: var(--care-body);
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  min-height: 27px;
+  margin-bottom: 9px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  color: var(--care-green);
+  background: var(--care-green-soft);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .04em;
+}
+
+.center-state {
+  min-height: 68vh;
+}
+
+.state-icon,
+.draft-note .material-symbols-rounded {
+  color: var(--care-green);
+}
+
+.spinner {
+  border-color: #dfe2d8;
+  border-top-color: var(--care-green);
+}
+
+.button {
+  min-height: 52px;
+  border-radius: var(--care-radius-sm);
+  font-weight: 780;
+  transition: transform .15s ease, box-shadow .15s ease, background .15s ease;
+}
+
+.button.primary {
+  color: var(--care-green-strong);
+  background: var(--care-lime);
+  border-color: var(--care-lime);
+  box-shadow: 0 5px 10px rgba(94, 118, 14, .2);
+}
+
+.button.primary:hover:not(:disabled) {
+  color: var(--care-green-strong);
+  background: var(--care-lime-hover);
+  border-color: var(--care-lime-hover);
+}
+
+.button.primary:active:not(:disabled) {
+  background: var(--care-lime-pressed);
+}
+
+.button.secondary {
+  color: var(--care-green);
+  background: var(--care-paper-soft);
+  border: 2px solid var(--care-green);
+}
+
+.button.secondary:hover:not(:disabled) {
+  background: #f3f7d2;
+}
+
+.button.quiet {
+  color: var(--care-green);
+  background: var(--care-green-soft);
+}
+
+.button.danger {
+  background: var(--care-danger);
+}
+
+.text-button {
+  color: var(--care-green);
+}
+
+.fine-print,
+.muted,
+.empty-copy,
+.draft-note {
+  color: var(--care-muted);
+}
+
+.icon-disc {
+  color: var(--care-green);
+  background: var(--care-green-soft);
+}
+
+.teal-soft,
+.blue-soft {
+  color: var(--care-green);
+  background: var(--care-green-soft);
+}
+
+.sticky-footer {
+  padding-top: 14px;
+  background: rgba(247, 245, 239, .96);
+  border-top: 1px solid rgba(229, 230, 223, .76);
+}
+
+/* Profile and room setup */
+
+.form-section legend,
+.radio-panel legend {
+  color: var(--care-ink);
+  font-weight: 830;
+}
+
+.choice-card,
+.radio-panel,
+.room-card,
+.room-task-card {
+  border-color: var(--care-line);
+  background: var(--care-paper);
+  box-shadow: var(--care-shadow-sm);
+}
+
+.choice-card {
+  min-height: 108px;
+  border-radius: var(--care-radius);
+}
+
+.choice-card > .material-symbols-rounded:first-child {
+  color: var(--care-green);
+}
+
+.choice-card.selected,
+.room-card.plan-selected {
+  color: var(--care-green-strong);
+  background: #f5f9dc;
+  border-color: var(--care-green);
+  box-shadow: 0 0 0 2px rgba(77, 107, 0, .08);
+}
+
+.choice-check,
+.completion,
+.plan-check {
+  color: var(--care-green);
+}
+
+.radio-panel {
+  border-radius: var(--care-radius-lg);
+}
+
+.radio-panel legend {
+  background: var(--care-canvas);
+}
+
+.radio-row {
+  min-height: 62px;
+  border-bottom-color: var(--care-line);
+}
+
+.radio-row input {
+  accent-color: var(--care-green);
+}
+
+.room-mode-switch {
+  background: #e7e9e1;
+}
+
+.room-mode-switch button {
+  color: var(--care-muted);
+}
+
+.room-mode-switch button.active {
+  color: var(--care-green);
+  background: var(--care-paper);
+}
+
+.room-card {
+  border-radius: var(--care-radius);
+}
+
+.room-card.recommended {
+  border-color: var(--care-green);
+}
+
+.room-icon {
+  color: var(--care-green);
+  background: var(--care-green-soft);
+}
+
+.camera-room-grid .room-card > .material-symbols-rounded {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--care-green);
+  background: var(--care-green-soft);
+}
+
+.priority-ribbon {
+  color: var(--care-green-strong);
+  background: var(--care-lime);
+}
+
+.mode-note,
+.report-task {
+  color: var(--care-green);
+  background: var(--care-green-soft);
+}
+
+/* Capture and media */
+
+.upload-drop {
+  min-height: 220px;
+  color: var(--care-green);
+  background: var(--care-paper);
+  border-color: #94aa56;
+  border-radius: var(--care-radius-lg);
+  box-shadow: var(--care-shadow-sm);
+}
+
+.upload-drop.has-media {
+  background: #f7fadf;
+  border-color: var(--care-green);
+}
+
+.upload-drop small,
+.media-row small,
+.quality-card p,
+.photo-tips p {
+  color: var(--care-muted);
+}
+
+.upload-icon {
+  color: var(--care-green);
+  background: var(--care-green-soft);
+}
+
+.media-row,
+.quality-card,
+.photo-tips,
+.recognized-card,
+.analysis-exit-note,
+.error-panel {
+  border-color: var(--care-line);
+  background: var(--care-paper);
+  box-shadow: var(--care-shadow-sm);
+}
+
+.add-thumb {
+  color: var(--care-green);
+  background: var(--care-paper-soft);
+  border-color: #94aa56;
+}
+
+.quality-card.ok {
+  color: var(--care-green);
+  background: #f5f9dc;
+  border-color: #cbd99d;
+}
+
+.quality-card.warn {
+  color: var(--care-warning);
+  background: var(--care-warning-soft);
+  border-color: #eadb9c;
+}
+
+.analysis-progress,
+.analysis-steps,
+.scan-visual {
+  border-color: var(--care-line);
+  background: var(--care-paper);
+  box-shadow: var(--care-shadow-sm);
+}
+
+.analysis-progress i,
+.analysis-steps .active::before,
+.analysis-steps .complete::before {
+  background: var(--care-green);
+}
+
+.scan-line {
+  background: var(--care-lime);
+}
+
+/* Result and risk evidence */
+
+.summary-card,
+.risk-summary,
+.risk-overview-section,
+.risk-detail,
+.detail-card,
+.score-basis-sheet {
+  border-color: var(--care-line);
+  background: var(--care-paper);
+  box-shadow: var(--care-shadow);
+}
+
+.summary-card,
+.risk-detail,
+.detail-card {
+  border-radius: var(--care-radius-lg);
+}
+
+.score-number,
+.coverage-block span,
+.risk-overview-list button > span:first-child,
+.issue-number {
+  color: var(--care-green);
+}
+
+.progress,
+.coverage-block .progress {
+  background: #e2e1dd;
+}
+
+.progress i,
+.coverage-block .progress i {
+  background: var(--care-green);
+}
+
+.risk-overview-list button,
+.risk-switcher,
+.risk-toolbar,
+.risk-photo-strip button {
+  border-color: var(--care-line);
+  background: var(--care-paper);
+}
+
+.risk-overview-list button:hover,
+.risk-switcher button.active,
+.risk-photo-strip button.active {
+  background: var(--care-green-soft);
+}
+
+.result-fixed-actions {
+  background: rgba(247, 245, 239, .97);
+  border-top-color: var(--care-line);
+}
+
+.severity.high {
+  color: var(--care-danger);
+  background: var(--care-danger-soft);
+}
+
+.severity.medium {
+  color: var(--care-warning);
+  background: var(--care-warning-soft);
+}
+
+.severity.low {
+  color: var(--care-info);
+  background: var(--care-info-soft);
+}
+
+/* Solutions and report */
+
+.solution-hero,
+.solution-card,
+.selected-solution-detail,
+.unselected-solution,
+.price-breakdown,
+.report-status,
+.report-metrics,
+.report-dimension,
+.report-recommendation,
+.report-risk-list,
+.report-actions {
+  border-color: var(--care-line);
+  background: var(--care-paper);
+  box-shadow: var(--care-shadow-sm);
+}
+
+.solution-hero,
+.selected-solution-detail,
+.report-status,
+.report-recommendation {
+  border-radius: var(--care-radius-lg);
+}
+
+.solution-list > article,
+.report-solution-options > article {
+  border-color: var(--care-line);
+  background: var(--care-paper);
+  box-shadow: var(--care-shadow-sm);
+}
+
+.solution-list > article.selected,
+.solution-list > article.recommended,
+.report-solution-options > article.selected {
+  border-color: var(--care-green);
+  background: #f8fae8;
+}
+
+.tier-icon,
+.recommendation-heading > span,
+.solution-title > span {
+  color: var(--care-green);
+  background: var(--care-green-soft);
+}
+
+.best-value {
+  color: var(--care-green-strong);
+  background: var(--care-lime);
+}
+
+.solution-price,
+.price-breakdown strong,
+.report-metrics b,
+.report-dimension b {
+  color: var(--care-green-strong);
+}
+
+.recommendation-limit,
+.solution-observation,
+.nonvisual-note,
+.renovation-grounding-note {
+  color: var(--care-body);
+  background: var(--care-green-soft);
+}
+
+.report-section-title {
+  color: var(--care-green);
+}
+
+.report-actions {
+  padding: 16px;
+  border-radius: var(--care-radius-lg);
+}
+
+/* Renovation preview */
+
+.renovation-plan-summary,
+.renovation-comparison,
+.report-renovation-card,
+.renovation-source-option {
+  border-color: var(--care-line);
+  background: var(--care-paper);
+  box-shadow: var(--care-shadow-sm);
+}
+
+.renovation-plan-summary > article,
+.my-section-body,
+.my-budget {
+  border-color: var(--care-line);
+}
+
+.renovation-plan-summary .section-heading span,
+.renovation-source-option small,
+.renovation-detail-list small,
+.renovation-grounding-note {
+  color: var(--care-muted);
+}
+
+.renovation-plan-summary > article > span,
+.renovation-source-option > .material-symbols-rounded,
+.renovation-detail-list li > span {
+  color: var(--care-green-strong);
+  background: var(--care-lime);
+}
+
+.visual-action-list li,
+.renovation-detail-list li {
+  color: var(--care-green-strong);
+  background: var(--care-green-soft);
+}
+
+.renovation-generating {
+  background: var(--care-green-soft);
+}
+
+.renovation-compare-stage,
+.renovation-source-option > span:first-child,
+.renovation-card-placeholder {
+  background: #e8eae2;
+}
+
+.renovation-detail-box {
+  fill: rgba(188, 228, 71, .16);
+  stroke: var(--care-lime);
+}
+
+.renovation-detail-pin,
+.compare-handle {
+  background: var(--care-green);
+  fill: var(--care-green);
+}
+
+.renovation-range input {
+  accent-color: var(--care-green);
+}
+
+/* Advisor, camera and queue */
+
+.advisor-queue-page,
+.advisor-page,
+.camera-page {
+  background: var(--care-canvas);
+}
+
+.advisor-queue-orbit,
+.advisor-context-header,
+.advisor-reference-card,
+.advisor-system-card,
+.advisor-evidence-card,
+.advisor-budget-card,
+.advisor-confirmation-card,
+.advisor-solutions-card > section,
+.advisor-card-list > section,
+.advisor-card-list > button,
+.camera-voice-button,
+.camera-findings-button,
+.camera-analysis-retry {
+  border-color: var(--care-line);
+  background: var(--care-paper);
+  box-shadow: var(--care-shadow-sm);
+}
+
+.advisor-queue-orbit::before,
+.advisor-queue-orbit::after {
+  border-color: var(--care-green);
+}
+
+.advisor-bubble.assistant {
+  color: var(--care-ink);
+  background: var(--care-paper);
+  border-color: var(--care-line);
+}
+
+.advisor-bubble.user {
+  color: var(--care-green-strong);
+  background: #eef6c8;
+}
+
+.advisor-quick-prompts button,
+.camera-suggestion-picker > button {
+  color: var(--care-green);
+  background: var(--care-paper-soft);
+  border-color: var(--care-line-strong);
+}
+
+.advisor-quick-prompts button:hover,
+.camera-suggestion-picker > button.selected {
+  border-color: var(--care-green);
+  background: #f5f9dc;
+}
+
+.advisor-rule-note,
+.advisor-scan-disclaimer {
+  color: var(--care-green-strong);
+  background: var(--care-green-soft);
+}
+
+.advisor-input-row input,
+.camera-advisor-composer input {
+  border-color: var(--care-line-strong);
+  background: var(--care-paper);
+}
+
+.advisor-send,
+.advisor-mic,
+.camera-advisor-composer > button,
+.camera-advisor-composer .advisor-mic {
+  color: var(--care-green-strong);
+  background: var(--care-lime);
+  box-shadow: 0 5px 12px rgba(94, 118, 14, .18);
+}
+
+.camera-advisor-guidance,
+.camera-advisor-sheet {
+  color: var(--care-ink);
+  background: rgba(247, 245, 239, .98);
+  border-color: var(--care-line);
+}
+
+.camera-advisor-guidance > .material-symbols-rounded:first-child {
+  color: var(--care-green);
+  background: var(--care-green-soft);
+}
+
+.camera-advisor-sheet > header small,
+.camera-voice-button,
+.camera-suggestion-picker > button > span {
+  color: var(--care-green);
+}
+
+.camera-suggestion-picker > button > span {
+  background: var(--care-green-soft);
+}
+
+.camera-voice-button.state-listening,
+.camera-voice-button.state-speaking,
+.camera-voice-button.state-thinking {
+  color: var(--care-green-strong);
+  background: var(--care-lime);
+}
+
+.camera-finish-button {
+  border-radius: var(--care-radius-sm);
+}
+
+/* My and reusable overlays */
+
+.my-section,
+.profile-summary,
+.my-room-card,
+.my-issue-group,
+.share-summary input {
+  border-color: var(--care-line);
+  background: var(--care-paper);
+  box-shadow: var(--care-shadow-sm);
+}
+
+.my-section > summary > span .material-symbols-rounded,
+.home-resource-grid small .material-symbols-rounded {
+  color: var(--care-green);
+}
+
+.my-section-body,
+.my-issue-group button,
+.my-solution-summary > button:not(.button) {
+  border-color: var(--care-line);
+}
+
+.profile-summary,
+.my-room-card {
+  background: #f6f7f1;
+}
+
+.modal-backdrop,
+.camera-advisor-sheet-backdrop {
+  background: rgba(26, 30, 20, .46);
+}
+
+.modal,
+.score-basis-sheet {
+  border: 1px solid var(--care-line);
+  border-radius: var(--care-radius-lg);
+  background: var(--care-paper);
+  box-shadow: var(--care-shadow-raised);
+}
+
+.toast {
+  color: #fff;
+  background: var(--care-green-strong);
+}
+
+.persistent-tab-bar {
+  bottom: 0;
+  width: min(100%, 480px);
+  min-height: 70px;
+  padding: 7px 28px 4px;
+  border: 1px solid var(--care-line);
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  background: var(--care-paper);
+  box-shadow: 0 -3px 12px rgba(40, 51, 17, .045);
+}
+
+.persistent-tab-bar button {
+  min-height: 56px;
+  color: #1f231b;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 560;
+}
+
+.persistent-tab-bar button.active {
+  color: var(--care-green);
+  background: #e5f2a9;
+}
+
+.persistent-tab-bar button.active::after {
+  display: none;
+}
+
+.persistent-tab-bar .camera-tab-icon img {
+  filter: grayscale(1) opacity(.55);
+}
+
+.persistent-tab-bar .camera-tab.active .camera-tab-icon img {
+  filter: sepia(1) saturate(3) hue-rotate(28deg) brightness(.55);
+}
+
+/* Onboarding follows the product instead of introducing a second visual style. */
+
+.onboarding-dim {
+  fill: rgba(25, 30, 15, .7);
+}
+
+.onboarding-outline {
+  stroke: var(--care-lime);
+  filter: drop-shadow(0 0 7px rgba(188, 228, 71, .55));
+}
+
+.onboarding-card {
+  color: var(--care-ink);
+  background: rgba(255, 255, 255, .985);
+  border-color: var(--care-line);
+  border-radius: var(--care-radius-lg);
+  box-shadow: var(--care-shadow-raised);
+}
+
+/* The guide is intentionally non-modal. Keep its dimmer visual, but do not
+   swallow taps outside the cut-outs: some guided targets use
+   `display: contents`, and their child controls must remain operable. */
+.onboarding-blocker {
+  pointer-events: none;
+}
+
+.onboarding-card h2,
+.camera-advisor-page .page-intro h1,
+.camera-advisor-sheet > header h2,
+.empty-my h1,
+.risk-detail h1,
+.report-section-title h2,
+.modal-heading h2,
+.advisor-context-header h1,
+.advisor-queue-page h1,
+.advisor-solutions-card strong {
+  font-family: inherit;
+  font-weight: 850;
+  letter-spacing: -.025em;
+}
+
+.analysis-progress b,
+.score-ring b,
+.report-metrics b,
+.budget-card > b,
+.solution-price,
+.report-total-budget > div:first-child b,
+.advisor-budget-card > b {
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.onboarding-progress span,
+.onboarding-fallback {
+  color: var(--care-green);
+}
+
+@media (max-width: 360px) {
+  .page:not(.home-page) {
+    padding-inline: 17px;
+  }
+
+  .persistent-tab-bar {
+    padding-inline: 20px;
+  }
+}
+
+@media (min-width: 700px) {
+  .persistent-tab-bar {
+    bottom: 24px;
+    border-bottom: 1px solid var(--care-line);
+    border-radius: 28px;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .button.secondary,
+  .choice-card,
+  .radio-panel,
+  .room-card,
+  .upload-drop,
+  .summary-card,
+  .risk-detail,
+  .solution-list > article,
+  .report-recommendation,
+  .my-section {
+    border-color: var(--care-green-strong);
+  }
+}
