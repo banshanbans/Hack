@@ -1,7 +1,8 @@
 import {useEffect, useState} from 'react';
 import {api} from './api';
+import type {SessionState} from './types';
 
-export function useProtectedImage(path?: string): {url: string; loading: boolean} {
+export function useProtectedImage(path?: string, credentials?: SessionState): {url: string; loading: boolean} {
   const [url, setUrl] = useState('');
   const [loading, setLoading] = useState(Boolean(path));
   useEffect(() => {
@@ -13,7 +14,8 @@ export function useProtectedImage(path?: string): {url: string; loading: boolean
     const controller = new AbortController();
     let objectUrl = '';
     setLoading(true);
-    api.mediaBlob(path, controller.signal).then(blob => {
+    const loader = credentials ? api.mediaBlobFor(credentials, path, controller.signal) : api.mediaBlob(path, controller.signal);
+    loader.then(blob => {
       objectUrl = URL.createObjectURL(blob);
       setUrl(objectUrl);
     }).catch(() => setUrl('')).finally(() => setLoading(false));
@@ -21,6 +23,6 @@ export function useProtectedImage(path?: string): {url: string; loading: boolean
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [path]);
+  }, [credentials?.access_token, credentials?.assessment_id, path]);
   return {url, loading};
 }

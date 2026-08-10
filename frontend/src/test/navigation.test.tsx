@@ -28,7 +28,7 @@ describe('fixed primary navigation', () => {
     expect(resolveCheckDestination(null, assessment(false))).toBeNull();
   });
 
-  it('creates a photo assessment when Check has no current session', async () => {
+  it('creates a photo assessment from Home and renders three primary tabs', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
       if (url.endsWith('/health')) return json({analysis: 'ark', capabilities: {h5_camera: true}});
@@ -38,11 +38,12 @@ describe('fixed primary navigation', () => {
     });
 
     render(<App />);
-    fireEvent.click(screen.getByRole('button', {name: '检查'}));
+    fireEvent.click(screen.getByRole('button', {name: '上传家中照片'}));
 
     await waitFor(() => expect(window.location.hash).toBe('#/profile'));
     expect(fetchMock.mock.calls.some(([input, init]) => String(input).endsWith('/api/v2/assessments') && init?.method === 'POST')).toBe(true);
-    await waitFor(() => expect(screen.getByRole('button', {name: '检查'})).toHaveAttribute('aria-current', 'page'));
-    expect(screen.getByRole('navigation', {name: '主导航'}).querySelectorAll('button')).toHaveLength(4);
+    await waitFor(() => expect(screen.getByRole('button', {name: '首页'})).toHaveAttribute('aria-current', 'page'));
+    expect(screen.getByRole('button', {name: '改造方案'})).toBeVisible();
+    expect(screen.getByRole('navigation', {name: '主导航'}).querySelectorAll('button')).toHaveLength(3);
   });
 });

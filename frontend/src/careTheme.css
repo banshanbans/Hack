@@ -964,3 +964,20 @@ summary:focus-visible {
     border-color: var(--care-green-strong);
   }
 }
+
+/* Primary navigation is intentionally stateful without pill or gray-box chrome. */
+.persistent-tab-bar,
+.home-shell .persistent-tab-bar {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.persistent-tab-bar button:hover:not(:disabled),
+.persistent-tab-bar button.active,
+.home-shell .persistent-tab-bar button.active {
+  color: var(--care-green-strong);
+  background: transparent;
+}
+
+.persistent-tab-bar button.active {
+  font-weight: 850;
+}

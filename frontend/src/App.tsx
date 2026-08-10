@@ -1,21 +1,22 @@
 import {useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode} from 'react';
 import {HashRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams} from 'react-router-dom';
 import {api, friendlyError, parseAdvisorEvent} from './api';
-import {ADVISOR_COPY, CAMERA_COPY, DIFFICULTY_COPY, HOME_HERO_COPY, ONBOARDING_COPY, PRODUCT_NAME, RENOVATION_PREVIEW_COPY, ROOM_COPY, ROOM_PHOTO_GUIDES, SCENE_ELEMENT_COPY, SEVERITY_COPY, STAGE_COPY, UPLOAD_COPY} from './content';
+import {ADVISOR_COPY, CAMERA_COPY, DIFFICULTY_COPY, HOME_HERO_COPY, KNOWLEDGE_ADVISOR_COPY, ONBOARDING_COPY, PRODUCT_NAME, RENOVATION_PREVIEW_COPY, ROOM_COPY, ROOM_PHOTO_GUIDES, SCENE_ELEMENT_COPY, SEVERITY_COPY, STAGE_COPY, UPLOAD_COPY} from './content';
 import {useProtectedImage} from './hooks';
 import {normalizeImage} from './image';
 import {invokeNative, isNativeCaptureResult, nativeCapability, nativeRequestId, NATIVE_CAPTURE_RESULT_EVENT} from './nativeBridge';
 import {hammingDistance, inspectPixels} from './video';
 import LiveCameraOverlay, {type NumberedCameraSuggestion} from './LiveCameraOverlay';
 import RiskOverlay, {coverMetrics, mapImagePoint} from './RiskOverlay';
-import {AppProvider, formatRange, useApp} from './store';
+import {AppProvider, formatRange, readAssessmentHistory, readDefaultProfile, removeAssessmentHistory, useApp, writeDefaultProfile} from './store';
 import {OnboardingOverlay, OnboardingProvider, useOnboarding} from './onboarding';
-import type {AdvisorBootstrap, AdvisorCard, AdvisorConfirmationCard, AdvisorContextRef, AdvisorTurn, AnalysisStatus, Assessment, AssessmentReport, CameraSuggestion, ElderProfile, MediaAsset, RenovationPreview, RenovationPreviewContext, RoomAssessment, RoomResult, RoomType, SafetyRisk, SessionState, SolutionPackage} from './types';
+import type {AdvisorBootstrap, AdvisorCard, AdvisorConfirmationCard, AdvisorContextRef, AdvisorRTCQueueTicket, AdvisorTurn, AnalysisStatus, Assessment, AssessmentHistoryEntry, AssessmentReport, CameraSuggestion, ElderProfile, KnowledgeAdvisorBootstrap, KnowledgeAdvisorTurn, MediaAsset, RenovationPreview, RenovationPreviewContext, RoomAssessment, RoomResult, RoomType, SafetyRisk, SessionState, SolutionPackage} from './types';
 import {AdvisorVoiceRTC, type VoiceState} from './voiceRtc';
 import {subscribeAdvisorEvents} from './advisorEvents';
 import {
   advisorClientInstanceId, clearAdvisorRTCTicket, readAdvisorRTCTicket, saveAdvisorRTCTicket,
 } from './advisorQueue';
+import {clearKnowledgeAdvisorSession, readKnowledgeAdvisorSession, writeKnowledgeAdvisorSession, type StoredKnowledgeAdvisorSession} from './knowledgeAdvisorSession';
 
 const ASSETS = '/assets/stitch';
 const ANALYSIS_STAGES = ['quality_checked', 'scene_understood', 'risks_detecting', 'regions_grounded', 'rules_applied', 'score_calculated', 'solutions_ready'] as const;
@@ -137,9 +138,11 @@ function AppShell() {
   const scrollPositions = useRef<Record<string, number>>({});
   const isHome = location.pathname === '/home';
   const isShare = location.pathname.startsWith('/share/');
-  const isAdvisor = location.pathname.startsWith('/advisor/') || location.pathname.startsWith('/advisor-queue/');
+  const isKnowledgeAdvisor = location.pathname === '/advisor';
+  const isAdvisor = isKnowledgeAdvisor || location.pathname.startsWith('/advisor/') || location.pathname.startsWith('/advisor-queue/');
   const isCamera = location.pathname === '/camera';
   const isMy = location.pathname === '/my';
+  const isRenovations = location.pathname === '/renovations';
   const isProfileEditing = location.pathname === '/profile' && new URLSearchParams(location.search).get('from') === 'my';
 
   useEffect(() => {
@@ -152,7 +155,7 @@ function AppShell() {
     const frame = window.requestAnimationFrame(() => window.scrollTo({top: scrollPositions.current[path] || 0, behavior: 'instant'}));
     const rememberScroll = () => { scrollPositions.current[path] = window.scrollY; };
     window.addEventListener('scroll', rememberScroll, {passive: true});
-    if (session && !isHome && !isShare && !isMy && !isProfileEditing && location.pathname !== '/camera') {
+    if (session && !isHome && !isShare && !isAdvisor && !isMy && !isRenovations && !isProfileEditing && location.pathname !== '/camera') {
       setSession({...session, last_route: location.pathname.replace(/^\//, '')});
     }
     return () => {
@@ -164,6 +167,7 @@ function AppShell() {
   const deleteAssessment = async () => {
     try {
       await api.deleteAssessment();
+      removeAssessmentHistory(session?.assessment_id || '');
       setSession(null);
       setAssessment(null);
       setDeleteConfirmOpen(false);
@@ -186,10 +190,10 @@ function AppShell() {
   return <div className={`site-frame ${isShare || isAdvisor || isCamera ? '' : 'has-tab-bar'} ${isHome ? 'home-shell' : ''} ${isAdvisor ? 'advisor-shell' : ''} ${isCamera ? 'camera-shell' : ''}`}>
     {!isShare && !isHome && <header className="app-header">
       <button className="icon-button" onClick={goBack} aria-label="返回" disabled={isHome}><Icon name="arrow_back" /></button>
-      <strong>{isAdvisor ? ADVISOR_COPY.title : PRODUCT_NAME}</strong>
+      <strong>{isKnowledgeAdvisor ? KNOWLEDGE_ADVISOR_COPY.title : isAdvisor ? ADVISOR_COPY.title : PRODUCT_NAME}</strong>
       <div className="app-header-actions">
         {(isAdvisor || isCamera) && <button className="icon-button" onClick={() => navigate('/home')} aria-label="返回首页"><Icon name="home" filled /></button>}
-        <button className="icon-button" onClick={() => setMenuOpen(true)} aria-label="检查与隐私"><Icon name="more_vert" /></button>
+        <button className="icon-button" onClick={() => setMenuOpen(true)} aria-label={isKnowledgeAdvisor ? '更多' : '检查与隐私'}><Icon name="more_vert" /></button>
       </div>
     </header>}
     {health === 'demo' && <div className="demo-banner" role="status"><Icon name="science" />演示模式：当前展示固定样例结果</div>}
@@ -197,11 +201,13 @@ function AppShell() {
     <main ref={mainRef} tabIndex={-1}>
       <Routes>
         <Route path="/home" element={<HomePage />} />
+        <Route path="/renovations" element={<RenovationsPage />} />
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/rooms" element={<RoomsPage />} />
         <Route path="/upload/:roomId" element={<UploadPage />} />
         <Route path="/analyzing/:roomId" element={<AnalyzingPage />} />
         <Route path="/result/:roomId" element={<ResultPage />} />
+        <Route path="/advisor" element={<KnowledgeAdvisorPage />} />
         <Route path="/advisor/:roomId" element={<AdvisorPage />} />
         <Route path="/advisor-queue/:roomId" element={<AdvisorQueuePage />} />
         <Route path="/risk/:roomId/:riskId" element={<RiskPage />} />
@@ -217,15 +223,321 @@ function AppShell() {
     {!isShare && !isAdvisor && !isCamera && <PersistentTabBar pathname={location.pathname} />}
     {!isShare && !isAdvisor && !isCamera && <OnboardingOverlay />}
     {toast && <div className="toast" role="status" aria-live="polite">{toast}</div>}
-    {menuOpen && <Modal title="检查与隐私" close={() => setMenuOpen(false)}>
-      <p>照片仅用于本次居家环境分析。你可以删除这次检查及服务端保存的分析副本。</p>
-      <button className="button danger full" disabled={!session} onClick={() => { setMenuOpen(false); setDeleteConfirmOpen(true); }}><Icon name="delete_forever" />删除本次检查</button>
+    {menuOpen && <Modal title={isKnowledgeAdvisor ? '对话与隐私' : '检查与隐私'} close={() => setMenuOpen(false)}>
+      {isKnowledgeAdvisor ? <>
+        <p>{KNOWLEDGE_ADVISOR_COPY.privacy}</p>
+        <button className="button danger full" onClick={() => { setMenuOpen(false); window.dispatchEvent(new Event('anju:new-knowledge-advisor')); }}><Icon name="delete_sweep" />新对话</button>
+      </> : <>
+        <p>照片仅用于本次居家环境分析。你可以删除这次检查及服务端保存的分析副本。</p>
+        <button className="button danger full" disabled={!session} onClick={() => { setMenuOpen(false); setDeleteConfirmOpen(true); }}><Icon name="delete_forever" />删除本次检查</button>
+      </>}
     </Modal>}
     {deleteConfirmOpen && <Modal title="确定删除本次检查？" close={() => setDeleteConfirmOpen(false)}>
       <p>所有照片、分析结果和已选改造方案都会从服务端删除，且无法撤销。</p>
       <div className="button-stack"><button className="button danger full" onClick={deleteAssessment}><Icon name="delete_forever" />确认永久删除</button><button className="button quiet full" onClick={() => setDeleteConfirmOpen(false)}>取消</button></div>
     </Modal>}
   </div>;
+}
+
+function KnowledgeAdvisorPage() {
+  const navigate = useNavigate();
+  const {session, setSession, setAssessment, health, capabilities, showToast} = useApp();
+  const [bootstrap, setBootstrap] = useState<KnowledgeAdvisorBootstrap | null>(null);
+  const [credentials, setCredentials] = useState<StoredKnowledgeAdvisorSession | null>(null);
+  const credentialsRef = useRef<StoredKnowledgeAdvisorSession | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<unknown>(null);
+  const [loadVersion, setLoadVersion] = useState(0);
+  const [input, setInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [pendingQuestion, setPendingQuestion] = useState('');
+  const [failedQuestion, setFailedQuestion] = useState('');
+  const [voiceState, setVoiceState] = useState<VoiceState>('idle');
+  const [queueTicket, setQueueTicket] = useState<AdvisorRTCQueueTicket | null>(null);
+  const [partialTranscript, setPartialTranscript] = useState('');
+  const voiceRef = useRef<AdvisorVoiceRTC | null>(null);
+  const queueTicketRef = useRef<AdvisorRTCQueueTicket | null>(null);
+  const voiceAbortRef = useRef<AbortController | null>(null);
+  const heartbeatRef = useRef<number | null>(null);
+  const idleTimerRef = useRef<number | null>(null);
+  const clientInstanceId = useMemo(advisorClientInstanceId, []);
+
+  const appendTurn = useCallback((turn: KnowledgeAdvisorTurn) => {
+    setBootstrap(current => current ? {
+      ...current,
+      turns: current.turns.some(item => item.turn_id === turn.turn_id) ? current.turns : [...current.turns, turn],
+    } : current);
+  }, []);
+
+  const releaseVoice = useCallback(async () => {
+    if (heartbeatRef.current) window.clearInterval(heartbeatRef.current);
+    if (idleTimerRef.current) window.clearTimeout(idleTimerRef.current);
+    heartbeatRef.current = null;
+    idleTimerRef.current = null;
+    voiceAbortRef.current?.abort();
+    voiceAbortRef.current = null;
+    const voice = voiceRef.current;
+    voiceRef.current = null;
+    await voice?.disconnect().catch(() => undefined);
+    const currentCredentials = credentialsRef.current;
+    const ticket = queueTicketRef.current;
+    queueTicketRef.current = null;
+    setQueueTicket(null);
+    setPartialTranscript('');
+    setVoiceState('idle');
+    if (currentCredentials && ticket) {
+      await api.cancelKnowledgeAdvisorRTCQueue(
+        currentCredentials.session_id, currentCredentials.access_token, ticket.ticket_id, clientInstanceId,
+      ).catch(() => undefined);
+    }
+  }, [clientInstanceId]);
+
+  const resetVoiceIdleTimer = useCallback(() => {
+    if (idleTimerRef.current) window.clearTimeout(idleTimerRef.current);
+    idleTimerRef.current = window.setTimeout(() => {
+      void releaseVoice();
+      showToast('语音对话已因 90 秒未操作自动停止');
+    }, 90_000);
+  }, [releaseVoice, showToast]);
+
+  const persistTranscript = useCallback((value: {role: 'user' | 'assistant'; text: string; final: boolean; eventId: string}) => {
+    resetVoiceIdleTimer();
+    if (!value.final) {
+      setPartialTranscript(value.text);
+      return;
+    }
+    setPartialTranscript('');
+    const current = credentialsRef.current;
+    if (!current) return;
+    void api.knowledgeAdvisorTranscript(current.session_id, current.access_token, {
+      role: value.role, text: value.text, provider_event_id: value.eventId,
+    }).then(appendTurn).catch(error => showToast(friendlyError(error)));
+  }, [appendTurn, resetVoiceIdleTimer, showToast]);
+
+  useEffect(() => {
+    if (health === 'loading') return;
+    if (capabilities?.knowledge_advisor === false) {
+      setLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    let active = true;
+    const run = async () => {
+      setLoading(true);
+      setLoadError(null);
+      try {
+        let stored = readKnowledgeAdvisorSession();
+        let value: KnowledgeAdvisorBootstrap;
+        if (stored) {
+          try {
+            value = await api.getKnowledgeAdvisorSession(stored.session_id, stored.access_token, controller.signal);
+            stored = {...stored, expires_at: value.expires_at};
+          } catch (error) {
+            const code = (error as Error & {code?: string}).code;
+            if (!['knowledge_advisor_access_denied', 'knowledge_advisor_session_expired', 'knowledge_advisor_session_not_found'].includes(code || '')) throw error;
+            clearKnowledgeAdvisorSession();
+            stored = null;
+            const created = await api.createKnowledgeAdvisorSession();
+            stored = {session_id: created.session_id, access_token: created.access_token, expires_at: created.expires_at};
+            value = created;
+          }
+        } else {
+          const created = await api.createKnowledgeAdvisorSession();
+          stored = {session_id: created.session_id, access_token: created.access_token, expires_at: created.expires_at};
+          value = created;
+        }
+        if (!active || !stored) return;
+        writeKnowledgeAdvisorSession(stored);
+        credentialsRef.current = stored;
+        setCredentials(stored);
+        setBootstrap(value);
+      } catch (error) {
+        if ((error as Error).name !== 'AbortError' && active) setLoadError(error);
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+    void run();
+    return () => { active = false; controller.abort(); };
+  }, [capabilities?.knowledge_advisor, health, loadVersion]);
+
+  const newConversation = useCallback(async () => {
+    await releaseVoice();
+    const current = credentialsRef.current;
+    if (current) {
+      try {
+        await api.deleteKnowledgeAdvisorSession(current.session_id, current.access_token);
+      } catch (error) {
+        const code = (error as Error & {code?: string}).code;
+        if (!['knowledge_advisor_access_denied', 'knowledge_advisor_session_expired', 'knowledge_advisor_session_not_found'].includes(code || '')) {
+          showToast('旧对话还没有删除，请在网络恢复后重试');
+          return;
+        }
+      }
+    }
+    clearKnowledgeAdvisorSession();
+    credentialsRef.current = null;
+    setCredentials(null);
+    setBootstrap(null);
+    setFailedQuestion('');
+    setPendingQuestion('');
+    setLoadVersion(value => value + 1);
+  }, [releaseVoice, showToast]);
+
+  useEffect(() => {
+    const handler = () => { void newConversation(); };
+    window.addEventListener('anju:new-knowledge-advisor', handler);
+    return () => window.removeEventListener('anju:new-knowledge-advisor', handler);
+  }, [newConversation]);
+
+  useEffect(() => {
+    const online = () => { if (!bootstrap) setLoadVersion(value => value + 1); };
+    window.addEventListener('online', online);
+    return () => window.removeEventListener('online', online);
+  }, [bootstrap]);
+
+  useEffect(() => {
+    const visibility = () => { if (document.visibilityState === 'hidden') void releaseVoice(); };
+    document.addEventListener('visibilitychange', visibility);
+    return () => {
+      document.removeEventListener('visibilitychange', visibility);
+      void releaseVoice();
+    };
+  }, [releaseVoice]);
+
+  const sendMessage = useCallback(async (question: string) => {
+    const clean = question.trim();
+    const current = credentialsRef.current;
+    if (!clean || !current || busy) return;
+    setBusy(true);
+    setPendingQuestion(clean);
+    setFailedQuestion('');
+    setInput('');
+    try {
+      const value = await api.knowledgeAdvisorMessage(current.session_id, current.access_token, clean);
+      appendTurn(value.user_turn);
+      appendTurn(value.assistant_turn);
+      const updated = {...current, expires_at: value.expires_at};
+      credentialsRef.current = updated;
+      setCredentials(updated);
+      writeKnowledgeAdvisorSession(updated);
+    } catch (error) {
+      setFailedQuestion(clean);
+      showToast(friendlyError(error));
+    } finally {
+      setPendingQuestion('');
+      setBusy(false);
+    }
+  }, [appendTurn, busy, showToast]);
+
+  const toggleVoice = useCallback(async () => {
+    if (voiceState === 'speaking' && voiceRef.current) {
+      await voiceRef.current.interrupt().catch(() => undefined);
+      resetVoiceIdleTimer();
+      return;
+    }
+    if (voiceRef.current || queueTicketRef.current) {
+      await releaseVoice();
+      return;
+    }
+    const current = credentialsRef.current;
+    if (!current || !bootstrap?.rtc.available) {
+      showToast('实时语音暂不可用，你仍可以输入文字咨询');
+      return;
+    }
+    setVoiceState('connecting');
+    const controller = new AbortController();
+    voiceAbortRef.current = controller;
+    try {
+      let ticket = await api.joinKnowledgeAdvisorRTCQueue(current.session_id, current.access_token, clientInstanceId);
+      queueTicketRef.current = ticket;
+      setQueueTicket(ticket);
+      while (ticket.status === 'queued') {
+        await new Promise(resolve => window.setTimeout(resolve, ticket.poll_after_ms || 2000));
+        if (controller.signal.aborted) return;
+        ticket = await api.knowledgeAdvisorRTCQueueStatus(
+          current.session_id, current.access_token, ticket.ticket_id, clientInstanceId, controller.signal,
+        );
+        queueTicketRef.current = ticket;
+        setQueueTicket(ticket);
+      }
+      if (!['granted', 'active'].includes(ticket.status)) throw new Error('advisor_queue_expired');
+      const rtc = await api.startKnowledgeAdvisorVoice(
+        current.session_id, current.access_token, clientInstanceId, ticket.ticket_id,
+      );
+      if (!rtc.available) throw new Error('voice_not_configured');
+      const voice = new AdvisorVoiceRTC(rtc, {
+        onState: state => { setVoiceState(state); if (state !== 'idle' && state !== 'error') resetVoiceIdleTimer(); },
+        onTranscript: persistTranscript,
+      });
+      voiceRef.current = voice;
+      await voice.connect({microphone: true});
+      resetVoiceIdleTimer();
+      heartbeatRef.current = window.setInterval(() => {
+        const activeCredentials = credentialsRef.current;
+        const activeTicket = queueTicketRef.current;
+        if (!activeCredentials || !activeTicket) return;
+        void api.heartbeatKnowledgeAdvisorRTCQueue(
+          activeCredentials.session_id, activeCredentials.access_token, activeTicket.ticket_id, clientInstanceId,
+        ).then(value => { queueTicketRef.current = value; setQueueTicket(value); }).catch(() => void releaseVoice());
+      }, 30_000);
+    } catch (error) {
+      await releaseVoice();
+      showToast((error as Error).message.includes('microphone') ? '麦克风权限未开启，已切换为文字咨询' : friendlyError(error));
+      setVoiceState('error');
+    }
+  }, [bootstrap?.rtc.available, clientInstanceId, persistTranscript, releaseVoice, resetVoiceIdleTimer, showToast, voiceState]);
+
+  const startOrContinueCheck = async () => {
+    if (session) {
+      navigate(`/${isCheckRoute(`/${session.last_route || ''}`) ? session.last_route : 'profile'}`);
+      return;
+    }
+    try {
+      const value = await api.createAssessment('photo');
+      setSession({assessment_id: value.assessment_id, access_token: value.access_token});
+      setAssessment(null);
+      navigate('/profile');
+    } catch (error) {
+      showToast(friendlyError(error));
+    }
+  };
+
+  if (capabilities?.knowledge_advisor === false) return <section className="page center-state knowledge-advisor-unavailable"><Icon name="smart_toy" className="state-icon" /><h1>AI 助手暂未开放</h1><p>你可以先使用照片或实时相机完成家庭检查。</p><button className="button primary" onClick={() => navigate('/home')}>返回首页</button></section>;
+  if (loading && !bootstrap) return <Loading label="正在准备 AI 适老顾问…" />;
+  if (loadError && !bootstrap) return <ErrorState error={loadError} retry={() => setLoadVersion(value => value + 1)} />;
+  if (!bootstrap || !credentials) return <Loading />;
+  const conversationTurns = bootstrap.turns.filter(turn => turn.kind !== 'welcome');
+  const latestQuestions = [...conversationTurns].reverse().find(turn => turn.role === 'assistant')?.suggested_questions || bootstrap.quick_prompts;
+  const voiceActive = voiceState !== 'idle' && voiceState !== 'error';
+  const voiceLabel = queueTicket?.status === 'queued' ? `排队中，前面 ${Math.max(0, queueTicket.position - 1)} 人` : voiceState === 'speaking' ? '正在回答，点击打断' : voiceActive ? '实时语音中，点击停止' : '开始实时语音';
+
+  return <section className="knowledge-advisor-page">
+    <div className="knowledge-advisor-scroll">
+      <section className="knowledge-welcome" aria-labelledby="knowledge-welcome-title">
+        <span className="knowledge-avatar"><Icon name="support_agent" filled /></span>
+        <div><small>长者友好家</small><h1 id="knowledge-welcome-title">{KNOWLEDGE_ADVISOR_COPY.welcomeTitle}</h1><p>{KNOWLEDGE_ADVISOR_COPY.introduction}</p><p>{KNOWLEDGE_ADVISOR_COPY.capabilities}</p></div>
+      </section>
+      <button className="knowledge-check-entry" onClick={() => void startOrContinueCheck()}><Icon name="home_health" filled /><span><b>{session ? '继续上次检查' : '开始家庭检查'}</b><small>通过照片或实时相机了解具体家庭环境</small></span><Icon name="chevron_right" /></button>
+      <div className="knowledge-advisor-thread" aria-live="polite" aria-busy={busy}>
+        {conversationTurns.map(turn => <article key={turn.turn_id} className={`knowledge-bubble ${turn.role}`}><p>{turn.text}</p><time>{new Date(turn.created_at).toLocaleTimeString('zh-CN', {hour: '2-digit', minute: '2-digit'})}</time></article>)}
+        {pendingQuestion && <><article className="knowledge-bubble user pending"><p>{pendingQuestion}</p></article><article className="knowledge-bubble assistant thinking" role="status"><span className="typing-dots" aria-label="正在回答"><i /><i /><i /></span><p>正在回答…</p></article></>}
+        {partialTranscript && <article className="knowledge-bubble partial"><p>{partialTranscript}</p><span className="typing-dots" aria-label="实时字幕"><i /><i /><i /></span></article>}
+        {failedQuestion && <article className="knowledge-message-failed" role="alert"><p>上一个问题没有发送完成。</p><button onClick={() => void sendMessage(failedQuestion)}>重试</button></article>}
+      </div>
+      {conversationTurns.length === 0 ? <div className="knowledge-prompt-groups" aria-label="快捷问题">{KNOWLEDGE_ADVISOR_COPY.quickPromptGroups.map(group => <section key={group.title}><h2>{group.title}</h2><div className="knowledge-quick-prompts">{group.questions.map(question => <button key={question} disabled={busy} onClick={() => void sendMessage(question)}>{question}</button>)}</div></section>)}</div>
+        : <div className="knowledge-quick-prompts" aria-label="继续追问">{latestQuestions.map(question => <button key={question} disabled={busy} onClick={() => void sendMessage(question)}>{question}</button>)}</div>}
+    </div>
+    <div className="knowledge-advisor-dock">
+      {queueTicket?.status === 'queued' && <p className="knowledge-queue-status" role="status">AI 顾问体验人数较多，正在排队…</p>}
+      <form className="knowledge-composer" onSubmit={event => { event.preventDefault(); void sendMessage(input); }}>
+        <input value={input} maxLength={500} disabled={busy} onChange={event => setInput(event.target.value)} placeholder={KNOWLEDGE_ADVISOR_COPY.inputPlaceholder} aria-label="适老化咨询问题" />
+        <button type="submit" className="knowledge-send" disabled={!input.trim() || busy} aria-label="发送"><Icon name="arrow_upward" filled /></button>
+        <button type="button" className={`knowledge-mic state-${voiceState}`} onClick={() => void toggleVoice()} aria-label={voiceLabel} title={voiceLabel}><Icon name={voiceState === 'speaking' ? 'front_hand' : voiceActive ? 'stop' : 'mic'} filled /></button>
+      </form>
+      <p className="knowledge-disclaimer">{KNOWLEDGE_ADVISOR_COPY.disclaimer}</p>
+    </div>
+  </section>;
 }
 
 function AdvisorQueuePage() {
@@ -377,60 +689,14 @@ function CameraLaunchModal({close}: {close: () => void}) {
 
 function PersistentTabBar({pathname}: {pathname: string}) {
   const navigate = useNavigate();
-  const {session, assessment, setSession, setAssessment, capabilities, showToast} = useApp();
-  const onboarding = useOnboarding();
-  const [cameraIntroOpen, setCameraIntroOpen] = useState(false);
-  const [startingCheck, setStartingCheck] = useState(false);
+  const homeActive = /^\/(home|profile|rooms|upload(?:\/|$)|analyzing(?:\/|$))/.test(pathname);
+  const renovationActive = /^\/(renovations|result(?:\/|$)|risk(?:\/|$)|solutions(?:\/|$)|selected-solution(?:\/|$)|renovation-preview(?:\/|$)|report(?:\/|$))/.test(pathname);
   const myActive = pathname === '/my';
-  const homeActive = pathname === '/home';
-  const checkActive = isCheckRoute(pathname);
-  const cameraAvailable = nativeCapability('live_scan') ? capabilities?.ios_home_camera !== false : capabilities?.h5_camera !== false;
-  const openCheck = async () => {
-    if (startingCheck) return;
-    let activeSession = session;
-    let currentAssessment = assessment;
-    setStartingCheck(true);
-    if (!activeSession) {
-      try {
-        const value = await api.createAssessment('photo');
-        activeSession = {assessment_id: value.assessment_id, access_token: value.access_token};
-        setSession(activeSession);
-      } catch (error) {
-        showToast(friendlyError(error));
-        setStartingCheck(false);
-        return;
-      }
-    }
-    try {
-      if (!currentAssessment || currentAssessment.assessment_id !== activeSession.assessment_id) {
-        currentAssessment = await api.getAssessment();
-        setAssessment(currentAssessment);
-      }
-    } catch (error) {
-      showToast(friendlyError(error));
-      setStartingCheck(false);
-      return;
-    }
-    setStartingCheck(false);
-    const destination = resolveCheckDestination(activeSession, currentAssessment) || '/profile';
-    if (destination === '/profile') onboarding.enterPhase('profile');
-    else if (destination === '/rooms') onboarding.enterPhase('rooms');
-    else if (destination.startsWith('/upload/')) {
-      const roomId = destination.split('/')[2];
-      const usable = currentAssessment?.rooms.find(room => room.room_id === roomId)?.media.some(media => media.quality.usable);
-      onboarding.enterPhase(usable ? 'analyze' : 'capture');
-    } else if (destination.startsWith('/result/')) onboarding.enterPhase('result');
-    else if (destination.startsWith('/risk/')) onboarding.enterPhase('risk');
-    else if (destination.startsWith('/solutions/')) onboarding.enterPhase('solutions');
-    else if (destination === '/report') onboarding.enterPhase('report');
-    navigate(destination);
-  };
-  return <><nav className="persistent-tab-bar four-tabs" aria-label="主导航">
+  return <nav className="persistent-tab-bar three-tabs" aria-label="主导航">
     <button className={homeActive ? 'active' : ''} aria-current={homeActive ? 'page' : undefined} onClick={() => !homeActive && navigate('/home')}><Icon name="home" filled={homeActive} /><span>首页</span></button>
-    <button className={checkActive ? 'active' : ''} aria-current={checkActive ? 'page' : undefined} aria-busy={startingCheck} disabled={startingCheck} onClick={() => void openCheck()}><Icon name="fact_check" filled={checkActive} /><span>检查</span></button>
-    {cameraAvailable ? <button data-onboarding-target="camera-entry" className="camera-tab" aria-label="相机" onClick={() => setCameraIntroOpen(true)}><span className="camera-tab-icon"><img src="/assets/camera-tab.svg" alt="" /></span><span>相机</span></button> : <button className="camera-tab" disabled aria-label="相机暂未开放"><span className="camera-tab-icon"><img src="/assets/camera-tab.svg" alt="" /></span><span>相机</span></button>}
+    <button className={renovationActive ? 'active' : ''} aria-current={renovationActive ? 'page' : undefined} onClick={() => !renovationActive && navigate('/renovations')}><Icon name="handyman" filled={renovationActive} /><span>改造方案</span></button>
     <button className={myActive ? 'active' : ''} aria-current={myActive ? 'page' : undefined} onClick={() => !myActive && navigate('/my')}><Icon name="person" filled={myActive} /><span>我的</span></button>
-  </nav>{cameraIntroOpen && <CameraLaunchModal close={() => setCameraIntroOpen(false)} />}</>;
+  </nav>;
 }
 
 function CameraPage() {
@@ -1153,20 +1419,17 @@ function CameraPage() {
 
 function HomePage() {
   const navigate = useNavigate();
-  const {session, setSession, showToast, capabilities} = useApp();
+  const {session, assessment, setSession, setAssessment, showToast, capabilities} = useApp();
   const onboarding = useOnboarding();
   const [busy, setBusy] = useState(false);
   const [cameraIntroOpen, setCameraIntroOpen] = useState(false);
-  const startPhotoAssessment = async () => {
-    if (session) {
-      if (onboarding.active) onboarding.completePhase('home', 'profile');
-      navigate('/profile');
-      return;
-    }
+  const [pendingEntry, setPendingEntry] = useState<'photo' | 'camera' | null>(null);
+  const createPhotoAssessment = async () => {
     setBusy(true);
     try {
       const value = await api.createAssessment('photo');
       setSession({assessment_id: value.assessment_id, access_token: value.access_token});
+      setAssessment(null);
       if (onboarding.active) onboarding.completePhase('home', 'profile');
       navigate('/profile');
     } catch (error) {
@@ -1175,7 +1438,37 @@ function HomePage() {
       setBusy(false);
     }
   };
+  const startEntry = (entry: 'photo' | 'camera') => {
+    if (session) { setPendingEntry(entry); return; }
+    if (entry === 'camera') setCameraIntroOpen(true);
+    else void createPhotoAssessment();
+  };
+  const startNew = () => {
+    const entry = pendingEntry;
+    setPendingEntry(null);
+    setSession(null);
+    setAssessment(null);
+    if (entry === 'camera') setCameraIntroOpen(true);
+    else void createPhotoAssessment();
+  };
+  const continueCurrent = async () => {
+    const entry = pendingEntry;
+    setPendingEntry(null);
+    if (!session) return;
+    setBusy(true);
+    try {
+      const current = assessment?.assessment_id === session.assessment_id ? assessment : await api.getAssessment();
+      setAssessment(current);
+      if (current.status === 'completed') { navigate('/renovations'); return; }
+      if (entry === 'camera') { setCameraIntroOpen(true); return; }
+      const destination = resolveCheckDestination(session, current) || '/profile';
+      if (onboarding.active) onboarding.completePhase('home', destination === '/profile' ? 'profile' : 'rooms');
+      navigate(destination);
+    } catch (error) { showToast(friendlyError(error)); }
+    finally { setBusy(false); }
+  };
   const hasCameraEntry = nativeCapability('live_scan') ? capabilities?.ios_home_camera !== false : capabilities?.h5_camera !== false;
+  const knowledgeAdvisorAvailable = capabilities?.knowledge_advisor !== false;
   const progress = session ? getHomeProgress(session.last_route) : {step: 1, label: HOME_FLOW_STEPS[0].label};
   const progressPercent = Math.round(progress.step / HOME_FLOW_STEPS.length * 100);
   return <section className="page home-page">
@@ -1200,19 +1493,19 @@ function HomePage() {
           {HOME_FLOW_STEPS.map((item, index) => <span key={item.label} className={index < progress.step ? 'complete' : ''} />)}
         </div>
         <div className="home-action-stack">
-          <button data-onboarding-target="home-start" className="button primary full home-primary-button" aria-label={hasCameraEntry ? '中央相机' : '中央相机暂未开放'} disabled={!hasCameraEntry || busy} onClick={() => setCameraIntroOpen(true)}><Icon name="photo_camera" filled />{hasCameraEntry ? 'AR 实时识别' : '实时识别暂未开放'}</button>
+          <button data-onboarding-target="home-ar-entry" className="button primary full home-primary-button" aria-label={hasCameraEntry ? 'AR 实时识别' : 'AR 实时识别暂未开放'} disabled={!hasCameraEntry || busy} onClick={() => startEntry('camera')}><Icon name="photo_camera" filled />{hasCameraEntry ? 'AR 实时识别' : '实时识别暂未开放'}</button>
           <div className="home-secondary-actions two-actions">
-            <button data-onboarding-target="home-start" className="button secondary full home-secondary-button" disabled={busy} onClick={startPhotoAssessment}><Icon name="image" />{busy ? '正在开始…' : '上传家中照片'}</button>
-            <button className="button secondary full home-secondary-button" aria-label="问问 AI 助手" disabled={!hasCameraEntry || busy} onClick={() => setCameraIntroOpen(true)}><Icon name="smart_toy" />问问 AI 助手</button>
+            <button data-onboarding-target="home-photo-entry" className="button secondary full home-secondary-button" disabled={busy} onClick={() => startEntry('photo')}><Icon name="image" />{busy ? '正在开始…' : '上传家中照片'}</button>
+            <button className="button secondary full home-secondary-button" aria-label={knowledgeAdvisorAvailable ? '问问 AI 助手' : 'AI 助手暂未开放'} disabled={!knowledgeAdvisorAvailable || busy} onClick={() => navigate('/advisor')}><Icon name="smart_toy" />{knowledgeAdvisorAvailable ? '问问 AI 助手' : 'AI 助手暂未开放'}</button>
           </div>
         </div>
       </section>
-      <section className="home-resource-grid" aria-label="长者居家安全建议">
-        <button onClick={startPhotoAssessment} disabled={busy}><span className="home-resource-icon"><Icon name="bathtub" /></span><b>浴室防滑指南</b><small>阅读3分钟</small></button>
-        <button onClick={() => setCameraIntroOpen(true)} disabled={!hasCameraEntry || busy}><span className="home-resource-icon"><Icon name="lightbulb" /></span><b>夜间照明建议</b><small><Icon name="auto_awesome" />AI推荐</small></button>
-      </section>
     </div>
     {cameraIntroOpen && <CameraLaunchModal close={() => setCameraIntroOpen(false)} />}
+    {pendingEntry && <Modal title={assessment?.status === 'completed' ? '已有一份完成的检查' : '继续上次检查？'} close={() => setPendingEntry(null)}>
+      <p>{assessment?.status === 'completed' ? '你可以查看上次改造记录，或为新的家庭环境创建一次检查。' : '继续会保留当前照片和进度；新建检查会单独保存到历史记录。'}</p>
+      <div className="button-stack"><button className="button primary full" onClick={() => void continueCurrent()}>{assessment?.status === 'completed' ? '查看上次记录' : '继续本次检查'}</button><button className="button secondary full" onClick={startNew}>新建检查</button></div>
+    </Modal>}
   </section>;
 }
 
@@ -1222,16 +1515,17 @@ function ProfilePage() {
   const {session, showToast} = useApp();
   const onboarding = useOnboarding();
   const {assessment, loading, error, reload} = useAssessment();
-  const initial = assessment?.profile;
+  const query = new URLSearchParams(location.search);
+  const editingFromMy = query.get('from') === 'my';
+  const defaultProfile = useMemo(() => readDefaultProfile(), []);
+  const initial = editingFromMy ? defaultProfile || undefined : assessment?.profile || assessment?.profile_json || defaultProfile || undefined;
   const [profile, setProfile] = useState<Partial<ElderProfile>>({});
   const [saving, setSaving] = useState(false);
   useEffect(() => { if (initial) setProfile(initial); }, [initial]);
-  if (!session) return <Navigate to="/home" replace />;
-  if (loading && !assessment) return <Loading />;
-  if (error) return <ErrorState error={error} retry={reload} />;
+  if (!session && !editingFromMy) return <Navigate to="/home" replace />;
+  if (!editingFromMy && loading && !assessment) return <Loading />;
+  if (!editingFromMy && error) return <ErrorState error={error} retry={reload} />;
   const complete = Boolean(profile.mobility && profile.fall_history && profile.living_status);
-  const query = new URLSearchParams(location.search);
-  const editingFromMy = query.get('from') === 'my';
   const requestedReturn = query.get('return_to') || '';
   const safeReturn = /^\/(upload|advisor)\/[A-Za-z0-9-]{1,80}$/.test(requestedReturn) ? requestedReturn : '';
   const changed = Boolean(initial) && (profile.mobility !== initial?.mobility || profile.fall_history !== initial?.fall_history || profile.living_status !== initial?.living_status);
@@ -1239,8 +1533,14 @@ function ProfilePage() {
     if (!complete) return;
     setSaving(true);
     try {
-      await api.saveProfile(profile as ElderProfile);
-      showToast('个人档案已保存');
+      if (editingFromMy) {
+        writeDefaultProfile(profile as ElderProfile);
+        showToast('默认个人档案已保存，将用于新检查预填');
+      } else {
+        await api.saveProfile(profile as ElderProfile);
+        if (!readDefaultProfile()) writeDefaultProfile(profile as ElderProfile);
+        showToast('个人档案已保存');
+      }
       if (onboarding.active) onboarding.completePhase('profile', safeReturn ? 'capture' : 'rooms');
       navigate(editingFromMy ? '/my' : safeReturn || '/rooms');
     } catch (value) {
@@ -2140,12 +2440,14 @@ function RenovationComparison({preview}: {preview: RenovationPreview}) {
 function RenovationPreviewPage() {
   const {roomId = ''} = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const {session, showToast} = useApp();
   const [data, setData] = useState<RenovationPreviewContext | null>(null);
   const [selectedMediaId, setSelectedMediaId] = useState('');
   const [preview, setPreview] = useState<RenovationPreview | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
+  const returnTo = new URLSearchParams(location.search).get('return_to') === '/renovations' ? '/renovations' : '/report';
   const load = useCallback(async () => {
     try {
       const value = await api.renovationPreviewContext(roomId);
@@ -2193,7 +2495,7 @@ function RenovationPreviewPage() {
     try {
       setPreview(await api.selectRenovationPreview(roomId, preview.preview_id));
       showToast('改造效果已保存到报告');
-      navigate('/report');
+      navigate(returnTo);
     } catch (value) { showToast(friendlyError(value)); }
     finally { setBusy(false); }
   };
@@ -2210,7 +2512,7 @@ function RenovationPreviewPage() {
     {preview?.status === 'completed' && <><RenovationComparison preview={preview} />{preview.stale && <div className="stale-preview" role="status"><Icon name="update" /><div><b>改造方案已经更新</b><p>这张旧效果图不会继续显示在报告中，请按当前方案重新生成。</p></div></div>}{preview.skipped_actions.length ? <p className="nonvisual-note"><Icon name="info" />未在图片中表达：{preview.skipped_actions.join('、')}</p> : null}<div className="button-stack"><button className="button primary full" disabled={busy || preview.stale} onClick={save}><Icon name="bookmark_add" filled />{preview.selected_for_report ? '已保存到报告' : RENOVATION_PREVIEW_COPY.save}</button><button className="button secondary full" disabled={busy} onClick={generate}>重新生成一个版本</button></div></>}
     {!preview && <button className="button primary full" disabled={busy || !selectedMediaId || !visualActions.length} onClick={generate}><Icon name="auto_awesome" filled />{busy ? '正在开始…' : RENOVATION_PREVIEW_COPY.generate}</button>}
     <p className="fine-print renovation-disclaimer"><Icon name="info" />{data.disclaimer || RENOVATION_PREVIEW_COPY.disclaimer}</p>
-    <button className="button quiet full" onClick={() => navigate('/report')}>返回改造清单</button>
+    <button className="button quiet full" onClick={() => navigate(returnTo)}>{returnTo === '/renovations' ? '返回改造方案' : '返回改造清单'}</button>
   </section>;
 }
 
@@ -2490,36 +2792,162 @@ function ReportPage() {
   </section>;
 }
 
-function MyMediaThumbnail({media}: {media: MediaAsset}) {
-  const {url} = useProtectedImage(media.content_path);
-  return <img src={url || `${ASSETS}/demo-upload-floor.jpg`} alt="已上传照片" />;
+interface HistoryRecord {
+  entry: AssessmentHistoryEntry;
+  assessment?: Assessment;
+  report?: AssessmentReport;
+  error?: unknown;
+}
+
+function sessionFromHistory(entry: AssessmentHistoryEntry, lastRoute?: string): SessionState {
+  return {assessment_id: entry.assessment_id, access_token: entry.access_token, ...(lastRoute ? {last_route: lastRoute} : entry.last_route ? {last_route: entry.last_route} : {})};
+}
+
+function HistoryRiskImage({entry, media, risks}: {entry: AssessmentHistoryEntry; media?: MediaAsset; risks: SafetyRisk[]}) {
+  const {url, loading} = useProtectedImage(media?.content_path, sessionFromHistory(entry));
+  return <div className="history-risk-image" style={media ? {aspectRatio: `${media.width} / ${media.height}`} : undefined}>
+    <img src={url || `${ASSETS}/demo-upload-floor.jpg`} alt="带风险标注的房间证据照片" />
+    <svg viewBox="0 0 1000 1000" preserveAspectRatio="none" role="img" aria-label={`风险位置标注，共 ${risks.filter(item => item.region).length} 处`}>
+      {risks.map((risk, index) => risk.region && 'width' in risk.region ? <g key={risk.risk_id} className={`severity-${risk.severity}`}><rect x={risk.region.x * 1000} y={risk.region.y * 1000} width={risk.region.width * 1000} height={risk.region.height * 1000} rx="18" /><text x={(risk.region.x + risk.region.width / 2) * 1000} y={(risk.region.y + risk.region.height / 2) * 1000}>{index + 1}</text></g> : risk.region ? <polygon key={risk.risk_id} className={`severity-${risk.severity}`} points={risk.region.points.map(point => `${point[0] * 1000},${point[1] * 1000}`).join(' ')} /> : null)}
+    </svg>
+    {loading && <span className="image-loading"><span className="spinner" /></span>}
+  </div>;
+}
+
+function HistoryPreviewImage({entry, preview}: {entry: AssessmentHistoryEntry; preview: RenovationPreview}) {
+  const {url, loading} = useProtectedImage(preview.after_content_path || undefined, sessionFromHistory(entry));
+  return <div className="history-preview-image"><img src={url || `${ASSETS}/solution-shower.jpg`} alt="AI 改造效果示意" />{loading && <span className="image-loading"><span className="spinner" /></span>}<span>AI 效果示意</span></div>;
+}
+
+function RenovationHistoryRoom({entry, assessmentRoom, result, report, activate}: {entry: AssessmentHistoryEntry; assessmentRoom: RoomAssessment; result?: RoomResult; report: AssessmentReport; activate: (path: string) => void}) {
+  const {capabilities} = useApp();
+  const [context, setContext] = useState<RenovationPreviewContext | null>(null);
+  const [contextError, setContextError] = useState(false);
+  useEffect(() => {
+    if (!capabilities?.renovation_preview || !result) return;
+    const controller = new AbortController();
+    api.renovationPreviewContextFor(sessionFromHistory(entry), assessmentRoom.room_id, controller.signal).then(value => { setContext(value); setContextError(false); }).catch(error => { if ((error as Error).name !== 'AbortError') setContextError(true); });
+    return () => controller.abort();
+  }, [assessmentRoom.room_id, capabilities?.renovation_preview, entry.access_token, entry.assessment_id, result]);
+  const roomRisks = result?.risks || [];
+  const selectedItems = report.selected_items.filter(item => roomRisks.some(risk => risk.risk_id === item.risk_id));
+  const media = assessmentRoom.media.find(item => roomRisks.some(risk => risk.media_id === item.media_id)) || assessmentRoom.media[0];
+  const mediaRisks = media ? roomRisks.filter(risk => risk.media_id === media.media_id) : roomRisks;
+  const previews = context?.previews || [];
+  const activePreview = previews.find(item => item.selected_for_report && !item.stale && item.status === 'completed') || previews.find(item => !item.stale && item.status === 'completed');
+  const running = previews.find(item => item.status === 'queued' || item.status === 'running');
+  const stale = previews.find(item => item.stale && item.status === 'completed');
+  return <article className="renovation-history-room">
+    <header><div><small>{ROOM_COPY[assessmentRoom.room_type].name}</small><h3>{result ? `${roomRisks.length} 项风险 · ${result.score} 分` : '检查尚未完成'}</h3></div><button className="text-button" onClick={() => activate(result ? `/result/${assessmentRoom.room_id}` : assessmentRoom.status === 'analyzing' ? `/analyzing/${assessmentRoom.room_id}` : `/upload/${assessmentRoom.room_id}`)}>{result ? '查看结果' : '继续检查'}</button></header>
+    {result && <>
+      <HistoryRiskImage entry={entry} media={media} risks={mediaRisks} />
+      <ol className="history-risk-list">{roomRisks.map((risk, index) => <li key={risk.risk_id}><span className={`severity-dot ${risk.severity}`}>{index + 1}</span><button onClick={() => activate(`/risk/${assessmentRoom.room_id}/${risk.risk_id}`)}><b>{risk.title}</b><small>{risk.evidence}</small></button></li>)}</ol>
+      <section className="history-selected-solutions"><h4>已选改造方案</h4>{selectedItems.length ? selectedItems.map(item => <button key={item.selected_solution_id} onClick={() => activate(`/selected-solution/${assessmentRoom.room_id}/${item.risk_id}/${item.solution.solution_package_id}`)}><span><b>{item.solution.tier} 档 · {item.solution.title}</b><small>{item.solution.summary}</small></span><strong>{formatRange(item.solution.price.total_min, item.solution.price.total_max, item.solution.price.currency)}</strong></button>) : <p>还没有选择方案，可先从风险详情比较 A/B/C 方案。</p>}</section>
+      {activePreview && <HistoryPreviewImage entry={entry} preview={activePreview} />}
+      {running && <p className="history-preview-status" role="status"><span className="spinner" />效果图正在生成，可以稍后回来查看</p>}
+      {stale && !activePreview && <p className="history-preview-status stale"><Icon name="update" />效果图已失效，请按当前方案重新生成</p>}
+      {context?.previews.some(item => item.status === 'failed') && !activePreview && !running && <p className="history-preview-status error"><Icon name="cloud_off" />上次效果图未生成完成，可以重新尝试</p>}
+      {contextError && selectedItems.length > 0 && <p className="history-preview-status error">暂时无法读取效果图状态</p>}
+      {selectedItems.length > 0 && capabilities?.renovation_preview && <button className="button secondary full" onClick={() => activate(`/renovation-preview/${assessmentRoom.room_id}?return_to=${encodeURIComponent('/renovations')}`)}><Icon name="auto_awesome" filled />{activePreview ? '查看或重新生成' : stale || context?.previews.some(item => item.status === 'failed') ? '重新生成改造效果' : running ? '查看生成进度' : '生成改造效果'}</button>}
+      {selectedItems.length === 0 && <button className="button secondary full" onClick={() => activate(`/result/${assessmentRoom.room_id}`)}>选择改造方案</button>}
+    </>}
+  </article>;
+}
+
+function RenovationsPage() {
+  const navigate = useNavigate();
+  const {session, setSession, setAssessment, showToast} = useApp();
+  const [entries, setEntries] = useState<AssessmentHistoryEntry[]>(() => readAssessmentHistory());
+  const [records, setRecords] = useState<HistoryRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [expandedId, setExpandedId] = useState('');
+  const [deleteEntry, setDeleteEntry] = useState<AssessmentHistoryEntry | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  useEffect(() => {
+    const sync = () => setEntries(readAssessmentHistory());
+    window.addEventListener('anju-assessment-history-changed', sync);
+    return () => window.removeEventListener('anju-assessment-history-changed', sync);
+  }, []);
+  useEffect(() => {
+    if (session && !entries.some(item => item.assessment_id === session.assessment_id)) {
+      setSession(entries[0] ? sessionFromHistory(entries[0]) : null);
+      setAssessment(null);
+    }
+  }, [entries, session, setAssessment, setSession]);
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    Promise.all(entries.map(async entry => {
+      try {
+        const [assessment, report] = await Promise.all([api.getAssessmentFor(entry, controller.signal), api.reportFor(entry, controller.signal)]);
+        return {entry: {...entry, created_at: assessment.created_at || entry.created_at}, assessment, report} as HistoryRecord;
+      } catch (error) { return {entry, error} as HistoryRecord; }
+    })).then(value => setRecords(value.sort((left, right) => (right.assessment?.created_at || right.entry.created_at).localeCompare(left.assessment?.created_at || left.entry.created_at)))).finally(() => setLoading(false));
+    return () => controller.abort();
+  }, [entries]);
+  const activate = (entry: AssessmentHistoryEntry, path: string) => {
+    setSession(sessionFromHistory(entry, path.replace(/^\//, '').split('?')[0]));
+    setAssessment(null);
+    navigate(path);
+  };
+  const remove = async () => {
+    if (!deleteEntry) return;
+    setDeleting(true);
+    try {
+      await api.deleteAssessmentFor(deleteEntry);
+      const remaining = removeAssessmentHistory(deleteEntry.assessment_id);
+      if (session?.assessment_id === deleteEntry.assessment_id) {
+        const next = remaining[0];
+        setSession(next ? sessionFromHistory(next) : null);
+        setAssessment(null);
+      }
+      setDeleteEntry(null);
+      showToast('这次检查和相关照片已删除');
+    } catch (error) { showToast(friendlyError(error)); }
+    finally { setDeleting(false); }
+  };
+  if (loading && !records.length) return <Loading label="正在整理改造记录…" />;
+  return <section className="page renovations-page">
+    <div className="page-intro"><small className="eyebrow">检查历史与改造进度</small><h1>改造方案</h1><p>按每次检查整理风险证据、已选方案、预算和 AI 改造效果。</p></div>
+    {!records.length ? <section className="empty-renovations"><Icon name="handyman" className="state-icon" /><h2>还没有检查记录</h2><p>从首页上传照片或使用 AR 实时识别后，记录会保存在这里。</p><button className="button primary full" onClick={() => navigate('/home')}>开始第一次检查</button></section> : <div className="renovation-history-list">{records.map(record => {
+      const date = new Date(record.assessment?.created_at || record.entry.created_at);
+      const open = expandedId === record.entry.assessment_id;
+      const report = record.report;
+      const assessment = record.assessment;
+      return <article key={record.entry.assessment_id} className={`renovation-history-card ${session?.assessment_id === record.entry.assessment_id ? 'current' : ''}`}>
+        <header><button className="renovation-history-toggle" aria-expanded={open} onClick={() => setExpandedId(value => value === record.entry.assessment_id ? '' : record.entry.assessment_id)}><span><small>{Number.isNaN(date.valueOf()) ? '历史检查' : date.toLocaleDateString('zh-CN', {year: 'numeric', month: 'long', day: 'numeric'})}{session?.assessment_id === record.entry.assessment_id ? ' · 当前' : ''}</small><b>{assessment?.status === 'completed' ? '已完成检查' : assessment ? '检查进行中' : '记录暂不可用'}</b></span><Icon name={open ? 'expand_less' : 'expand_more'} /></button></header>
+        {record.error ? <div className="history-record-error"><p>{friendlyError(record.error)}</p><button className="text-button" onClick={() => setEntries(readAssessmentHistory())}>重试</button></div> : report && assessment ? <>
+          <div className="history-metrics"><span><small>房间</small><b>{assessment.rooms.length}</b></span><span><small>{report.score_title}</small><b>{report.assessed_area_score ?? '—'}</b></span><span><small>覆盖度</small><b>{report.coverage_percent}%</b></span><span><small>参考预算</small><b>{formatRange(report.budget.total_min, report.budget.total_max, report.budget.currency)}</b></span></div>
+          {open && <div className="history-record-details">{assessment.rooms.length ? assessment.rooms.map(room => <RenovationHistoryRoom key={room.room_id} entry={record.entry} assessmentRoom={room} result={report.rooms.find(item => item.room_id === room.room_id)} report={report} activate={path => activate(record.entry, path)} />) : <p className="empty-copy">这次检查还没有添加房间</p>}<div className="history-record-actions"><button className="button primary" onClick={() => activate(record.entry, report.rooms.length ? '/report' : resolveCheckDestination(record.entry, assessment) || '/profile')}>{report.rooms.length ? '查看完整报告' : '继续检查'}</button><button className="button danger" onClick={() => setDeleteEntry(record.entry)}>删除记录</button></div></div>}
+        </> : null}
+      </article>;
+    })}</div>}
+    {deleteEntry && <Modal title="删除这次检查？" close={() => !deleting && setDeleteEntry(null)}><p>照片、风险结果、已选方案和效果图会从服务端永久删除，无法恢复。</p><div className="button-stack"><button className="button danger full" disabled={deleting} onClick={() => void remove()}>{deleting ? '正在删除…' : '确认永久删除'}</button><button className="button quiet full" disabled={deleting} onClick={() => setDeleteEntry(null)}>取消</button></div></Modal>}
+  </section>;
 }
 
 function MyPage() {
   const navigate = useNavigate();
   const {session, showToast} = useApp();
-  const onboarding = useOnboarding();
-  const assessmentState = useAssessment();
+  const [profile, setProfile] = useState<ElderProfile | null>(() => readDefaultProfile());
   const [report, setReport] = useState<AssessmentReport | null>(null);
   const [sharing, setSharing] = useState(false);
   useEffect(() => {
-    if (!session) return;
+    const refresh = () => setProfile(readDefaultProfile());
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+  }, []);
+  useEffect(() => {
+    if (!session) { setReport(null); return; }
     const controller = new AbortController();
-    api.report(controller.signal).then(setReport).catch(() => undefined);
+    api.report(controller.signal).then(setReport).catch(() => setReport(null));
     return () => controller.abort();
   }, [session]);
-  if (!session) return <section className="page my-page empty-my"><Icon name="person" className="state-icon" /><h1>我的</h1><p>开始一次检查后，这里会集中展示档案、图片、房屋问题和改造清单。</p><button className="button primary full" onClick={() => navigate('/home')}>开始检查</button></section>;
-  if (assessmentState.loading && !assessmentState.assessment) return <Loading />;
-  if (assessmentState.error) return <ErrorState error={assessmentState.error} retry={assessmentState.reload} />;
-  const assessment = assessmentState.assessment;
-  const profile = assessment?.profile || assessment?.profile_json;
   const mobilityCopy: Record<string, string> = {normal: '行走基本正常', limited: '腿脚不太方便', cane: '使用拐杖', walker: '使用助行器', wheelchair: '使用轮椅'};
   const fallCopy: Record<string, string> = {none: '没有', once: '发生过一次', multiple: '发生过多次'};
   const livingCopy: Record<string, string> = {alone: '独居', with_family: '与家人同住'};
-  const roomTarget = (room: RoomAssessment) => room.status === 'result_ready' ? `/result/${room.room_id}` : room.status === 'analyzing' ? `/analyzing/${room.room_id}` : `/upload/${room.room_id}`;
-  const risks = report?.rooms.flatMap(room => room.risks.map(risk => ({...risk, roomType: room.room_type}))) || [];
   const share = async () => {
-    if (!report) { showToast('完成至少一个房间检查后即可生成分享报告'); return; }
+    if (!report?.checked_room_count) { showToast('请先在改造方案中选择一份已完成的检查'); return; }
     setSharing(true);
     try {
       const blob = await createReportImage(report);
@@ -2529,29 +2957,13 @@ function MyPage() {
     finally { setSharing(false); }
   };
   return <section className="page my-page">
-    <div className="page-intro"><h1>我的</h1><p>档案、检查记录与改造方案都集中在这里。</p></div>
-    <button className="button quiet full onboarding-replay" onClick={() => { onboarding.restart(); navigate('/home'); showToast('已重新开启新手引导，当前检查数据会保留'); }}><Icon name="school" filled />{ONBOARDING_COPY.replay}</button>
-    <details className="my-section" open><summary><span><Icon name="person" filled />个人档案</span><Icon name="expand_more" /></summary><div className="my-section-body">
-      <div className="section-heading"><b>家人情况</b><button className="text-button" onClick={() => navigate('/profile?from=my')}>编辑</button></div>
-      {profile ? <div className="profile-summary"><span>行动能力<b>{mobilityCopy[profile.mobility]}</b></span><span>跌倒史<b>{fallCopy[profile.fall_history]}</b></span><span>居住状态<b>{livingCopy[profile.living_status]}</b></span></div> : <button className="button quiet full" onClick={() => navigate('/profile?from=my')}>完善个人档案</button>}
-    </div></details>
-    <details className="my-section" open><summary><span><Icon name="photo_library" filled />我的图片</span><Icon name="expand_more" /></summary><div className="my-section-body my-room-list">
-      {assessment?.rooms.filter(room => room.media.length).length ? assessment.rooms.filter(room => room.media.length).map(room => <button key={room.room_id} className="my-room-card" onClick={() => navigate(roomTarget(room))}><span><b>{ROOM_COPY[room.room_type].name}</b><small>{room.media.length} 张 · {room.status === 'result_ready' ? '已完成检查' : room.status === 'analyzing' ? '正在分析' : '待继续检查'}</small></span><Icon name="chevron_right" /><span className="my-thumbnails">{room.media.slice(0, 4).map(media => <MyMediaThumbnail key={media.media_id} media={media} />)}</span></button>) : <p className="empty-copy">还没有上传图片</p>}
-    </div></details>
-    <details className="my-section" open><summary><span><Icon name="warning" filled />房屋问题</span><Icon name="expand_more" /></summary><div className="my-section-body issue-groups">
-      {(['high', 'medium', 'low'] as const).map(level => {
-        const items = risks.filter(risk => risk.severity === level);
-        const title = level === 'high' ? '建议优先处理' : level === 'medium' ? '建议近期改善' : '可以继续观察';
-        return <div key={level} className={`my-issue-group ${level}`}><div><b>{title}</b><span>{items.length} 个</span></div>{items.length ? items.map(risk => <button key={risk.risk_id} onClick={() => navigate(`/risk/${risk.room_id}/${risk.risk_id}`)}><span>{risk.title}</span><small>{ROOM_COPY[risk.roomType].name}</small><Icon name="chevron_right" /></button>) : <p>暂时没有这一级别的问题</p>}</div>;
-      })}
-    </div></details>
-    <details className="my-section" open><summary><span><Icon name="handyman" filled />改造清单</span><Icon name="expand_more" /></summary><div className="my-section-body">
-      <div className="my-solution-summary"><b>已选 {report?.selected_items.length || 0} 项</b>{report?.selected_items.map(item => {
-        const roomId = report.rooms.find(room => room.risks.some(risk => risk.risk_id === item.risk_id))?.room_id || '';
-        return <button key={item.selected_solution_id} onClick={() => navigate(`/selected-solution/${roomId}/${item.risk_id}/${item.solution.solution_package_id}`)}><span>{item.solution.summary}</span><b>{formatRange(item.solution.price.total_min, item.solution.price.total_max)}</b><Icon name="chevron_right" /></button>;
-      })}<button className="button secondary full" onClick={() => navigate('/report')}>查看报告</button></div>
-    </div></details>
-    <details className="my-section" open><summary><span><Icon name="ios_share" filled />分享报告给家人</span><Icon name="expand_more" /></summary><div className="my-section-body share-summary"><p>生成包含隐患和 A/B/C 改造建议的报告图片，可通过隔空投送或其他应用发送。</p><button className="button primary full" disabled={!report || sharing} onClick={share}><Icon name="ios_share" />{sharing ? '正在生成分享报告…' : '生成分享报告'}</button></div></details>
+    <div className="page-intro"><h1>我的</h1><p>管理默认家人档案，并把当前检查报告分享给家人。</p></div>
+    <section className="my-section simple"><div className="my-section-heading"><span><Icon name="person" filled /><b>默认个人档案</b></span><button className="text-button" onClick={() => navigate('/profile?from=my')}>{profile ? '编辑' : '完善'}</button></div>
+      {profile ? <div className="profile-summary"><span>行动能力<b>{mobilityCopy[profile.mobility]}</b></span><span>跌倒史<b>{fallCopy[profile.fall_history]}</b></span><span>居住状态<b>{livingCopy[profile.living_status]}</b></span></div> : <div className="empty-copy"><p>保存后会在新建检查时自动预填，历史检查不会被修改。</p><button className="button secondary full" onClick={() => navigate('/profile?from=my')}>完善默认档案</button></div>}
+    </section>
+    <section className="my-section simple"><div className="my-section-heading"><span><Icon name="ios_share" filled /><b>报告分享</b></span>{report?.checked_room_count ? <button className="text-button" onClick={() => navigate('/report')}>查看报告</button> : null}</div>
+      {report?.checked_room_count ? <div className="share-summary"><p>当前选择的检查包含 {report.checked_room_count} 个已检查房间、{report.selected_items.length} 项已选方案{report.renovation_previews?.length ? `和 ${report.renovation_previews.length} 张改造效果图` : ''}。</p><button className="button primary full" disabled={sharing} onClick={() => void share()}><Icon name="ios_share" />{sharing ? '正在生成分享报告…' : '生成分享报告'}</button></div> : <div className="empty-copy"><p>先在“改造方案”中选择一份完成的检查，再生成分享报告。</p><button className="button secondary full" onClick={() => navigate('/renovations')}>选择检查记录</button></div>}
+    </section>
   </section>;
 }
 

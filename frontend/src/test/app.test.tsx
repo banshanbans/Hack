@@ -28,10 +28,11 @@ describe('P01 entry and route recovery', () => {
     expect(screen.getByText('进行到：家人情况')).toBeVisible();
     expect(screen.getByRole('navigation', {name: '主导航'})).toBeVisible();
     expect(screen.getByRole('button', {name: '首页'})).toHaveAttribute('aria-current', 'page');
-    expect(screen.getByRole('button', {name: '检查'})).not.toHaveAttribute('aria-current');
-    expect(screen.getByRole('button', {name: '中央相机'})).toBeVisible();
-    expect(screen.getByRole('button', {name: '相机'})).toBeVisible();
+    expect(screen.getByRole('button', {name: '改造方案'})).not.toHaveAttribute('aria-current');
+    expect(screen.getByRole('button', {name: 'AR 实时识别'})).toBeVisible();
     expect(screen.getByRole('button', {name: '我的'})).toBeVisible();
+    expect(screen.queryByText('浴室防滑指南')).not.toBeInTheDocument();
+    expect(screen.queryByText('夜间照明建议')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', {name: /上传家中照片/}));
     await waitFor(() => expect(window.location.hash).toBe('#/profile'));
     expect(fetchMock).toHaveBeenCalledWith('/api/v2/assessments', expect.objectContaining({method: 'POST'}));
@@ -50,7 +51,7 @@ describe('P01 entry and route recovery', () => {
     });
 
     render(<App />);
-    fireEvent.click(await screen.findByRole('button', {name: '中央相机'}));
+    fireEvent.click(await screen.findByRole('button', {name: 'AR 实时识别'}));
 
     const dialog = screen.getByRole('dialog', {name: '开始家庭实时检查'});
     expect(dialog).toBeVisible();
@@ -129,8 +130,9 @@ describe('P01 entry and route recovery', () => {
   it('hides the home camera entry and disables the camera tab when the capability is unavailable', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({analysis: 'ark', capabilities: {h5_camera: false, h5_video: true}}), {status: 200, headers: {'Content-Type': 'application/json'}}));
     render(<App />);
-    expect(await screen.findByRole('button', {name: '中央相机暂未开放'})).toBeDisabled();
+    expect(await screen.findByRole('button', {name: 'AR 实时识别暂未开放'})).toBeDisabled();
     expect(screen.queryByRole('button', {name: '使用实时相机检查'})).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', {name: '相机'})).not.toBeInTheDocument();
   });
 
   it('keeps legacy video sessions on the supported photo upload experience', async () => {

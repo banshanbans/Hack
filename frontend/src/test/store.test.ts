@@ -1,5 +1,5 @@
 import {beforeEach, describe, expect, it} from 'vitest';
-import {formatMoney, formatRange, readSession, writeSession} from '../store';
+import {formatMoney, formatRange, readAssessmentHistory, readDefaultProfile, removeAssessmentHistory, readSession, writeDefaultProfile, writeSession} from '../store';
 
 describe('session persistence', () => {
   beforeEach(() => localStorage.clear());
@@ -17,6 +17,21 @@ describe('session persistence', () => {
     expect(readSession()).toBeNull();
     writeSession(null);
     expect(localStorage.getItem('anju_h5_session_v2')).toBeNull();
+  });
+
+  it('migrates the current assessment into local history and removes one record without clearing others', () => {
+    writeSession({assessment_id: 'assessment-1', access_token: 'secret'});
+    writeSession({assessment_id: 'assessment-2', access_token: 'other'});
+    expect(readAssessmentHistory().map(item => item.assessment_id)).toEqual(['assessment-2', 'assessment-1']);
+    expect(removeAssessmentHistory('assessment-1').map(item => item.assessment_id)).toEqual(['assessment-2']);
+  });
+
+  it('stores a validated default profile independently from assessment snapshots', () => {
+    const profile = {mobility: 'cane', fall_history: 'once', living_status: 'alone'} as const;
+    writeDefaultProfile(profile);
+    expect(readDefaultProfile()).toEqual(profile);
+    localStorage.setItem('anju_h5_default_profile_v1', JSON.stringify({mobility: 'unknown'}));
+    expect(readDefaultProfile()).toBeNull();
   });
 });
 

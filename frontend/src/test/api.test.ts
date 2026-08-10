@@ -27,6 +27,23 @@ describe('API session recovery', () => {
     expect(friendlyError({code: 'provider_capacity_busy', message: 'internal'})).toBe('当前实时检查较多，正在等待下一次画面');
   });
 
+  it('drops only an expired historical credential without invalidating the active assessment', async () => {
+    localStorage.setItem('anju_h5_session_v2', JSON.stringify({assessment_id: 'active', access_token: 'active-token'}));
+    localStorage.setItem('anju_h5_assessment_history_v1', JSON.stringify([
+      {assessment_id: 'active', access_token: 'active-token', created_at: '2026-08-10T00:00:00Z', last_opened_at: '2026-08-10T00:00:00Z'},
+      {assessment_id: 'stale', access_token: 'old-token', created_at: '2026-08-09T00:00:00Z', last_opened_at: '2026-08-09T00:00:00Z'},
+    ]));
+    const invalidated = vi.fn();
+    window.addEventListener(SESSION_INVALIDATED_EVENT, invalidated, {once: true});
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({code: 'assessment_access_denied', message: '失效'}), {status: 404, headers: {'Content-Type': 'application/json'}}));
+
+    await expect(api.getAssessmentFor({assessment_id: 'stale', access_token: 'old-token'})).rejects.toMatchObject({code: 'assessment_access_denied'});
+    expect(JSON.parse(localStorage.getItem('anju_h5_session_v2') || '{}')).toMatchObject({assessment_id: 'active'});
+    expect(JSON.parse(localStorage.getItem('anju_h5_assessment_history_v1') || '[]')).toHaveLength(1);
+    expect(invalidated).not.toHaveBeenCalled();
+    window.removeEventListener(SESSION_INVALIDATED_EVENT, invalidated);
+  });
+
   it('uses authenticated room-level renovation preview contracts', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({preview_id: 'preview-1'}));
     await api.createRenovationPreview('room-1', 'media-1');

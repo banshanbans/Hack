@@ -8,6 +8,11 @@ export interface SessionState {
   last_route?: string;
 }
 
+export interface AssessmentHistoryEntry extends SessionState {
+  created_at: string;
+  last_opened_at: string;
+}
+
 export interface ElderProfile {
   mobility: 'normal' | 'limited' | 'cane' | 'walker' | 'wheelchair';
   fall_history: 'none' | 'once' | 'multiple';
@@ -75,6 +80,8 @@ export interface Assessment {
   rooms: RoomAssessment[];
   rule_set_version: string;
   price_rule_version: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface BBoxRegion {
@@ -309,6 +316,7 @@ export interface ServerCapabilities {
   voice_advisor?: boolean;
   rtc_video_advisor?: boolean;
   renovation_preview?: boolean;
+  knowledge_advisor?: boolean;
 }
 
 export interface CameraSuggestion {
@@ -467,4 +475,28 @@ export interface AdvisorBootstrap {
   rtc: AdvisorRTCConfig;
   events?: AdvisorEventConfig;
   prompt_version: string;
+}
+
+export interface KnowledgeAdvisorTurn {
+  turn_id: string;
+  role: 'user' | 'assistant';
+  kind: 'welcome' | 'text' | 'voice';
+  text: string;
+  status: 'final' | 'failed';
+  suggested_questions: string[];
+  provider_event_id?: string | null;
+  created_at: string;
+}
+
+export interface KnowledgeAdvisorBootstrap {
+  session_id: string;
+  access_token?: string;
+  expires_at: string;
+  welcome_title: string;
+  welcome_turn?: KnowledgeAdvisorTurn;
+  turns: KnowledgeAdvisorTurn[];
+  quick_prompts: string[];
+  knowledge_version: string;
+  prompt_version: string;
+  rtc: AdvisorRTCConfig;
 }

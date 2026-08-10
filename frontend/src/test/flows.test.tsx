@@ -173,12 +173,12 @@ describe('recoverable product states', () => {
 
   it('saves profile edits from My and returns to My instead of entering the check flow', async () => {
     restoreAt('/my');
+    localStorage.setItem('anju_h5_default_profile_v1', JSON.stringify({mobility: 'cane', fall_history: 'once', living_status: 'alone'}));
     const assessment = {assessment_id: 'a-1', rooms: [], profile: {mobility: 'cane', fall_history: 'once', living_status: 'alone'}};
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
       if (url.endsWith('/health')) return json({analysis: 'ark'});
       if (url.endsWith('/api/v2/assessments/a-1')) return json(assessment);
-      if (url.endsWith('/profile') && init?.method === 'PUT') return json({mobility: 'normal', fall_history: 'once', living_status: 'alone'});
       if (url.endsWith('/report')) return json({status: 'in_progress', checked_room_count: 0, planned_room_count: 0, coverage_percent: 0, score_title: '当前已检查区域安全参考分', assessed_area_score: null, household_score: null, rooms: [], selected_items: [], budget: {currency: 'CNY', total_min: 0, total_max: 0, material_min: 0, material_max: 0, labor_min: 0, labor_max: 0, unknown_items: []}, projected_score: null, price_disclaimer: '仅供参考'});
       return json({code: 'not_found', message: 'not found'}, 404);
     });
@@ -188,6 +188,7 @@ describe('recoverable product states', () => {
     fireEvent.click(await screen.findByRole('button', {name: '行走基本正常'}));
     fireEvent.click(screen.getByRole('button', {name: /^保存$/}));
     await waitFor(() => expect(window.location.hash).toBe('#/my'));
+    expect(JSON.parse(localStorage.getItem('anju_h5_default_profile_v1') || '{}')).toMatchObject({mobility: 'normal'});
   });
 
   it('opens score details in a bottom sheet and keeps the persistent tabs', async () => {
@@ -320,7 +321,7 @@ describe('recoverable product states', () => {
       return json({code: 'not_found', message: 'not found'}, 404);
     });
     render(<App />);
-    fireEvent.click(await screen.findByRole('button', {name: '中央相机'}));
+    fireEvent.click(await screen.findByRole('button', {name: 'AR 实时识别'}));
     const dialog = screen.getByRole('dialog', {name: '开始家庭实时检查'});
     expect(dialog).toBeVisible();
     expect(dialog).toHaveTextContent('iPhone App 会调用原生扫描');

@@ -123,9 +123,7 @@ button:focus-visible, input:focus-visible {
 }
 
 .brand-lockup h1 {
-  display: flex;
-  align-items: baseline;
-  gap: .95vw;
+  display: block;
   margin: 0;
   color: #f7f7f8;
   font-size: clamp(30px, 4.28vw, 82px);
@@ -135,15 +133,22 @@ button:focus-visible, input:focus-visible {
   text-shadow: 0 3px 34px rgba(255,255,255,.07);
 }
 
+.brand-lockup h1 span {
+  white-space: nowrap;
+}
+
 .brand-lockup h1 small {
+  display: block;
+  margin-top: .82vw;
   color: rgba(245,245,247,.84);
-  font-size: .29em;
+  font-size: .235em;
   font-weight: 470;
-  letter-spacing: .22em;
+  line-height: 1;
+  letter-spacing: .26em;
 }
 
 .brand-tagline {
-  margin: 1.62vw 0 0;
+  margin: 1.42vw 0 0;
   color: rgba(245,245,247,.92);
   font-size: clamp(14px, 1.38vw, 27px);
   font-weight: 420;

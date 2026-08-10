@@ -94,6 +94,33 @@ class VoiceProviderTests(unittest.TestCase):
         })
         self.assertIn("风险等级", llm["SystemMessages"][-1])
 
+    def test_knowledge_voice_removes_vision_and_write_tools(self) -> None:
+        environment = {
+            "ANJU_ENABLE_VOICE_ADVISOR": "1",
+            "ANJU_VOLC_RTC_APP_ID": "123456789012345678901234",
+            "ANJU_VOLC_RTC_APP_KEY": "key",
+            "ANJU_VOLC_ACCESS_KEY": "ak",
+            "ANJU_VOLC_SECRET_KEY": "sk",
+            "ANJU_VOLC_VOICE_CONFIG_JSON": json.dumps({
+                "Config": {
+                    "LLMConfig": {"VisionConfig": {"Enable": True}, "Tools": [{"name": "write"}]},
+                    "FunctionCallingConfig": {"ServerMessageUrl": "https://example.test"},
+                },
+            }),
+        }
+        with patch.dict(os.environ, environment, clear=True), patch.object(
+            VolcengineVoiceProvider, "_call", return_value={"Result": "ok"},
+        ) as request:
+            VolcengineVoiceProvider().start(
+                "knowledge-session", "你好", "受控知识", advisor_mode="knowledge",
+            )
+        _, body = request.call_args.args
+        llm = body["Config"]["LLMConfig"]
+        self.assertNotIn("VisionConfig", llm)
+        self.assertEqual(llm["Tools"], [])
+        self.assertNotIn("FunctionCallingConfig", body["Config"])
+        self.assertIn("不得生成安全分", llm["SystemMessages"][-1])
+
     def test_function_result_uses_provider_tool_call_envelope(self) -> None:
         with patch.object(VolcengineVoiceProvider, "_call", return_value={"Result": "ok"}) as request:
             VolcengineVoiceProvider().update_function_result(

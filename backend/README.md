@@ -67,6 +67,9 @@ ANJU_MOCK_ANALYSIS=1 .venv/bin/python -m backend.app.server
 - `ANJU_ENABLE_H5_VIDEO`：历史兼容开关。2026-08-06 起本地视频关键帧能力已取消，必须保持关闭，不作为可启用产品能力。
 - `ANJU_ENABLE_H5_CAMERA` / `ANJU_ENABLE_IOS_HOME_CAMERA`：H5 和 iPhone 居家实时相机开关，均默认关闭，便于分阶段发布。
 - `ANJU_ENABLE_VOICE_ADVISOR`：房间级 AI 适老顾问实时语音开关，默认关闭；文字顾问不依赖此开关。
+- `ANJU_ENABLE_KNOWLEDGE_ADVISOR`：首页通用 AI 适老顾问开关，默认关闭。匿名对话使用独立 token 和数据表，按最后活动后 24 小时滑动过期，不创建 assessment/room。
+- `ANJU_KNOWLEDGE_ADVISOR_MODEL`：通用知识问答的可选模型覆盖；未设置时复用当前 Ark/OpenAI 正式分析模型。
+- `ANJU_KNOWLEDGE_ADVISOR_TIMEOUT_SECONDS`：通用文字问答超时，默认 30 秒。正式失败不回退固定答案。
 - `ANJU_ENABLE_RTC_VIDEO_ADVISOR`：扫描页 RTC 视频与视觉 Function Calling 开关，默认关闭；关闭后继续使用 RTC 音频和 HTTP 临时检查。
 - `ANJU_ADVISOR_MAX_ACTIVE_RTC`：全局 RTC 席位上限，默认并强制最大为 8，为 10 路 TTS 并发保留 2 路余量。
 - `ANJU_ADVISOR_MAX_QUEUED`：有效 FIFO 排队票据上限，默认 50；超过后返回 `429 advisor_capacity_busy`。

@@ -15,7 +15,8 @@ import threading
 import uuid
 
 from .advisor import AdvisorService
-from .providers import ProviderError, RenovationProvider, VisionProvider, provider_from_environment, renovation_provider_from_environment
+from .knowledge_advisor import KnowledgeAdvisorService
+from .providers import KnowledgeAdvisorProvider, ProviderError, RenovationProvider, VisionProvider, provider_from_environment, renovation_provider_from_environment
 from .providers.renovation import RENOVATION_PROMPT_VERSION
 from .repositories import SQLiteRepository, decode_json_row, token_hash, utc_now
 from .rules import RuleStore
@@ -54,6 +55,7 @@ class AssessmentService:
         rules: RuleStore | None = None,
         provider: VisionProvider | None = None,
         renovation_provider: RenovationProvider | None = None,
+        knowledge_advisor_provider: KnowledgeAdvisorProvider | None = None,
     ) -> None:
         self.repository = repository
         self.media_root = media_root
@@ -70,11 +72,13 @@ class AssessmentService:
         self._turbo_slots = threading.BoundedSemaphore(self.turbo_max_concurrency)
         self._pro_slots = threading.BoundedSemaphore(self.pro_max_concurrency)
         self.advisor = AdvisorService(self)
+        self.knowledge_advisor = KnowledgeAdvisorService(self, repository, knowledge_advisor_provider)
         self._recover_interrupted_analyses()
         self._recover_interrupted_renovation_previews()
         self.advisor.recover_interrupted_confirmations()
 
     def close(self) -> None:
+        self.knowledge_advisor.close()
         self._executor.shutdown(wait=False, cancel_futures=True)
 
     @staticmethod

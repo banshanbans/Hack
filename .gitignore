@@ -21,6 +21,9 @@ frontend/dist/
 hero-demo/node_modules/
 hero-demo/dist/
 hero-demo/output/
+motion-demo/node_modules/
+motion-demo/dist/
+motion-demo/out/
 frontend/coverage/
 *.tsbuildinfo
 output/playwright/

@@ -266,6 +266,73 @@ class SQLiteRepository:
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_advisor_rtc_one_live_client
                     ON advisor_rtc_queue(session_id,client_instance_id)
                     WHERE status IN ('queued','granted','active','draining');
+                CREATE TABLE IF NOT EXISTS knowledge_advisor_sessions (
+                    id TEXT PRIMARY KEY,
+                    token_hash TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    provider_task_id TEXT,
+                    rtc_room_id TEXT,
+                    rtc_user_id TEXT,
+                    rtc_bot_user_id TEXT,
+                    client_instance_id TEXT,
+                    device_lease_expires_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    last_activity_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_knowledge_advisor_sessions_expiry
+                    ON knowledge_advisor_sessions(status,expires_at);
+                CREATE TABLE IF NOT EXISTS knowledge_advisor_turns (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL REFERENCES knowledge_advisor_sessions(id) ON DELETE CASCADE,
+                    role TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    suggested_questions_json TEXT NOT NULL DEFAULT '[]',
+                    provider_event_id TEXT,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_knowledge_advisor_turns_session_created
+                    ON knowledge_advisor_turns(session_id,created_at,id);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_advisor_turn_event
+                    ON knowledge_advisor_turns(session_id,provider_event_id)
+                    WHERE provider_event_id IS NOT NULL;
+                CREATE TABLE IF NOT EXISTS knowledge_advisor_provider_calls (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL REFERENCES knowledge_advisor_sessions(id) ON DELETE CASCADE,
+                    provider TEXT,
+                    model TEXT,
+                    prompt_version TEXT NOT NULL,
+                    latency_ms INTEGER,
+                    schema_result TEXT NOT NULL,
+                    error_type TEXT,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_knowledge_advisor_calls_session_created
+                    ON knowledge_advisor_provider_calls(session_id,created_at);
+                CREATE TABLE IF NOT EXISTS knowledge_advisor_rtc_queue (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL REFERENCES knowledge_advisor_sessions(id) ON DELETE CASCADE,
+                    client_instance_id TEXT NOT NULL,
+                    mode TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    enqueued_at TEXT NOT NULL,
+                    granted_at TEXT,
+                    activated_at TEXT,
+                    heartbeat_at TEXT,
+                    lease_expires_at TEXT,
+                    expires_at TEXT NOT NULL,
+                    released_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_knowledge_advisor_rtc_fifo
+                    ON knowledge_advisor_rtc_queue(status,enqueued_at,id);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_advisor_rtc_live_client
+                    ON knowledge_advisor_rtc_queue(session_id,client_instance_id)
+                    WHERE status IN ('queued','granted','active','draining');
                 INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, datetime('now'));
             """)
             self._add_column(connection, "media", "source_kind", "TEXT NOT NULL DEFAULT 'photo'")
@@ -296,6 +363,7 @@ class SQLiteRepository:
             connection.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (4, datetime('now'))")
             connection.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (5, datetime('now'))")
             connection.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (6, datetime('now'))")
+            connection.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (7, datetime('now'))")
 
     @staticmethod
     def _add_column(connection: sqlite3.Connection, table: str, name: str, declaration: str) -> None:

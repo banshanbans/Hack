@@ -1,0 +1,29 @@
+{
+  "name": "elder-friendly-home-motion-demo",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "studio": "remotion studio src/index.ts --port 3010",
+    "preview": "vite --host 0.0.0.0 --port 3010",
+    "typecheck": "tsc --noEmit --pretty false",
+    "test": "vitest run",
+    "bundle": "remotion bundle src/index.ts --out-dir dist",
+    "render": "remotion render src/index.ts FastProductDemo out/fast-product-demo.mp4 --codec h264 --crf 18 --pixel-format yuv420p",
+    "render:frame": "remotion still src/index.ts FastProductDemo out/fast-product-demo-frame.png --frame 300"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.507",
+    "@remotion/player": "4.0.507",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "remotion": "4.0.507"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "typescript": "5.9.3",
+    "vite": "8.1.5",
+    "vitest": "4.1.10"
+  }
+}

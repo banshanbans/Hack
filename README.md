@@ -12,6 +12,7 @@
 - 支持 RoomPlan/LiDAR 时使用 `spatial_ar`；其他 ARKit 设备降级为 `camera_2d`，不生成虚假空间锚点。
 - 未填家人档案时可先扫描，正式分析前前后端均强制补齐三项档案。
 - 不实现账号、注册、跨设备或 App 与外部 Safari 的 assessment 同步。
+- H5 在当前浏览器本机保存多次 assessment 凭据；“改造方案”集中展示历史风险、方案、预算与改造效果图，清除浏览器数据后不可恢复。
 
 历史游园会 fair API、Zone DTO、规则、方案、价格和原生报告入口已移除。旧 App 调用 `/api/v2/fair-scans` 直接得到 404；已有数据库的历史表不做破坏性 DROP。
 
@@ -20,6 +21,7 @@
 - FastAPI/Uvicorn v2 Assessment API、SQLite 持久化与 React/TypeScript H5；
 - 六类房间、1—6 张照片、质量检查、二维风险区域、确定性评分与独立覆盖度；
 - A/B/C 整改方案、结构化价格和预算清单；
+- 用户主动触发的房间级 AI 改造效果图、前后对比、细节定位与报告保存；
 - H5 与 iOS 共用 `anju_home_camera_discovery_v1` 居家实时发现配置；
 - iOS Bridge v1：`capture_photo`、`start_live_scan`、`cancel_native_capture`；
 - 扫描页顾问共用房间级对话历史；H5 将现有浏览器相机 Track 发布到火山 Web RTC，iOS 将 ARFrame 作为外部 NV12 视频推入锁定的 `VolcEngineRTC/Core`；

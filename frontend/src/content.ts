@@ -55,7 +55,7 @@ export const ONBOARDING_COPY = {
   steps: {
     start: {
       title: '开始一次居家安全检查',
-      body: '可以选择 AR 实时识别，也可以上传家中照片。照片路线会先了解家人情况、选择房间，再开始检查。',
+      body: '首页可以直接选择 AR 实时识别或上传家中照片，也可以随时问问 AI 助手。照片路线会先了解家人情况、选择房间，再开始检查。',
     },
     profile: {
       title: '先了解家人情况',
@@ -192,3 +192,17 @@ export const ERROR_COPY: Record<string, string> = {
   analysis_start_failed: '暂时无法开始分析，请稍后重试',
   analysis_failed: '分析没有完成，请重新尝试',
 };
+
+export const KNOWLEDGE_ADVISOR_COPY = {
+  title: 'AI 适老顾问',
+  welcomeTitle: '我是长者友好家AI居家顾问，有任何适老化改造问题都可以问我',
+  introduction: '我可以帮你了解居家环境中的行动风险，并把适老化改造建议讲得更清楚。',
+  capabilities: '你可以问我扶手、防滑、照明、通行动线等适老化知识；如果想判断自己家里的具体情况，我会引导你上传照片或开始检查。',
+  quickPromptGroups: [
+    {title: '适老科普', questions: ['卫生间为什么容易跌倒？', '夜间照明怎样更安全？', '家中哪些位置最需要扶手？']},
+    {title: '改造建议', questions: ['卫生间扶手怎么选？', '卧室起夜动线怎么改？', '防滑地面有哪些低成本方案？']},
+  ],
+  inputPlaceholder: '输入你想了解的适老化问题…',
+  disclaimer: 'AI 回答用于居家改造知识参考，不替代医疗诊断、工程验收或现场施工评估。',
+  privacy: '匿名对话只在本设备恢复，最后活动 24 小时后过期。只保存文字问答和最终字幕，不保存原始音频。',
+} as const;

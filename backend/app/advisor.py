@@ -539,6 +539,10 @@ class AdvisorService:
             "SELECT COUNT(*) AS value FROM advisor_rtc_queue "
             "WHERE status IN ('granted','active','draining')",
         ).fetchone()["value"])
+        occupied += int(connection.execute(
+            "SELECT COUNT(*) AS value FROM knowledge_advisor_rtc_queue "
+            "WHERE status IN ('granted','active','draining')",
+        ).fetchone()["value"])
         slots = max(0, maximum - occupied)
         if slots == 0:
             return

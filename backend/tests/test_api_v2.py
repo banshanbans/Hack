@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, patch
 
 from backend.app.assessment_service import AssessmentService
 from backend.app.asgi import MAX_BODY_BYTES, create_app
-from backend.app.providers import MockRenovationProvider, MockVisionProvider, ProviderError
+from backend.app.providers import MockKnowledgeAdvisorProvider, MockRenovationProvider, MockVisionProvider, ProviderError
 from backend.app.repositories import SQLiteRepository
 
 
@@ -25,6 +25,7 @@ class V2APITests(unittest.TestCase):
             "ANJU_ENABLE_H5_VIDEO": "1", "ANJU_ENABLE_H5_CAMERA": "1",
             "ANJU_ENABLE_IOS_HOME_CAMERA": "1", "ANJU_ENABLE_RENOVATION_PREVIEW": "1",
             "ANJU_ENABLE_VOICE_ADVISOR": "0", "ANJU_ENABLE_RTC_VIDEO_ADVISOR": "0",
+            "ANJU_ENABLE_KNOWLEDGE_ADVISOR": "1",
         })
         self.feature_flags.start()
         self.temp = tempfile.TemporaryDirectory()
@@ -34,7 +35,10 @@ class V2APITests(unittest.TestCase):
         (static / "index.html").write_text("<!doctype html><title>长者友好家</title>", encoding="utf-8")
         (static / "assets").mkdir()
         (static / "assets" / "app.js").write_text("export {};", encoding="utf-8")
-        self.service = AssessmentService(SQLiteRepository(root / "api.db"), root / "media", provider=MockVisionProvider(), renovation_provider=MockRenovationProvider())
+        self.service = AssessmentService(
+            SQLiteRepository(root / "api.db"), root / "media", provider=MockVisionProvider(),
+            renovation_provider=MockRenovationProvider(), knowledge_advisor_provider=MockKnowledgeAdvisorProvider(),
+        )
         self.client_context = TestClient(create_app(assessment_service=self.service, static_root=static))
         self.client = self.client_context.__enter__()
 
@@ -94,6 +98,49 @@ class V2APITests(unittest.TestCase):
             "assessment_id": assessment_id, "token": token, "room_id": room_id,
             "risk_id": risk_id, "solution_id": solution_id, "session_id": session_id,
         }
+
+    def test_knowledge_advisor_anonymous_lifecycle_and_independent_token(self) -> None:
+        health = self.client.get("/health").json()
+        self.assertTrue(health["capabilities"]["knowledge_advisor"])
+        created_response = self.client.post("/api/v2/knowledge-advisor/sessions")
+        self.assertEqual(created_response.status_code, 201)
+        created = created_response.json()
+        session_id = created["session_id"]
+        access_token = created["access_token"]
+        self.assertEqual(len(created["quick_prompts"]), 6)
+        self.assertEqual(created["welcome_title"], "我是长者友好家AI居家顾问，有任何适老化改造问题都可以问我")
+
+        denied = self.client.get(f"/api/v2/knowledge-advisor/sessions/{session_id}")
+        self.assertEqual(denied.status_code, 401)
+        restored = self.client.get(
+            f"/api/v2/knowledge-advisor/sessions/{session_id}", headers=self.auth(access_token),
+        )
+        self.assertEqual(restored.status_code, 200)
+        message = self.client.post(
+            f"/api/v2/knowledge-advisor/sessions/{session_id}/messages",
+            headers=self.auth(access_token), json={"text": "卫生间扶手怎么选？"},
+        )
+        self.assertEqual(message.status_code, 200)
+        self.assertIn("可靠基层", message.json()["assistant_turn"]["text"])
+        transcript_payload = {"role": "assistant", "text": "这是最终语音字幕", "provider_event_id": "voice-event-1"}
+        first = self.client.post(
+            f"/api/v2/knowledge-advisor/sessions/{session_id}/transcripts",
+            headers=self.auth(access_token), json=transcript_payload,
+        )
+        second = self.client.post(
+            f"/api/v2/knowledge-advisor/sessions/{session_id}/transcripts",
+            headers=self.auth(access_token), json=transcript_payload,
+        )
+        self.assertEqual(first.json()["turn_id"], second.json()["turn_id"])
+        self.assertEqual(self.service.repository.fetchone("SELECT COUNT(*) AS value FROM assessments")["value"], 0)
+
+        deleted = self.client.delete(
+            f"/api/v2/knowledge-advisor/sessions/{session_id}", headers=self.auth(access_token),
+        )
+        self.assertEqual(deleted.status_code, 204)
+        self.assertIsNone(self.service.repository.fetchone(
+            "SELECT id FROM knowledge_advisor_sessions WHERE id=?", (session_id,),
+        ))
 
     def test_static_health_v1_and_authenticated_v2(self) -> None:
         health = self.client.get("/health")

@@ -201,10 +201,10 @@ function definitionFor(state: OnboardingState, pathname: string): OverlayDefinit
   else if (pathname === '/report') phase = 'report';
   if (!phase || state.phase_status[phase]) return null;
   const step = STEP_BY_PHASE[phase];
-  if (phase === 'home') return {...ONBOARDING_COPY.steps.start, phase, step, targets: [{name: 'home-start'}]};
+  if (phase === 'home') return {...ONBOARDING_COPY.steps.start, phase, step, targets: [{name: 'home-ar-entry'}, {name: 'home-photo-entry'}]};
   if (phase === 'profile') return {...ONBOARDING_COPY.steps.profile, phase, step, targets: [{name: 'profile-form'}, {name: 'profile-save'}]};
   if (phase === 'rooms') return {...ONBOARDING_COPY.steps.rooms, phase, step, targets: [{name: 'room-selection'}]};
-  if (phase === 'capture') return {...ONBOARDING_COPY.steps.capture, phase, step, targets: [{name: 'capture-source'}, {name: 'camera-entry', optional: true}]};
+  if (phase === 'capture') return {...ONBOARDING_COPY.steps.capture, phase, step, targets: [{name: 'capture-source'}]};
   if (phase === 'analyze') return {...ONBOARDING_COPY.steps.analyze, phase, step, targets: [{name: 'capture-analyze'}]};
   if (phase === 'result') return {...ONBOARDING_COPY.steps.result, phase, step, targets: [{name: 'result-overview'}, {name: 'result-risks', optional: true}, {name: 'result-report', optional: true}]};
   if (phase === 'risk') return {...ONBOARDING_COPY.steps.risk, phase, step, targets: [{name: 'risk-solution'}]};

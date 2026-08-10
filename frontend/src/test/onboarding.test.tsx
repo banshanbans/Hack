@@ -21,7 +21,8 @@ describe('versioned onboarding state', () => {
     render(<App />);
 
     expect(await screen.findByRole('dialog', {name: '开始一次居家安全检查'})).toHaveTextContent('第 1 / 5 步');
-    expect(document.querySelectorAll('[data-onboarding-target="home-start"]')).toHaveLength(2);
+    expect(document.querySelectorAll('[data-onboarding-target="home-ar-entry"]')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-onboarding-target="home-photo-entry"]')).toHaveLength(1);
     expect(document.querySelectorAll('.onboarding-outline')).toHaveLength(2);
     fireEvent.click(screen.getByRole('button', {name: '跳过本步'}));
 
@@ -59,7 +60,7 @@ describe('versioned onboarding state', () => {
   });
 
   it('reuses an existing assessment when the guide is restarted', async () => {
-    localStorage.setItem('anju_h5_session_v2', JSON.stringify({assessment_id: 'existing', access_token: 'token', last_route: 'report'}));
+    localStorage.setItem('anju_h5_session_v2', JSON.stringify({assessment_id: 'existing', access_token: 'token', last_route: 'profile'}));
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
       const url = String(input);
       if (url.endsWith('/health')) return json({analysis: 'ark', capabilities: {h5_camera: true}});
@@ -69,13 +70,14 @@ describe('versioned onboarding state', () => {
 
     render(<App />);
     fireEvent.click(await screen.findByRole('button', {name: '上传家中照片'}));
+    fireEvent.click(await screen.findByRole('button', {name: '继续本次检查'}));
 
     await waitFor(() => expect(window.location.hash).toBe('#/profile'));
     expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/v2/assessments'))).toBe(false);
     expect(readOnboardingState()).toMatchObject({phase: 'profile', phase_status: {home: 'completed'}});
   });
 
-  it('restarts from My without deleting the current session', async () => {
+  it('keeps My focused on profile and report sharing without onboarding controls', async () => {
     localStorage.setItem('anju_h5_session_v2', JSON.stringify({assessment_id: 'existing', access_token: 'token', last_route: 'report'}));
     localStorage.setItem(ONBOARDING_STORAGE_KEY, JSON.stringify({...defaultOnboardingState(), status: 'completed', phase: 'report'}));
     window.location.hash = '#/my';
@@ -88,15 +90,12 @@ describe('versioned onboarding state', () => {
     });
 
     render(<App />);
-    fireEvent.click(await screen.findByRole('button', {name: '重新体验新手引导'}));
-
-    await waitFor(() => expect(window.location.hash).toBe('#/home'));
-    expect(readOnboardingState()).toMatchObject({status: 'active', phase: 'home', phase_status: {}});
+    expect(await screen.findByRole('heading', {name: '我的'})).toBeVisible();
+    expect(screen.queryByRole('button', {name: '重新体验新手引导'})).not.toBeInTheDocument();
     expect(JSON.parse(localStorage.getItem('anju_h5_session_v2') || '{}')).toMatchObject({assessment_id: 'existing', access_token: 'token'});
-    expect(await screen.findByRole('dialog', {name: '开始一次居家安全检查'})).toBeVisible();
   });
 
-  it('highlights photo upload and the central camera together in step three', async () => {
+  it('highlights the photo source in the capture phase without a camera tab', async () => {
     localStorage.setItem('anju_h5_session_v2', JSON.stringify({assessment_id: 'a-1', access_token: 'token', last_route: 'upload/room-1'}));
     localStorage.setItem(ONBOARDING_STORAGE_KEY, JSON.stringify({...defaultOnboardingState(), phase: 'capture'}));
     window.location.hash = '#/upload/room-1';
@@ -114,15 +113,11 @@ describe('versioned onboarding state', () => {
     const guide = await screen.findByRole('dialog', {name: '任选一种采集方式'});
     expect(guide).toHaveTextContent('上传 1—3 张清晰照片');
     expect(container.querySelector('[data-onboarding-target="capture-source"]')).not.toBeNull();
-    expect(screen.getByRole('button', {name: '相机'})).toHaveAttribute('data-onboarding-target', 'camera-entry');
-    expect(container.querySelectorAll('.onboarding-outline')).toHaveLength(2);
-
-    fireEvent.click(screen.getByRole('button', {name: '相机'}));
-    expect(await screen.findByRole('dialog', {name: '开始家庭实时检查'})).toBeVisible();
-    expect(screen.queryByRole('dialog', {name: '任选一种采集方式'})).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', {name: '相机'})).not.toBeInTheDocument();
+    expect(container.querySelectorAll('.onboarding-outline')).toHaveLength(1);
   });
 
-  it('falls back to the photo target when the central camera is unavailable', async () => {
+  it('keeps the photo target when realtime camera capability is unavailable', async () => {
     localStorage.setItem('anju_h5_session_v2', JSON.stringify({assessment_id: 'a-1', access_token: 'token'}));
     localStorage.setItem(ONBOARDING_STORAGE_KEY, JSON.stringify({...defaultOnboardingState(), phase: 'capture'}));
     window.location.hash = '#/upload/room-1';
@@ -135,7 +130,7 @@ describe('versioned onboarding state', () => {
 
     const {container} = render(<App />);
     await screen.findByRole('dialog', {name: '任选一种采集方式'});
-    await waitFor(() => expect(screen.getByRole('button', {name: '相机暂未开放'})).toBeDisabled());
+    expect(screen.queryByRole('button', {name: '相机暂未开放'})).not.toBeInTheDocument();
     await waitFor(() => expect(container.querySelectorAll('.onboarding-outline')).toHaveLength(1));
   });
 

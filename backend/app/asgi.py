@@ -67,6 +67,13 @@ ERROR_MESSAGES = {
     "advisor_queue_required": "AI 顾问体验人数较多，正在排队，请稍候。",
     "advisor_queue_expired": "本次排队已失效，请重新排队",
     "advisor_capacity_busy": "当前体验人数较多，请稍后重试",
+    "knowledge_advisor_not_enabled": "AI 助手暂未开放",
+    "knowledge_advisor_access_denied": "没有找到这次对话或访问已失效",
+    "knowledge_advisor_session_not_found": "本次对话已结束，请开始新对话",
+    "knowledge_advisor_session_expired": "本次对话已过期，已为你准备新对话",
+    "knowledge_advisor_message_invalid": "请输入 500 字以内的适老化问题",
+    "knowledge_advisor_message_limit": "本次对话已达到上限，请开始新对话",
+    "knowledge_advisor_request_in_progress": "上一个问题正在回答，请稍候",
     "renovation_preview_not_enabled": "改造效果预览暂未开放",
     "renovation_source_not_found": "没有找到这张原始照片",
     "renovation_source_not_usable": "这张照片不适合生成改造效果，请换一张清晰照片",
@@ -200,6 +207,16 @@ class AdvisorConfirmationDecision(DTO):
     approved: bool
 
 
+class KnowledgeAdvisorMessageCreate(DTO):
+    text: str = Field(min_length=1, max_length=500)
+
+
+class KnowledgeAdvisorTranscriptCreate(DTO):
+    role: str
+    text: str = Field(min_length=1, max_length=800)
+    provider_event_id: str = Field(min_length=1, max_length=120)
+
+
 ModelT = TypeVar("ModelT", bound=DTO)
 
 
@@ -290,6 +307,12 @@ def _authorize(request: Request, assessment_id: str) -> None:
     _service(request).authorize(assessment_id, token)
 
 
+def _authorize_knowledge_advisor(request: Request, session_id: str) -> None:
+    header = request.headers.get("authorization", "")
+    token = header[7:].strip() if header.startswith("Bearer ") else ""
+    _service(request).knowledge_advisor.authorize(session_id, token)
+
+
 def create_app(
     *,
     assessment_service: AssessmentService | None = None,
@@ -373,7 +396,7 @@ def create_app(
         return JSONResponse({"code": "invalid_request", "message": ERROR_MESSAGES["invalid_request"], "request_id": request.state.request_id}, status_code=400)
 
     @application.get("/health")
-    def health() -> dict[str, Any]:
+    def health(request: Request) -> dict[str, Any]:
         return {
             "status": "ok", "analysis": _analysis_mode(), "version": "v2",
             "capabilities": {
@@ -383,6 +406,7 @@ def create_app(
                 "voice_advisor": VolcengineVoiceProvider.configured(),
                 "rtc_video_advisor": VolcengineVoiceProvider.video_healthy(),
                 "renovation_preview": os.environ.get("ANJU_ENABLE_RENOVATION_PREVIEW", "0") == "1",
+                "knowledge_advisor": _service(request).knowledge_advisor.available(),
             },
         }
 
@@ -437,6 +461,74 @@ def create_app(
     def v1_report(token: str, request: Request) -> Any:
         report = _v1(request).shared_report(token)
         return report or JSONResponse({"message": "链接已失效"}, status_code=404)
+
+    @application.post("/api/v2/knowledge-advisor/sessions", status_code=201)
+    def create_knowledge_advisor_session(request: Request) -> dict[str, Any]:
+        return _service(request).knowledge_advisor.create_session()
+
+    @application.get("/api/v2/knowledge-advisor/sessions/{session_id}")
+    def get_knowledge_advisor_session(session_id: str, request: Request) -> dict[str, Any]:
+        _authorize_knowledge_advisor(request, session_id)
+        return _service(request).knowledge_advisor.get_session(session_id)
+
+    @application.post("/api/v2/knowledge-advisor/sessions/{session_id}/messages")
+    async def knowledge_advisor_message(session_id: str, request: Request) -> dict[str, Any]:
+        _authorize_knowledge_advisor(request, session_id)
+        payload = await _read_model(request, KnowledgeAdvisorMessageCreate)
+        return await run_in_threadpool(_service(request).knowledge_advisor.add_message, session_id, payload.text)
+
+    @application.post("/api/v2/knowledge-advisor/sessions/{session_id}/transcripts")
+    async def knowledge_advisor_transcript(session_id: str, request: Request) -> dict[str, Any]:
+        _authorize_knowledge_advisor(request, session_id)
+        payload = await _read_model(request, KnowledgeAdvisorTranscriptCreate)
+        return _service(request).knowledge_advisor.add_transcript(
+            session_id, payload.role, payload.text, payload.provider_event_id,
+        )
+
+    @application.delete("/api/v2/knowledge-advisor/sessions/{session_id}", status_code=204)
+    def delete_knowledge_advisor_session(session_id: str, request: Request) -> Response:
+        _authorize_knowledge_advisor(request, session_id)
+        _service(request).knowledge_advisor.delete_session(session_id)
+        return Response(status_code=204)
+
+    @application.post("/api/v2/knowledge-advisor/sessions/{session_id}/rtc-queue", status_code=201)
+    async def join_knowledge_advisor_rtc_queue(session_id: str, request: Request) -> dict[str, Any]:
+        _authorize_knowledge_advisor(request, session_id)
+        payload = await _read_model(request, AdvisorRTCQueueCreate)
+        return _service(request).knowledge_advisor.enqueue_rtc(
+            session_id, payload.client_instance_id, payload.mode,
+        )
+
+    @application.get("/api/v2/knowledge-advisor/sessions/{session_id}/rtc-queue/{ticket_id}")
+    def knowledge_advisor_rtc_queue_status(session_id: str, ticket_id: str, request: Request) -> dict[str, Any]:
+        _authorize_knowledge_advisor(request, session_id)
+        return _service(request).knowledge_advisor.queue_status(
+            session_id, ticket_id, request.headers.get("X-Advisor-Client-ID", ""),
+        )
+
+    @application.post("/api/v2/knowledge-advisor/sessions/{session_id}/rtc-queue/{ticket_id}/heartbeat")
+    def heartbeat_knowledge_advisor_rtc_queue(session_id: str, ticket_id: str, request: Request) -> dict[str, Any]:
+        _authorize_knowledge_advisor(request, session_id)
+        return _service(request).knowledge_advisor.heartbeat_queue(
+            session_id, ticket_id, request.headers.get("X-Advisor-Client-ID", ""),
+        )
+
+    @application.delete("/api/v2/knowledge-advisor/sessions/{session_id}/rtc-queue/{ticket_id}", status_code=204)
+    def cancel_knowledge_advisor_rtc_queue(session_id: str, ticket_id: str, request: Request) -> Response:
+        _authorize_knowledge_advisor(request, session_id)
+        _service(request).knowledge_advisor.cancel_queue(
+            session_id, ticket_id, request.headers.get("X-Advisor-Client-ID", ""),
+        )
+        return Response(status_code=204)
+
+    @application.post("/api/v2/knowledge-advisor/sessions/{session_id}/voice")
+    def start_knowledge_advisor_voice(session_id: str, request: Request) -> dict[str, Any]:
+        _authorize_knowledge_advisor(request, session_id)
+        return _service(request).knowledge_advisor.start_voice(
+            session_id,
+            request.headers.get("X-Advisor-Client-ID", ""),
+            request.headers.get("X-Advisor-Queue-Ticket", ""),
+        )
 
     @application.post("/api/v2/assessments", status_code=201)
     async def create_assessment(request: Request) -> dict[str, Any]:

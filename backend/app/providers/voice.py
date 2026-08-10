@@ -132,6 +132,7 @@ class VolcengineVoiceProvider:
     def start(
         self, session_id: str, welcome: str, system_context: str,
         *, video_enabled: bool = False, tools: list[dict] | None = None,
+        advisor_mode: str = "room",
     ) -> VoiceConnection:
         if not self.configured():
             raise VoiceProviderError("voice_not_configured")
@@ -166,19 +167,32 @@ class VolcengineVoiceProvider:
         llm = config.setdefault("LLMConfig", {})
         if not isinstance(llm, dict):
             raise VoiceProviderError("voice_config_invalid")
-        safety = (
-            "你是“长者友好家”的 AI 适老顾问。只根据随附的结构化检查上下文回答。临时建议不得称为正式风险，"
-            "不得编造照度、尺寸、价格、工期、墙体、防水或管线事实。价格只能复述上下文中的规则区间；"
-            "选择方案或开始分析必须提示用户在页面确认。回答简短、温和、适合语音播报。"
-            "扫描时一次只给一个动作，主动语音指引之间至少间隔8秒；"
-            "用户正在说话、画面不清、快速移动或上下文不明确时不要主动播报，先请用户停稳或靠近。"
-            "只有收到带 inspection_id 的显式稳定画面时，才可调用 record_camera_suggestions；"
-            "工具参数不得包含风险等级、评分、价格、工期或测量值。\n" + system_context
-        )
+        if advisor_mode == "knowledge":
+            safety = (
+                "你是“长者友好家”的 AI 适老顾问，只回答居家适老化知识和产品能力。"
+                "不得仅凭文字判断用户家中存在正式风险，不得生成安全分、风险等级、自由价格或确定施工结论。"
+                "医疗、紧急情况、承重、防水、电气和结构问题建议联系对应专业人员。"
+                "如果用户想判断自己家的具体情况，说明通用注意事项并引导上传照片或开始实时检查。"
+                "不使用相机、图片或写操作工具。回答简短、温和、适合语音播报。\n" + system_context
+            )
+        else:
+            safety = (
+                "你是“长者友好家”的 AI 适老顾问。只根据随附的结构化检查上下文回答。临时建议不得称为正式风险，"
+                "不得编造照度、尺寸、价格、工期、墙体、防水或管线事实。价格只能复述上下文中的规则区间；"
+                "选择方案或开始分析必须提示用户在页面确认。回答简短、温和、适合语音播报。"
+                "扫描时一次只给一个动作，主动语音指引之间至少间隔8秒；"
+                "用户正在说话、画面不清、快速移动或上下文不明确时不要主动播报，先请用户停稳或靠近。"
+                "只有收到带 inspection_id 的显式稳定画面时，才可调用 record_camera_suggestions；"
+                "工具参数不得包含风险等级、评分、价格、工期或测量值。\n" + system_context
+            )
         messages = llm.get("SystemMessages")
         if not isinstance(messages, list):
             messages = []
         llm["SystemMessages"] = [*messages, safety]
+        if advisor_mode == "knowledge":
+            llm.pop("VisionConfig", None)
+            llm["Tools"] = []
+            config.pop("FunctionCallingConfig", None)
         if video_enabled:
             vision = llm.setdefault("VisionConfig", {})
             if not isinstance(vision, dict):

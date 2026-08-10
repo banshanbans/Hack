@@ -1,4 +1,4 @@
-import {readSession, SESSION_INVALIDATED_EVENT, writeSession} from './store';
+import {readSession, removeAssessmentHistory, SESSION_INVALIDATED_EVENT, writeSession} from './store';
 import type {
   AnalysisStatus,
   Assessment,
@@ -21,12 +21,16 @@ import type {
   MediaAsset,
   PreparedCameraInspection,
   AdvisorRTCQueueTicket,
+  AdvisorRTCConfig,
   AdvisorEventConfig,
+  KnowledgeAdvisorBootstrap,
+  KnowledgeAdvisorTurn,
+  SessionState,
 } from './types';
 
-async function request<T>(path: string, options: RequestInit = {}, authenticated = true): Promise<T> {
+async function request<T>(path: string, options: RequestInit = {}, authenticated = true, credentials?: SessionState | null, invalidateActive = true): Promise<T> {
   const headers = new Headers(options.headers || {});
-  const session = readSession();
+  const session = credentials === undefined ? readSession() : credentials;
   if (authenticated && session?.access_token) headers.set('Authorization', `Bearer ${session.access_token}`);
   const response = await fetch(path, {...options, headers});
   if (response.status === 204) return undefined as T;
@@ -36,13 +40,24 @@ async function request<T>(path: string, options: RequestInit = {}, authenticated
     const error = new Error(data?.message || '网络请求没有完成') as Error & {code?: string; status?: number};
     error.code = data?.code || `http_${response.status}`;
     error.status = response.status;
-    if (authenticated && error.code === 'assessment_access_denied') {
+    if (authenticated && error.code === 'assessment_access_denied' && session) {
+      removeAssessmentHistory(session.assessment_id);
+    }
+    if (authenticated && error.code === 'assessment_access_denied' && invalidateActive) {
       writeSession(null);
       window.dispatchEvent(new Event(SESSION_INVALIDATED_EVENT));
     }
     throw error;
   }
   return data as T;
+}
+
+function assessmentPathFor(session: SessionState, suffix = ''): string {
+  return `/api/v2/assessments/${session.assessment_id}${suffix}`;
+}
+
+function requestFor<T>(session: SessionState, suffix = '', options: RequestInit = {}): Promise<T> {
+  return request<T>(assessmentPathFor(session, suffix), options, true, session, false);
 }
 
 function json(method: string, body?: unknown): RequestInit {
@@ -55,8 +70,24 @@ function assessmentPath(suffix = ''): string {
   return `/api/v2/assessments/${session.assessment_id}${suffix}`;
 }
 
+function knowledgeAdvisorRequest<T>(path: string, accessToken: string, options: RequestInit = {}): Promise<T> {
+  const headers = new Headers(options.headers || {});
+  headers.set('Authorization', `Bearer ${accessToken}`);
+  return request<T>(path, {...options, headers}, false);
+}
+
 export const api = {
   health: () => request<{status: string; analysis: string; version: string; capabilities?: ServerCapabilities}>('/health', {}, false),
+  createKnowledgeAdvisorSession: () => request<KnowledgeAdvisorBootstrap & {access_token: string}>('/api/v2/knowledge-advisor/sessions', {method: 'POST'}, false),
+  getKnowledgeAdvisorSession: (sessionId: string, accessToken: string, signal?: AbortSignal) => knowledgeAdvisorRequest<KnowledgeAdvisorBootstrap>(`/api/v2/knowledge-advisor/sessions/${sessionId}`, accessToken, {signal}),
+  knowledgeAdvisorMessage: (sessionId: string, accessToken: string, text: string) => knowledgeAdvisorRequest<{user_turn: KnowledgeAdvisorTurn; assistant_turn: KnowledgeAdvisorTurn; expires_at: string}>(`/api/v2/knowledge-advisor/sessions/${sessionId}/messages`, accessToken, json('POST', {text})),
+  knowledgeAdvisorTranscript: (sessionId: string, accessToken: string, value: {role: 'user' | 'assistant'; text: string; provider_event_id: string}) => knowledgeAdvisorRequest<KnowledgeAdvisorTurn>(`/api/v2/knowledge-advisor/sessions/${sessionId}/transcripts`, accessToken, json('POST', value)),
+  deleteKnowledgeAdvisorSession: (sessionId: string, accessToken: string) => knowledgeAdvisorRequest<void>(`/api/v2/knowledge-advisor/sessions/${sessionId}`, accessToken, {method: 'DELETE'}),
+  joinKnowledgeAdvisorRTCQueue: (sessionId: string, accessToken: string, clientInstanceId: string) => knowledgeAdvisorRequest<AdvisorRTCQueueTicket>(`/api/v2/knowledge-advisor/sessions/${sessionId}/rtc-queue`, accessToken, json('POST', {client_instance_id: clientInstanceId, mode: 'audio'})),
+  knowledgeAdvisorRTCQueueStatus: (sessionId: string, accessToken: string, ticketId: string, clientInstanceId: string, signal?: AbortSignal) => knowledgeAdvisorRequest<AdvisorRTCQueueTicket>(`/api/v2/knowledge-advisor/sessions/${sessionId}/rtc-queue/${ticketId}`, accessToken, {signal, headers: {'X-Advisor-Client-ID': clientInstanceId}}),
+  heartbeatKnowledgeAdvisorRTCQueue: (sessionId: string, accessToken: string, ticketId: string, clientInstanceId: string) => knowledgeAdvisorRequest<AdvisorRTCQueueTicket>(`/api/v2/knowledge-advisor/sessions/${sessionId}/rtc-queue/${ticketId}/heartbeat`, accessToken, {method: 'POST', headers: {'X-Advisor-Client-ID': clientInstanceId}}),
+  cancelKnowledgeAdvisorRTCQueue: (sessionId: string, accessToken: string, ticketId: string, clientInstanceId: string) => knowledgeAdvisorRequest<void>(`/api/v2/knowledge-advisor/sessions/${sessionId}/rtc-queue/${ticketId}`, accessToken, {method: 'DELETE', headers: {'X-Advisor-Client-ID': clientInstanceId}}),
+  startKnowledgeAdvisorVoice: (sessionId: string, accessToken: string, clientInstanceId: string, ticketId: string) => knowledgeAdvisorRequest<AdvisorRTCConfig>(`/api/v2/knowledge-advisor/sessions/${sessionId}/voice`, accessToken, {method: 'POST', headers: {'X-Advisor-Client-ID': clientInstanceId, 'X-Advisor-Queue-Ticket': ticketId}}),
   async analytics(eventName: string, roomId?: string, payload: Record<string, unknown> = {}) {
     return request<{accepted: boolean}>(
       assessmentPath('/analytics/events'), json('POST', {event_name: eventName, room_id: roomId, payload}),
@@ -68,6 +99,7 @@ export const api = {
     return value;
   },
   getAssessment: (signal?: AbortSignal) => request<Assessment>(assessmentPath(), {signal}),
+  getAssessmentFor: (session: SessionState, signal?: AbortSignal) => requestFor<Assessment>(session, '', {signal}),
   saveProfile: (profile: ElderProfile) => request<ElderProfile>(assessmentPath('/profile'), json('PUT', profile)),
   savePlannedRooms: (planned_rooms: RoomType[]) => request<{planned_rooms: RoomType[]}>(assessmentPath('/planned-rooms'), json('PUT', {planned_rooms})),
   createRoom: (room_type: RoomType) => request<RoomAssessment>(assessmentPath('/rooms'), json('POST', {room_type})),
@@ -89,6 +121,7 @@ export const api = {
   }),
   deleteMedia: (roomId: string, mediaId: string) => request<void>(assessmentPath(`/rooms/${roomId}/media/${mediaId}`), {method: 'DELETE'}),
   mediaBlob: (path: string, signal?: AbortSignal) => request<Blob>(path, {signal}),
+  mediaBlobFor: (session: SessionState, path: string, signal?: AbortSignal) => request<Blob>(path, {signal}, true, session, false),
   inspectCamera: (roomId: string, blob: Blob, width: number, height: number, context: {frame_id: string; previous_summary: string[]; source_kind?: 'h5_camera_frame' | 'ios_camera_frame'; orientation?: 'up' | 'right' | 'down' | 'left'; camera_session_id?: string}, signal?: AbortSignal) => request<CameraInspectionResult>(assessmentPath(`/rooms/${roomId}/camera/frames:inspect`), {
     method: 'POST', signal,
     headers: {'Content-Type': blob.type || 'image/jpeg', 'X-Image-Width': String(width), 'X-Image-Height': String(height), 'X-Camera-Context': JSON.stringify(context)},
@@ -122,6 +155,7 @@ export const api = {
   status: (roomId: string, signal?: AbortSignal) => request<AnalysisStatus>(assessmentPath(`/rooms/${roomId}/status`), {signal}),
   result: (roomId: string, signal?: AbortSignal) => request<RoomResult>(assessmentPath(`/rooms/${roomId}/result`), {signal}),
   renovationPreviewContext: (roomId: string, signal?: AbortSignal) => request<RenovationPreviewContext>(assessmentPath(`/rooms/${roomId}/renovation-preview-context`), {signal}),
+  renovationPreviewContextFor: (session: SessionState, roomId: string, signal?: AbortSignal) => requestFor<RenovationPreviewContext>(session, `/rooms/${roomId}/renovation-preview-context`, {signal}),
   createRenovationPreview: (roomId: string, sourceMediaId: string) => request<RenovationPreview>(assessmentPath(`/rooms/${roomId}/renovation-previews`), json('POST', {source_media_id: sourceMediaId})),
   renovationPreview: (roomId: string, previewId: string, signal?: AbortSignal) => request<RenovationPreview>(assessmentPath(`/rooms/${roomId}/renovation-previews/${previewId}`), {signal}),
   selectRenovationPreview: (roomId: string, previewId: string) => request<RenovationPreview>(assessmentPath(`/rooms/${roomId}/renovation-previews/${previewId}:select`), {method: 'PUT'}),
@@ -131,8 +165,10 @@ export const api = {
   selectSolution: (riskId: string, solutionId: string) => request<AssessmentReport>(assessmentPath(`/risks/${riskId}/selected-solution`), json('PUT', {solution_package_id: solutionId})),
   removeSolution: (riskId: string) => request<void>(assessmentPath(`/risks/${riskId}/selected-solution`), {method: 'DELETE'}),
   report: (signal?: AbortSignal) => request<AssessmentReport>(assessmentPath('/report'), {signal}),
+  reportFor: (session: SessionState, signal?: AbortSignal) => requestFor<AssessmentReport>(session, '/report', {signal}),
   complete: () => request<AssessmentReport>(assessmentPath(':complete'), {method: 'POST'}),
   deleteAssessment: () => request<void>(assessmentPath(), {method: 'DELETE'}),
+  deleteAssessmentFor: (session: SessionState) => requestFor<void>(session, '', {method: 'DELETE'}),
 };
 
 export function parseAdvisorEvent(data: unknown): {
@@ -174,6 +210,12 @@ export function friendlyError(error: unknown): string {
     advisor_capacity_busy: '当前体验人数较多，请稍后重试',
     advisor_confirmation_in_progress: '这项确认正在另一端处理，请稍候',
     advisor_confirmation_already_decided: '这项确认已经处理，请刷新查看',
+    knowledge_advisor_not_enabled: 'AI 助手暂未开放',
+    knowledge_advisor_access_denied: '这次对话已失效，请开始新对话',
+    knowledge_advisor_session_expired: '这次对话已过期，请开始新对话',
+    knowledge_advisor_message_invalid: '请输入 500 字以内的适老化问题',
+    knowledge_advisor_message_limit: '本次对话已达上限，请开始新对话',
+    knowledge_advisor_request_in_progress: '上一个问题正在回答，请稍候',
     renovation_preview_not_enabled: '改造效果预览暂未开放',
     renovation_source_not_usable: '这张照片不适合生成，请换一张清晰照片',
     renovation_no_selected_solutions: '请先为这个房间选择改造方案',
