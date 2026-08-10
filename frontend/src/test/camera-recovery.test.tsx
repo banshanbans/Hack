@@ -58,10 +58,8 @@ describe('H5 camera session recovery', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/v2/assessments/stale'))).toBe(true);
   });
 
-  it('creates both scan sessions, shows deterministic guidance and sends the selected suggestion context', async () => {
+  it('creates both scan sessions and keeps deterministic AR guidance on a clean camera surface', async () => {
     const timeoutSpy = vi.spyOn(window, 'setTimeout');
-    const revokeSpy = vi.spyOn(URL, 'revokeObjectURL');
-    let messageContext: Record<string, string> | undefined;
     localStorage.setItem('anju_h5_session_v2', JSON.stringify({assessment_id: 'fresh', access_token: 'token', last_route: 'camera'}));
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
@@ -88,43 +86,23 @@ describe('H5 camera session recovery', () => {
         }],
         save_as_evidence_recommended: true, prompt_version: 'anju_h5_camera_discovery_v3', rule_version: 'live-camera-rules-2026-07-26-v3',
       });
-      if (url.endsWith('/advisor/sessions/advisor-session-1/messages') && init?.method === 'POST') {
-        messageContext = JSON.parse(String(init.body)).context_refs;
-        return json({
-          user_turn: {turn_id: 'turn-user', role: 'user', kind: 'message', text: '这个地方可能有什么问题？', status: 'final', context_refs: messageContext, cards: [], created_at: '2026-08-08T10:01:00Z'},
-          assistant_turn: {turn_id: 'turn-assistant', role: 'assistant', kind: 'message', text: '你选中的位置可能存在通道杂物，正式分析前仍需确认。', status: 'final', context_refs: messageContext, cards: [], created_at: '2026-08-08T10:01:01Z'},
-        });
-      }
       return json({code: 'not_found', message: 'not found'}, 404);
     });
 
     render(<App />);
     fireEvent.click(await screen.findByRole('button', {name: '开启后置相机'}));
 
-    expect((await screen.findAllByText('通道有杂物')).length).toBeGreaterThanOrEqual(1);
-    expect((await screen.findAllByText('先移开通道里的杂物')).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('已发现 1 条待确认提示')).toBeVisible();
-    expect(screen.getByRole('button', {name: /结束扫描并保存/})).toBeEnabled();
-    expect(document.querySelector('.camera-advisor-guidance')).not.toBeNull();
+    expect(await screen.findByRole('img', {name: /临时建议 1，通道有杂物/})).toBeVisible();
+    expect(screen.getByRole('button', {name: '点击开始说话'})).toBeVisible();
+    expect(screen.queryByRole('button', {name: /结束扫描并保存/})).not.toBeInTheDocument();
+    expect(document.querySelector('.camera-advisor-guidance')).toBeNull();
     expect(document.querySelector('.camera-region-overlay rect')).not.toBeNull();
     expect(document.querySelector('.camera-region-overlay > img')?.getAttribute('src')).toMatch(/^blob:anju-test-/);
     expect(document.querySelector('.camera-region-number')?.textContent).toBe('1');
     expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), 3_000);
-
-    fireEvent.click(screen.getByText('已发现 1 条待确认提示'));
-    fireEvent.click(screen.getByRole('button', {name: /通道有杂物/}));
-    fireEvent.click(screen.getByRole('button', {name: '这个地方可能有什么问题？'}));
-    await waitFor(() => expect(messageContext).toEqual({
-      room_id: 'room-1', camera_session_id: 'camera-session-1', camera_suggestion_id: 'suggestion-1', frame_id: 'frame-1',
-    }));
-    expect(await screen.findByText(/你选中的位置可能存在通道杂物/)).toBeVisible();
-
-    fireEvent.click(screen.getByRole('button', {name: /暂停扫描/}));
-    expect(document.querySelector('.camera-region-overlay')).toBeNull();
-    expect(revokeSpy).toHaveBeenCalled();
   });
 
-  it('completes an H5 scan, closes the advisor and returns to upload without analyzing', async () => {
+  it('keeps H5 realtime recognition on the camera page without saving or redirecting', async () => {
     localStorage.setItem('anju_h5_session_v2', JSON.stringify({assessment_id: 'fresh', access_token: 'token', last_route: 'camera'}));
     const calls: Array<{url: string; method: string}> = [];
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
@@ -164,13 +142,12 @@ describe('H5 camera session recovery', () => {
 
     render(<App />);
     fireEvent.click(await screen.findByRole('button', {name: '开启后置相机'}));
-    const finish = await screen.findByRole('button', {name: /结束扫描并保存/});
-    await waitFor(() => expect(finish).toBeEnabled());
-    fireEvent.click(finish);
-
-    await waitFor(() => expect(window.location.hash).toBe('#/upload/room-1'));
-    expect(calls.some(call => call.url.endsWith('/camera/sessions/camera-session-1:complete') && call.method === 'POST')).toBe(true);
-    expect(calls.some(call => call.url.endsWith('/advisor/sessions/advisor-session-1') && call.method === 'DELETE')).toBe(true);
+    await waitFor(() => expect(calls.some(call => call.url.includes('/camera/frames:inspect'))).toBe(true));
+    expect(window.location.hash).toContain('#/camera');
+    expect(screen.queryByRole('button', {name: /结束扫描并保存/})).not.toBeInTheDocument();
+    expect(calls.some(call => call.url.endsWith('/rooms/room-1/media') && call.method === 'POST')).toBe(false);
+    expect(calls.some(call => call.url.endsWith('/camera/sessions/camera-session-1:complete') && call.method === 'POST')).toBe(false);
+    expect(calls.some(call => call.url.endsWith('/advisor/sessions/advisor-session-1') && call.method === 'DELETE')).toBe(false);
     expect(calls.some(call => call.url.endsWith('/rooms/room-1:analyze'))).toBe(false);
   });
 

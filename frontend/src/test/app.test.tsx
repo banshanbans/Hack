@@ -55,20 +55,18 @@ describe('P01 entry and route recovery', () => {
 
     const dialog = screen.getByRole('dialog', {name: '开始家庭实时检查'});
     expect(dialog).toBeVisible();
-    expect(dialog).toHaveTextContent('扫描结束只保存代表画面');
-    expect(dialog).toHaveTextContent('保存后可在照片页确认并开始 AI 检查');
+    expect(dialog).toHaveTextContent('不会自动保存照片或跳转页面');
     expect(window.location.hash).toBe('#/home');
     fireEvent.click(screen.getByRole('button', {name: /选择房间/}));
     fireEvent.click(screen.getByRole('button', {name: /卫生间/}));
     await waitFor(() => expect(window.location.hash).toBe('#/camera?room_id=room-camera&auto_start=1'));
     expect(await screen.findByRole('button', {name: '开启后置相机'})).toBeVisible();
     expect(screen.queryByRole('navigation', {name: '主导航'})).not.toBeInTheDocument();
-    expect(screen.getByRole('button', {name: '返回首页'})).toBeVisible();
     expect(screen.getByRole('heading', {name: '实时扫描'})).toBeVisible();
-    expect(screen.getByRole('button', {name: '打开 AI 适老顾问对话'})).toBeVisible();
-    expect(screen.getByRole('button', {name: '结束扫描并保存'})).toBeDisabled();
-    expect(screen.getByText('顾问会边看边提醒，结束后只保存代表画面。')).toBeVisible();
-    expect(screen.getByRole('button', {name: '改用照片'})).toBeVisible();
+    expect(screen.getByRole('button', {name: '点击开始说话'})).toBeVisible();
+    expect(screen.queryByRole('button', {name: '打开 AI 适老顾问对话'})).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', {name: '结束扫描并保存'})).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', {name: '改用照片'})).not.toBeInTheDocument();
     expect(screen.queryByText(/三维锚点|连续视频|当前区域/)).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([input, init]) => String(input).endsWith('/api/v2/assessments') && init?.method === 'POST')).toBe(true);
   });

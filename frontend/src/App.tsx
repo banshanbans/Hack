@@ -188,7 +188,7 @@ function AppShell() {
   };
 
   return <div className={`site-frame ${isShare || isAdvisor || isCamera ? '' : 'has-tab-bar'} ${isHome ? 'home-shell' : ''} ${isAdvisor ? 'advisor-shell' : ''} ${isCamera ? 'camera-shell' : ''}`}>
-    {!isShare && !isHome && <header className="app-header">
+    {!isShare && !isHome && !isCamera && <header className="app-header">
       <button className="icon-button" onClick={goBack} aria-label="返回" disabled={isHome}><Icon name="arrow_back" /></button>
       <strong>{isKnowledgeAdvisor ? KNOWLEDGE_ADVISOR_COPY.title : isAdvisor ? ADVISOR_COPY.title : PRODUCT_NAME}</strong>
       <div className="app-header-actions">
@@ -1389,22 +1389,14 @@ function CameraPage() {
   if (!room) return <ErrorState error={new Error('没有找到本次实时检查的房间')} />;
 
   return <section className="page camera-page camera-advisor-page">
-    <div className="page-intro compact"><small className="eyebrow">{ROOM_COPY[room.room_type].name}</small><h1>实时扫描</h1><p>顾问会边看边提醒，结束后只保存代表画面。</p></div>
+    <h1 className="camera-screen-title">实时扫描</h1>
+    <p className="camera-screen-description">实时识别不会自动保存照片或跳转页面。</p>
     <div className={`camera-viewport ${active ? 'active' : ''}`}>
       <video ref={videoRef} className={mirrored ? 'mirrored' : ''} muted playsInline aria-label="后置摄像头实时画面" />
       {!active && <button type="button" className="camera-placeholder" aria-label="开启后置相机" onClick={startCamera} disabled={nativePending || saving}><img src="/assets/camera-tab.svg" alt="" /><b>{nativePending ? '正在使用原生相机…' : '点击开启相机'}</b><p>将在你点击后申请相机权限</p></button>}
       {overlayFrame && <LiveCameraOverlay frameId={overlayFrame.frameId} imageUrl={overlayFrame.imageUrl} frameWidth={overlayFrame.width} frameHeight={overlayFrame.height} suggestions={overlayFrame.suggestions} mirrored={mirrored} />}
-      <button className="camera-advisor-guidance" onClick={() => setAdvisorOpen(true)} aria-label="打开 AI 适老顾问对话"><Icon name="assistant" filled /><span><small>AI 适老顾问</small><b>{guidanceTitle}</b><em>{guidanceBody}</em></span><Icon name="expand_more" /></button>
+      <button className={`camera-voice-floating state-${voiceState}`} onClick={() => void toggleScanVoice()} aria-label={voiceLabel}><Icon name={voiceState === 'speaking' ? 'stop' : voiceState !== 'idle' && voiceState !== 'error' ? 'mic_off' : 'mic'} filled /></button>
     </div>
-    <div className="camera-live-actions">
-      <button className={`camera-voice-button state-${voiceState}`} onClick={() => void toggleScanVoice()} aria-label={voiceLabel}><Icon name={voiceState === 'speaking' ? 'stop' : voiceState !== 'idle' && voiceState !== 'error' ? 'mic_off' : 'mic'} filled /><span>{voiceLabel}</span></button>
-      <button className="camera-findings-button" onClick={() => setAdvisorOpen(true)}><span><b>{suggestions.length ? `已发现 ${suggestions.length} 条待确认提示` : '暂无待确认提示'}</b><small>{selectedSuggestion ? `已选中：${selectedSuggestion.title}` : '点击查看并选择“这个地方”'}</small></span><Icon name="keyboard_arrow_up" /></button>
-    </div>
-    {completionError && <div className="camera-analysis-retry" role="alert"><Icon name="cloud_off" /><span><b>{completionError}</b><small>你可以直接重试，无需重新拍摄。</small></span><button className="button secondary" disabled={saving || !pendingCompletionRef.current} onClick={() => { const pending = pendingCompletionRef.current; if (pending) void completeScan(pending.cameraSessionId, pending.mediaIds); }}>重试保存</button></div>}
-    <button className="button primary full camera-finish-button" disabled={!hasRepresentative || saving || nativePending} onClick={() => void finishWebScan()}><Icon name="document_scanner" filled />{saving ? '正在保存代表画面…' : '结束扫描并保存'}</button>
-    {!hasRepresentative && !nativePending && <p className="camera-finish-hint">需要先保存一张清晰的代表画面</p>}
-    {active && <button className="button quiet full" onClick={() => { stopCamera(); void stopVoice(); }}><Icon name="pause_circle" />暂停扫描</button>}
-    <button className="button quiet full" onClick={() => { stopCamera(); void endAdvisorSession(); navigate(`/upload/${roomId}`); }}>改用照片</button>
 
     {advisorOpen && <div className="camera-advisor-sheet-backdrop" onClick={() => setAdvisorOpen(false)}><section className="camera-advisor-sheet" role="dialog" aria-modal="true" aria-label="扫描中的 AI 适老顾问" onClick={event => event.stopPropagation()}>
       <header><div><small>扫描中</small><h2>AI 适老顾问</h2></div><button className="icon-button" onClick={() => setAdvisorOpen(false)} aria-label="收起顾问"><Icon name="close" /></button></header>

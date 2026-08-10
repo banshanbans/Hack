@@ -7,7 +7,7 @@ export const CAMERA_COPY = {
   invitationBody: '先选择房间。iPhone App 会调用原生扫描，外部浏览器会使用网页相机。',
   enter: '选择房间',
   privacy: '只有通过本地质量与场景变化检查的候选画面才会发送；离开页面后摄像头会立即关闭。',
-  reportTip: '扫描结束只保存代表画面；保存后可在照片页确认并开始 AI 检查。',
+  reportTip: '实时识别只显示临时提示，不会自动保存照片或跳转页面；离开后相机会立即关闭。',
   regionOverlayLabel: '最近分析画面的临时建议位置',
   regionOverlayDescription: '标注仅对应最近一张已分析画面，不会固定在现实物体上。',
   positionLeft: '左侧',
