@@ -680,6 +680,7 @@ function CameraPage() {
     }
     const voice = new AdvisorVoiceRTC(rtc, {
       onState: setVoiceState,
+      onPlaybackBlocked: () => showToast('浏览器已暂停顾问声音，点击页面任意位置即可恢复'),
       onTranscript: value => {
         resetVoiceIdleTimer();
         setPartialTranscript(value.final ? '' : value.text);
@@ -898,6 +899,7 @@ function CameraPage() {
         onState: state => {
           if (state !== 'idle' || voiceRef.current?.isMicrophoneEnabled) setVoiceState(state);
         },
+        onPlaybackBlocked: () => showToast('浏览器已暂停顾问声音，点击页面任意位置即可恢复'),
         onTranscript: value => {
           resetVoiceIdleTimer();
           setPartialTranscript(value.final ? '' : value.text);
@@ -1857,6 +1859,7 @@ function AdvisorPage() {
     }
     const voice = new AdvisorVoiceRTC(rtc, {
       onState: setVoiceState,
+      onPlaybackBlocked: () => showToast('浏览器已暂停顾问声音，点击页面任意位置即可恢复'),
       onTranscript: value => {
         resetVoiceIdleTimer();
         setPartialTranscript(value.final ? '' : value.text);
@@ -1865,7 +1868,7 @@ function AdvisorPage() {
       },
     });
     voiceRef.current = voice;
-    try { await voice.connect(); startVoiceQueueHeartbeat(ticket); resetVoiceIdleTimer(); }
+    try { await voice.connect({microphone: true}); startVoiceQueueHeartbeat(ticket); resetVoiceIdleTimer(); }
     catch (value) {
       await releaseVoice();
       setVoiceState('error');

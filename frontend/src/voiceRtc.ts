@@ -12,6 +12,7 @@ export interface VoiceTranscript {
 interface VoiceCallbacks {
   onState: (state: VoiceState) => void;
   onTranscript: (value: VoiceTranscript) => void;
+  onPlaybackBlocked?: () => void;
 }
 
 interface ConnectOptions {
@@ -52,6 +53,8 @@ export class AdvisorVoiceRTC {
   private videoEncoderConfigs: {normal: Record<string, unknown>; weak: Record<string, unknown>} | null = null;
   private sequence = 0;
   private finalKeys = new Set<string>();
+  private blockedAudioPlayback: {userId: string; mediaType: number; streamIndex?: number; playerId?: string} | null = null;
+  private readonly playbackGestureHandler = () => { void this.resumeBlockedAudioPlayback(); };
 
   constructor(private readonly config: AdvisorRTCConfig, private readonly callbacks: VoiceCallbacks) {}
 
@@ -76,6 +79,19 @@ export class AdvisorVoiceRTC {
       void this.updateVideoForNetwork(Number(uplinkQuality));
     });
     this.engine.on(VERTC.events.onRoomBinaryMessageReceived, (event: {userId: string; message: ArrayBuffer}) => this.handleBinary(event));
+    this.engine.on(VERTC.events.onAutoplayFailed, (event: {
+      userId?: string; kind?: string; mediaType?: number; streamIndex?: number; playerId?: string;
+    }) => {
+      if (event?.kind !== 'audio' || !event.userId) return;
+      this.blockedAudioPlayback = {
+        userId: event.userId,
+        mediaType: event.mediaType ?? rtcModule.MediaType.AUDIO,
+        streamIndex: event.streamIndex,
+        playerId: event.playerId,
+      };
+      this.armPlaybackResume();
+      this.callbacks.onPlaybackBlocked?.();
+    });
     if (options.videoTrack && this.config.video_available) {
       await this.engine.setVideoSourceType(
         rtcModule.StreamIndex.STREAM_INDEX_MAIN,
@@ -143,6 +159,28 @@ export class AdvisorVoiceRTC {
     this.callbacks.onState('listening');
   }
 
+  private armPlaybackResume(): void {
+    window.addEventListener('pointerdown', this.playbackGestureHandler, {capture: true, once: true});
+    window.addEventListener('keydown', this.playbackGestureHandler, {capture: true, once: true});
+  }
+
+  private removePlaybackResumeListeners(): void {
+    window.removeEventListener('pointerdown', this.playbackGestureHandler, true);
+    window.removeEventListener('keydown', this.playbackGestureHandler, true);
+  }
+
+  private async resumeBlockedAudioPlayback(): Promise<void> {
+    const blocked = this.blockedAudioPlayback;
+    if (!blocked || !this.engine) return;
+    this.removePlaybackResumeListeners();
+    try {
+      await this.engine.play(blocked.userId, blocked.mediaType, blocked.streamIndex, blocked.playerId);
+      if (this.blockedAudioPlayback === blocked) this.blockedAudioPlayback = null;
+    } catch {
+      if (this.blockedAudioPlayback === blocked) this.armPlaybackResume();
+    }
+  }
+
   async sendInspectionImage(prepared: PreparedCameraInspection, blob: Blob): Promise<void> {
     if (!this.connected || !this.engine || !this.config.bot_user_id) throw new Error('rtc_not_connected');
     const dataUrl = await new Promise<string>((resolve, reject) => {
@@ -195,6 +233,8 @@ export class AdvisorVoiceRTC {
       if (this.videoPublished) await this.engine.unpublishStream(2).catch(() => undefined);
       await this.engine.leaveRoom();
     } finally {
+      this.removePlaybackResumeListeners();
+      this.blockedAudioPlayback = null;
       this.sdk?.destroyEngine(this.engine);
       this.engine = null;
       this.sdk = null;

@@ -11,6 +11,7 @@ const rtc = vi.hoisted(() => {
     unpublishStream: vi.fn().mockResolvedValue(undefined),
     startAudioCapture: vi.fn().mockResolvedValue(undefined),
     stopAudioCapture: vi.fn().mockResolvedValue(undefined),
+    play: vi.fn().mockResolvedValue(undefined),
     sendUserBinaryMessage: vi.fn().mockResolvedValue(undefined),
     leaveRoom: vi.fn().mockResolvedValue(undefined),
   };
@@ -19,7 +20,7 @@ const rtc = vi.hoisted(() => {
     sdk: {
       events: {
         onError: 'error', onConnectionStateChanged: 'connection',
-        onRoomBinaryMessageReceived: 'binary', onNetworkQuality: 'network',
+        onRoomBinaryMessageReceived: 'binary', onNetworkQuality: 'network', onAutoplayFailed: 'autoplay',
       },
       isSupported: vi.fn().mockResolvedValue(true),
       createEngine: vi.fn(() => engine),
@@ -81,6 +82,32 @@ describe('AdvisorVoiceRTC video source and explicit image protocol', () => {
     networkCallback?.(4, 1);
     await Promise.resolve();
     expect(rtc.engine.setVideoEncoderConfig).toHaveBeenLastCalledWith(expect.objectContaining({maxKbps: 500}));
+  });
+
+  it('requests microphone permission and publishes audio when voice starts', async () => {
+    const client = new AdvisorVoiceRTC(config, {onState: vi.fn(), onTranscript: vi.fn()});
+
+    await client.connect({microphone: true});
+
+    expect(rtc.sdk.enableDevices).toHaveBeenCalledWith({video: false, audio: true});
+    expect(rtc.engine.startAudioCapture).toHaveBeenCalledOnce();
+    expect(rtc.engine.publishStream).toHaveBeenCalledWith(1);
+    expect(client.isMicrophoneEnabled).toBe(true);
+  });
+
+  it('resumes blocked remote audio on the next user gesture', async () => {
+    const onPlaybackBlocked = vi.fn();
+    const client = new AdvisorVoiceRTC(config, {
+      onState: vi.fn(), onTranscript: vi.fn(), onPlaybackBlocked,
+    });
+    await client.connect({microphone: true});
+    const autoplayCallback = rtc.engine.on.mock.calls.find(call => call[0] === 'autoplay')?.[1];
+
+    autoplayCallback?.({userId: 'bot', kind: 'audio', mediaType: 1, streamIndex: 0});
+    window.dispatchEvent(new Event('pointerdown'));
+    await vi.waitFor(() => expect(rtc.engine.play).toHaveBeenCalledWith('bot', 1, 0, undefined));
+
+    expect(onPlaybackBlocked).toHaveBeenCalledOnce();
   });
 
   it('fragments oversized inspection images and explicitly deletes their GroupID', async () => {
