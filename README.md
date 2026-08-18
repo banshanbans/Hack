@@ -1,32 +1,116 @@
-# 安心家 AI（AnjuGuard）
+# AnjuGuard · 安心家 AI
 
-安心家 AI 是基于 RASSAR 二次开发的家庭环境安全辅助检查产品。它不是医疗诊断、建筑验收、无障碍认证或施工报价工具。
+> 🏆 **AI Hackathon 一等奖** · 面向适老化居住环境的多模态 AI 安全检查与整改辅助产品
+
+**Multimodal AI · iOS / H5 · LiDAR / ARKit · RTC · FastAPI**
+
+AnjuGuard 希望解决一个很具体的问题：家庭里很多对老人不友好的风险并不难发现，但从“看见问题”到“知道怎么改、先改什么、需要多少钱”，中间仍然需要大量人工判断。
+
+项目把 **家庭环境采集 → 风险发现 → 结果确认 → 整改方案 → 预算清单** 串成一条完整产品闭环，并在支持设备上进一步探索基于 RoomPlan / LiDAR / ARKit 的实时空间扫描与 AI 顾问交互。
+
+> AnjuGuard 不是医疗诊断、建筑验收、无障碍认证或施工报价工具。正式风险结果来自代表画面的重新分析与确定性规则，实时提示与 AR 锚点只作为扫描阶段的辅助信息。
+
+---
+
+## 为什么做这个项目
+
+传统的居家适老化评估往往依赖专业人员现场检查。对普通家庭来说，真正困难的并不是“有没有风险”，而是：
+
+- 哪些问题值得优先处理；
+- 风险为什么重要；
+- 有哪些不同成本档位的整改方式；
+- 如何把一次检查继续变成后续行动。
+
+AnjuGuard 的目标不是再做一个“上传图片后返回一段 AI 文本”的 Demo，而是把 AI 放进一个可执行的家庭改造流程中。
+
+## 产品闭环
+
+```text
+创建家庭档案
+  ↓
+选择房间
+  ↓
+照片上传 / iOS 实时扫描
+  ↓
+AI 临时提示 + 扫描顾问
+  ↓
+代表帧重新分析
+  ↓
+风险结果与覆盖度
+  ↓
+A / B / C 整改方案
+  ↓
+结构化预算清单
+```
+
+### 核心能力
+
+- **多房间适老化检查**：覆盖六类房间，支持每个房间 1–6 张照片与图像质量检查；
+- **结构化风险结果**：输出二维风险区域、风险解释、确定性评分与独立覆盖度；
+- **整改而不止识别**：为风险生成 A / B / C 三档整改方案、结构化价格与预算清单；
+- **iOS 原生增强层**：原生拍照、实时扫描，以及支持设备上的 RoomPlan / LiDAR `spatial_ar`；
+- **实时 AI 顾问**：H5 / iOS 通过 RTC 发布实时画面，顾问可结合当前房间上下文进行文字或语音交互；
+- **安全降级**：RTC 故障自动回退 HTTP 临时检查，不影响正式风险分析；
+- **移动端工程约束**：根据 RTC 上行、AR 帧率与设备热状态自适应降载，压力下从 720p / 15fps 降至 540p / 10fps，同时保留 AR 建图。
+
+## 产品截图
+
+<p align="center">
+  <img src="output/design-qa/home-production-390x844.png" width="30%" alt="AnjuGuard 首页" />
+  <img src="output/design-qa/result-viewport-390x844.png" width="30%" alt="AnjuGuard 风险结果" />
+  <img src="output/design-qa/solutions-390x844.png" width="30%" alt="AnjuGuard 整改方案" />
+</p>
+
+## 系统架构
+
+```mermaid
+flowchart LR
+    U[家庭用户] --> H5[React / TypeScript H5]
+    U --> IOS[iOS Native]
+
+    IOS -->|WKWebView Bridge| H5
+    IOS -->|ARKit / RoomPlan / LiDAR| Scan[实时扫描]
+    H5 -->|Browser Camera| Scan
+
+    H5 --> API[FastAPI Assessment API]
+    Scan --> RTC[VolcEngine RTC]
+    RTC --> Advisor[Realtime AI Advisor]
+    Advisor --> H5
+
+    API --> Analysis[正式风险分析]
+    Analysis --> Rules[确定性规则与评分]
+    Rules --> Plan[A / B / C 整改方案]
+    API --> DB[(SQLite)]
+```
+
+## 技术栈
+
+| 层 | 技术 |
+|---|---|
+| Web | React, TypeScript |
+| Backend | FastAPI, Uvicorn, SQLite |
+| iOS | Swift, WKWebView, ARKit, RoomPlan |
+| Realtime | VolcEngine RTC, external NV12 video frames |
+| AI interaction | Function Calling, room-level conversation context |
+| Testing | Python unittest, Vitest, Swift Test, xcodebuild |
 
 ## 统一用户旅程
 
-- iOS 启动后以持久化 `WKWebView` 加载线上 H5，P01—P09、相册上传、分析、方案和报告均由 H5 承担。
-- 原生层只提供房间单张拍照与中央相机实时扫描。
-- 中央相机先在 H5 选择六类房间并创建/复用 room；扫描页内可以与能看到当前 RTC 画面的 AI 适老顾问文字或语音对话。
-- 扫描结束上传代表帧后直接启动正式分析；档案未完成时先补档，保存后自动续传分析。
-- 实时建议与 AR 锚点都是临时内容，不计分；正式结果只来自代表帧的重新分析与确定性规则。
-- 支持 RoomPlan/LiDAR 时使用 `spatial_ar`；其他 ARKit 设备降级为 `camera_2d`，不生成虚假空间锚点。
-- 未填家人档案时可先扫描，正式分析前前后端均强制补齐三项档案。
-- 不实现账号、注册、跨设备或 App 与外部 Safari 的 assessment 同步。
+- iOS 启动后以持久化 `WKWebView` 加载线上 H5，P01–P09、相册上传、分析、方案和报告由 H5 承担；
+- 原生层负责房间单张拍照与中央相机实时扫描；
+- 扫描前在 H5 选择房间并创建 / 复用 room；
+- 扫描页内可与能看到当前 RTC 画面的 AI 适老顾问进行文字或语音对话；
+- 扫描结束上传代表帧后启动正式分析；家庭档案未完成时先补档，再自动续传分析；
+- 支持 RoomPlan / LiDAR 的设备使用 `spatial_ar`，其他 ARKit 设备降级为 `camera_2d`，不生成虚假空间锚点。
 
-历史游园会 fair API、Zone DTO、规则、方案、价格和原生报告入口已移除。旧 App 调用 `/api/v2/fair-scans` 直接得到 404；已有数据库的历史表不做破坏性 DROP。
+## 可靠性与产品边界
 
-## 产品范围
-
-- FastAPI/Uvicorn v2 Assessment API、SQLite 持久化与 React/TypeScript H5；
-- 六类房间、1—6 张照片、质量检查、二维风险区域、确定性评分与独立覆盖度；
-- A/B/C 整改方案、结构化价格和预算清单；
-- H5 与 iOS 共用 `anju_home_camera_discovery_v1` 居家实时发现配置；
-- iOS Bridge v1：`capture_photo`、`start_live_scan`、`cancel_native_capture`；
-- 扫描页顾问共用房间级对话历史；H5 将现有浏览器相机 Track 发布到火山 Web RTC，iOS 将 ARFrame 作为外部 NV12 视频推入锁定的 `VolcEngineRTC/Core`；
-- 显式稳定帧经签名 Function Calling 只生成待确认提示；RTC 故障自动回退原 HTTP 临时检查，正式风险仍由代表画面重新分析和规则确认；
-- RTC 顾问全局最多 8 个席位，额外请求进入 FIFO 排队；同一房间 90 秒租约内只允许一个设备实时连接；
-- iOS 对 RTC 上行、AR 实际帧率和热状态做滞回自适应，在压力下由 720p/15fps 降至 540p/10fps，不停止 AR 建图；
-- H5 本地视频选择、自动抽帧和视频帧正式识别不在产品范围。
+- 实时建议和 AR 锚点不直接计入正式风险结果；
+- RTC 顾问全局最多 8 个席位，额外请求进入 FIFO 排队；
+- 同一房间 90 秒租约内只允许一个设备实时连接；
+- App 只接受受信 HTTPS 主框架 Bridge；
+- assessment token 仅存在于当次原生操作内存，不进入 URL、日志、UserDefaults 或 Keychain；
+- RTC / LiDAR / 弱网 / VoiceOver / Dynamic Type 等真实设备能力仍需持续外部验证，自动测试通过不等于所有真实环境均已覆盖。
 
 ## 本地开发与测试
 
@@ -59,15 +143,14 @@ xcodebuild \
   build
 ```
 
-## 上线边界
+## 更多文档
 
-- `ANJU_ENABLE_IOS_HOME_CAMERA` 默认关闭，按“后端/H5 → 新 iOS → 真机冒烟 → 开启”的顺序发布。
-- `ANJU_ENABLE_RTC_VIDEO_ADVISOR` 默认关闭；只有公网回调、实时视觉/Function Calling endpoint 与 H5/iOS 真机门禁通过后才能开启。
-- 当前代码与自动测试不等于 RTC 厂商协议、LiDAR、弱网、VoiceOver、Dynamic Type 和真实模型效果已完成外部验证。
-- App 只接受受信 HTTPS 主框架 Bridge；assessment token 仅存于当次原生操作内存，不进入 URL、日志、UserDefaults 或 Keychain。
-
-详见 [实现状态](docs/IMPLEMENTATION_STATUS.md)、[iOS 语音顾问](docs/IOS_VOICE_ADVISOR.md)、[相机路线](docs/CAMERA_UPGRADE_ROADMAP.md) 和 [隐私说明](PRIVACY.md)。
+- [实现状态](docs/IMPLEMENTATION_STATUS.md)
+- [iOS 语音顾问](docs/IOS_VOICE_ADVISOR.md)
+- [相机路线](docs/CAMERA_UPGRADE_ROADMAP.md)
+- [隐私说明](PRIVACY.md)
+- [Design QA](design-qa.md)
 
 ## 上游与许可
 
-本项目基于 [UW Makeability Lab 的 RASSAR](https://github.com/makeabilitylab/RASSAR) 修改，保留原始 MIT `LICENSE` 和版权声明。
+本项目基于 [UW Makeability Lab 的 RASSAR](https://github.com/makeabilitylab/RASSAR) 二次开发，并保留原始 MIT `LICENSE` 与版权声明。AnjuGuard 在此基础上扩展了适老化产品流程、H5 / FastAPI 链路、整改方案、实时顾问与 iOS 原生增强能力。
