@@ -804,10 +804,13 @@ class AssessmentService:
             self.repository.execute("UPDATE rooms SET coverage_percent=?, status='result_ready', updated_at=? WHERE id=?", (coverage["percent"], utc_now(), room_id))
             self._job(job_id, "running", "score_calculated")
             self._compute_result(assessment_id, room_id)
-            self._job(job_id, "completed", "solutions_ready")
             self.repository.execute("UPDATE assessments SET status='in_progress', updated_at=? WHERE id=?", (utc_now(), assessment_id))
             self._best_effort_event(assessment_id, room_id, "ai_call_completed", {"skill_name": "risk_analysis", **usage})
             self._best_effort_event(assessment_id, room_id, "analysis_completed", {"risk_count": len(seen), "candidate_count": len(candidates), "merged_count": len(candidates) - len(normalized)})
+            # Publish the terminal state only after all bookkeeping writes have
+            # finished. Callers use this state as the signal that media and DB
+            # resources are no longer being touched by the worker.
+            self._job(job_id, "completed", "solutions_ready")
         except Exception as error:
             code = error.code if isinstance(error, (ProviderError, AssessmentError)) else "analysis_failed"
             self._fail_analysis(assessment_id, room_id, job_id, code)
