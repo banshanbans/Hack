@@ -5,7 +5,7 @@ services:
     image: anju-app:${ANJU_RELEASE:?ANJU_RELEASE is required}
     build:
       context: ..
-      dockerfile: Dockerfile.production
+      dockerfile: deploy/Dockerfile
     env_file:
       - ${ANJU_ENV_FILE:-/opt/anju/shared/.env.production}
     volumes:
