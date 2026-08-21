@@ -1,4 +1,0 @@
-interface:
-  display_name: "长者友好家家庭安全评估"
-  short_description: "把家庭照片转为可追溯风险、独立覆盖度、确定性评分、整改方案与规则预算"
-  default_prompt: "使用 $anju-home-safety-assessment 分析这些家庭空间照片，并输出证据化风险、覆盖度、方案和预算摘要。"
